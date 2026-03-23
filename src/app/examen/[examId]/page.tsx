@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import {
@@ -103,8 +104,10 @@ export default function StudentExamPage() {
   const [startingExam, setStartingExam] = useState(false);
   const [clientSessionToken, setClientSessionToken] = useState<string | null>(null);
   const [forfeitReason, setForfeitReason] = useState<string | null>(null);
+  const [cameraPortalReady, setCameraPortalReady] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const previewStreamRef = useRef<MediaStream | null>(null);
 
   const { bindStream, stopStream } = useStudentExamProctoring({
     examId,
@@ -112,12 +115,29 @@ export default function StudentExamPage() {
     clientSession: clientSessionToken,
     active: Boolean(hasStarted && !submitted && !forfeitReason && clientSessionToken),
     onForfeit: (reason) => {
+      previewStreamRef.current = null;
       clearExamClientSession(examId, selectedStudentId);
       setClientSessionToken(null);
       setForfeitReason(reason);
       toast.error('Examen anulado', { duration: 6000 });
     },
   });
+
+  useEffect(() => {
+    setCameraPortalReady(true);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!hasStarted || submitted || forfeitReason) return;
+    const el = videoRef.current;
+    const stream = previewStreamRef.current;
+    if (!el || !stream) return;
+    el.srcObject = stream;
+    void el.play().catch(() => undefined);
+    return () => {
+      el.srcObject = null;
+    };
+  }, [hasStarted, submitted, forfeitReason]);
 
   useEffect(() => {
     fetchExam();
@@ -301,13 +321,8 @@ export default function StudentExamPage() {
 
       writeExamClientSession(examId, selectedStudentId, token);
       setClientSessionToken(token);
+      previewStreamRef.current = stream;
       bindStream(stream);
-
-      const el = videoRef.current;
-      if (el) {
-        el.srcObject = stream;
-        await el.play().catch(() => undefined);
-      }
 
       setHasStarted(true);
     } catch {
@@ -430,6 +445,7 @@ export default function StudentExamPage() {
       }
 
       stopStream();
+      previewStreamRef.current = null;
       clearExamClientSession(examId, studentId);
       setClientSessionToken(null);
 
@@ -608,14 +624,33 @@ export default function StudentExamPage() {
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-y-auto bg-white/35 px-4 pb-24 pt-8 backdrop-blur-[2px] app-scroll">
-      <video
-        ref={videoRef}
-        className="pointer-events-none fixed bottom-4 right-4 z-50 h-24 w-[6.5rem] rounded-lg border-2 border-orange-500 bg-black object-cover shadow-lg sm:h-28 sm:w-32"
-        playsInline
-        muted
-        autoPlay
-        aria-hidden
-      />
+      {hasStarted &&
+        !submitted &&
+        !forfeitReason &&
+        cameraPortalReady &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-[85] flex flex-col items-end gap-1"
+            style={{
+              right: 'max(0.75rem, env(safe-area-inset-right, 0px))',
+              bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))',
+            }}
+          >
+            <span className="rounded-md bg-orange-600/95 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
+              Cámara
+            </span>
+            <video
+              ref={videoRef}
+              className="h-[5.5rem] w-[6.75rem] rounded-xl border-[3px] border-orange-500 bg-black object-cover shadow-xl ring-1 ring-orange-300/40 sm:h-28 sm:w-32"
+              playsInline
+              muted
+              autoPlay
+              aria-label="Vista previa de la cámara del examen"
+            />
+          </div>,
+          document.body
+        )}
 
       <div className="mx-auto w-full max-w-3xl">
         <div className="mb-6">
