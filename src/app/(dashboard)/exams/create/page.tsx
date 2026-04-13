@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { GeneratedQuestion } from '@/types';
+import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 
 const NO_GROUP_VALUE = '__none__';
 
@@ -135,11 +136,14 @@ export default function CreateExamPage() {
 
       const response = await fetch(`/api/exams/${exam.id}/questions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await dashboardAuthJsonHeaders(),
         body: JSON.stringify({ questions: questionsToAdd }),
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Sesión expirada. Inicia sesión de nuevo.');
+        }
         throw new Error('Error al guardar las preguntas');
       }
 

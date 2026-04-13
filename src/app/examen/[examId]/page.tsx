@@ -8,6 +8,7 @@ import {
   rpcCompleteStudentExamAttempt,
   rpcGetStudentExamAttempt,
   rpcStartStudentExamAttempt,
+  rpcStudentAnswerCount,
 } from '@/lib/examAttemptRpc';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,7 +42,19 @@ const forfeitMessages: Record<string, string> = {
     'Saliste del examen (cambio de pestaña o aplicación). El intento quedó anulado y no puedes volver a presentarlo.',
   left_page: 'Cerraste o abandonaste la página del examen. El intento quedó anulado.',
   camera_stopped: 'La cámara se desactivó durante el examen. El intento quedó anulado.',
+  left_fullscreen:
+    'Saliste del modo pantalla completa durante el examen. El intento quedó anulado y no puedes volver a presentarlo.',
 };
+
+async function exitExamFullscreenSafe() {
+  try {
+    if (typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
+      await document.exitFullscreen();
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 function preStartMessage(block: PreStartBlock): { title: string; body: string } | null {
   if (!block) return null;
@@ -105,6 +118,8 @@ export default function StudentExamPage() {
   const [clientSessionToken, setClientSessionToken] = useState<string | null>(null);
   const [forfeitReason, setForfeitReason] = useState<string | null>(null);
   const [cameraPortalReady, setCameraPortalReady] = useState(false);
+  /** Solo true si requestFullscreen tuvo éxito; en móviles suele quedar false. */
+  const [fullscreenEnforced, setFullscreenEnforced] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
@@ -114,7 +129,10 @@ export default function StudentExamPage() {
     studentId: selectedStudentId || null,
     clientSession: clientSessionToken,
     active: Boolean(hasStarted && !submitted && !forfeitReason && clientSessionToken),
+    enforceFullscreen: fullscreenEnforced,
     onForfeit: (reason) => {
+      void exitExamFullscreenSafe();
+      setFullscreenEnforced(false);
       previewStreamRef.current = null;
       clearExamClientSession(examId, selectedStudentId);
       setClientSessionToken(null);
@@ -147,6 +165,7 @@ export default function StudentExamPage() {
     setClientSessionToken(null);
     setForfeitReason(null);
     setPreStartBlock(null);
+    setFullscreenEnforced(false);
   }, [selectedStudentId, examId]);
 
   useEffect(() => {
@@ -160,15 +179,20 @@ export default function StudentExamPage() {
     (async () => {
       setCheckingAttempt(true);
       try {
-        const { count, error: countError } = await supabase
-          .from('answers')
-          .select('id', { count: 'exact', head: true })
-          .eq('exam_id', examId)
-          .eq('student_id', selectedStudentId);
+        let answerCount: number;
+        try {
+          answerCount = await rpcStudentAnswerCount(examId, selectedStudentId);
+        } catch {
+          if (!cancelled) setPreStartBlock({ type: 'rpc_error' });
+          return;
+        }
 
         if (cancelled) return;
-        if (countError) throw countError;
-        if (count != null && count > 0) {
+        if (answerCount < 0) {
+          setPreStartBlock({ type: 'not_allowed' });
+          return;
+        }
+        if (answerCount > 0) {
           setPreStartBlock({ type: 'answers_exist' });
           return;
         }
@@ -324,6 +348,19 @@ export default function StudentExamPage() {
       previewStreamRef.current = stream;
       bindStream(stream);
 
+      let enforced = false;
+      if (typeof document !== 'undefined') {
+        const el = document.documentElement;
+        if (typeof el.requestFullscreen === 'function') {
+          try {
+            await el.requestFullscreen();
+            enforced = true;
+          } catch {
+            /* Navegador o permisos: seguimos sin exigir salida de fullscreen */
+          }
+        }
+      }
+      setFullscreenEnforced(enforced);
       setHasStarted(true);
     } catch {
       toast.error('Error al iniciar. Si persiste, avisa a tu maestro (¿migración Supabase aplicada?).');
@@ -448,6 +485,8 @@ export default function StudentExamPage() {
       previewStreamRef.current = null;
       clearExamClientSession(examId, studentId);
       setClientSessionToken(null);
+      setFullscreenEnforced(false);
+      await exitExamFullscreenSafe();
 
       const totalPoints = questions.length;
       const obtainedPoints = graded.reduce((s, r) => s + r._points, 0);
@@ -461,6 +500,8 @@ export default function StudentExamPage() {
         );
       }
     } catch {
+      await exitExamFullscreenSafe();
+      setFullscreenEnforced(false);
       toast.error('Error al enviar el examen');
     } finally {
       setSubmitting(false);
@@ -568,6 +609,10 @@ export default function StudentExamPage() {
                   </p>
                   <ul className="list-inside list-disc space-y-1 text-amber-900/90">
                     <li>La cámara frontal debe estar activa todo el tiempo.</li>
+                    <li>
+                      En computadora, si el navegador lo permite, entrarás en pantalla completa: no la
+                      cierres hasta terminar o el examen se anula.
+                    </li>
                     <li>No cambies de pestaña ni cierres esta ventana; si lo haces, el examen se anula.</li>
                     <li>Solo hay un intento por alumno.</li>
                   </ul>

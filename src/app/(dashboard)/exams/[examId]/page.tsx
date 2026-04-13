@@ -26,6 +26,7 @@ import { toast } from 'sonner';
 import QRCode from 'qrcode';
 import { Question } from '@/types';
 import { printExamDocument } from '@/lib/printExam';
+import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 
 export default function ExamDetailPage() {
   const params = useParams();
@@ -57,11 +58,14 @@ export default function ExamDetailPage() {
       setQrCodeUrl(qrDataUrl);
       
       // Save QR code to exam
-      await fetch(`/api/exams/${exam.id}`, {
+      const qrRes = await fetch(`/api/exams/${exam.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await dashboardAuthJsonHeaders(),
         body: JSON.stringify({ qr_code: qrDataUrl }),
       });
+      if (!qrRes.ok) {
+        toast.error('No se pudo guardar el QR. Vuelve a iniciar sesión e inténtalo de nuevo.');
+      }
     } catch (error) {
       toast.error('Error al generar el código QR');
     } finally {
@@ -79,13 +83,17 @@ export default function ExamDetailPage() {
     try {
       const response = await fetch(`/api/exams/${examId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await dashboardAuthJsonHeaders(),
         body: JSON.stringify({ status: 'published' }),
       });
-      
+
       if (response.ok) {
         toast.success('Examen publicado exitosamente');
         window.location.reload();
+      } else if (response.status === 401) {
+        toast.error('Sesión expirada. Inicia sesión de nuevo.');
+      } else {
+        toast.error('No se pudo publicar el examen');
       }
     } catch (error) {
       toast.error('Error al publicar el examen');
@@ -107,13 +115,17 @@ export default function ExamDetailPage() {
     try {
       const response = await fetch(`/api/exams/${examId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await dashboardAuthJsonHeaders(),
         body: JSON.stringify({ status: 'closed' }),
       });
-      
+
       if (response.ok) {
         toast.success('Examen cerrado');
         window.location.reload();
+      } else if (response.status === 401) {
+        toast.error('Sesión expirada. Inicia sesión de nuevo.');
+      } else {
+        toast.error('No se pudo cerrar el examen');
       }
     } catch (error) {
       toast.error('Error al cerrar el examen');

@@ -25,13 +25,16 @@ export function useAuth() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const signUp = useCallback(async (email: string, password: string) => {
+  const signUp = useCallback(async (email: string, password: string, fullName: string) => {
+    const name = fullName.trim();
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: {
           role: 'teacher',
+          full_name: name,
+          name,
         },
       },
     });

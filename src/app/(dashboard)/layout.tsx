@@ -113,13 +113,13 @@ export default function DashboardLayout({
         {/* Móvil: cabecera compacta + cuenta */}
         <header className="z-30 shrink-0 border-b border-gray-200 bg-white/95 backdrop-blur-sm lg:hidden">
           <div
-            className="flex items-center justify-between gap-2 px-3 py-2.5"
+            className="flex items-center justify-between gap-2 px-3 py-2"
             style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
           >
             <BrandWordmark
               href="/dashboard"
               priority
-              imgClassName="h-10 w-auto max-w-[min(48vw,11rem)] object-contain sm:h-11"
+              imgClassName="h-12 w-auto max-w-[min(58vw,14rem)] object-contain sm:h-[3.25rem]"
             />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

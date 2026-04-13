@@ -282,6 +282,13 @@ export default function CalificarPage() {
     try {
       const studentId = selectedStudentId;
 
+      const { error: delErr } = await supabase
+        .from('answers')
+        .delete()
+        .eq('exam_id', examId)
+        .eq('student_id', studentId);
+      if (delErr) throw delErr;
+
       let correctCount = 0;
       const answersToInsert = questions.map((question: Question) => {
         const answerText = merged[question.id];

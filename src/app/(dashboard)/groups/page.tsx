@@ -20,7 +20,7 @@ import {
   Search
 } from 'lucide-react';
 import { toast } from 'sonner';
-import Papa from 'papaparse';
+import { parseStudentNamesFromImportFile } from '@/lib/studentImport';
 
 export default function GroupsPage() {
   const { user } = useAuth();
@@ -57,15 +57,18 @@ export default function GroupsPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-3xl font-bold text-gray-900">Grupos</h1>
-          <p className="text-gray-600 mt-1">Gestiona tus grupos y estudiantes</p>
+          <p className="mt-1 text-gray-600">Gestiona tus grupos y estudiantes</p>
         </div>
-        <Button onClick={() => setIsCreateDialogOpen(true)} className="bg-orange-600 hover:bg-orange-700">
-          <Plus className="w-4 h-4 mr-2" />
+        <Button
+          onClick={() => setIsCreateDialogOpen(true)}
+          className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
+        >
+          <Plus className="mr-2 h-4 w-4" />
           Nuevo Grupo
         </Button>
       </div>
@@ -86,9 +89,9 @@ export default function GroupsPage() {
           </Button>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
           {/* Groups List */}
-          <div className="lg:col-span-1 space-y-4">
+          <div className="space-y-3 sm:space-y-4 lg:col-span-1">
             <h2 className="text-lg font-semibold text-gray-900">Mis Grupos</h2>
             <div className="space-y-3">
               {groups.map((group) => (
@@ -101,7 +104,7 @@ export default function GroupsPage() {
                   }`}
                   onClick={() => setSelectedGroup(group.id)}
                 >
-                  <CardContent className="p-4">
+                  <CardContent className="p-3 sm:p-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
@@ -209,27 +212,23 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
     setIsAdding(false);
   };
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
 
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (results) => {
-        const names = results.data
-          .map((row: any) => row.nombre || row.name || row.Nombre || row.Name)
-          .filter(Boolean);
-        
-        if (names.length > 0) {
-          const added = await addStudentsBatch(names);
-          toast.success(`${added.length} estudiantes importados`);
-        }
-      },
-      error: (error) => {
-        toast.error('Error al procesar el archivo: ' + error.message);
-      },
-    });
+    try {
+      const names = await parseStudentNamesFromImportFile(file);
+      if (names.length === 0) {
+        toast.error('No se encontraron nombres. Usa una columna "nombre" (o la primera columna).');
+        return;
+      }
+      const added = await addStudentsBatch(names);
+      toast.success(`${added.length} estudiantes importados`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : 'Error desconocido';
+      toast.error('Error al procesar el archivo: ' + msg);
+    }
   };
 
   const filteredStudents = students.filter(s => 
@@ -246,7 +245,7 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Add Student */}
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           <Input
             placeholder="Nombre del estudiante"
             value={newStudentName}
@@ -256,33 +255,36 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
           <Button 
             onClick={handleAddStudent} 
             disabled={isAdding}
-            className="bg-orange-600 hover:bg-orange-700"
+            className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
           >
             {isAdding ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <UserPlus className="w-4 h-4" />
+              <>
+                <UserPlus className="mr-2 h-4 w-4" />
+                Agregar
+              </>
             )}
           </Button>
         </div>
 
-        {/* Import CSV */}
-        <div className="flex items-center gap-2">
-          <Label htmlFor="csvUpload" className="cursor-pointer">
+        {/* Import Excel / CSV */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Label htmlFor="studentImportUpload" className="cursor-pointer">
             <div className="flex items-center gap-2 text-sm text-orange-600 hover:text-orange-700">
               <Upload className="w-4 h-4" />
-              Importar desde CSV
+              Importar Excel o CSV
             </div>
           </Label>
           <input
-            id="csvUpload"
+            id="studentImportUpload"
             type="file"
-            accept=".csv"
+            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             className="hidden"
             onChange={handleFileUpload}
           />
           <span className="text-xs text-gray-500">
-            (Formato: columna &quot;nombre&quot;)
+            Columna &quot;nombre&quot; (o primera columna). En Excel: guardar como .xlsx o exportar CSV.
           </span>
         </div>
 
@@ -307,24 +309,24 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
             {searchTerm ? 'No se encontraron estudiantes' : 'No hay estudiantes en este grupo'}
           </div>
         ) : (
-          <div className="border rounded-lg divide-y">
+          <div className="divide-y rounded-lg border">
             {filteredStudents.map((student) => (
               <div 
                 key={student.id} 
-                className="flex items-center justify-between p-3 hover:bg-gray-50"
+                className="flex items-center justify-between gap-2 p-3 hover:bg-gray-50"
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100">
                     <span className="text-sm font-medium text-gray-600">
                       {student.name.charAt(0).toUpperCase()}
                     </span>
                   </div>
-                  <span className="font-medium">{student.name}</span>
+                  <span className="truncate font-medium">{student.name}</span>
                 </div>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                  className="shrink-0 text-red-500 hover:bg-red-50 hover:text-red-700"
                   onClick={() => deleteStudent(student.id)}
                 >
                   <Trash2 className="w-4 h-4" />

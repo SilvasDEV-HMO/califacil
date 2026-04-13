@@ -111,7 +111,13 @@ export default function LandingPage() {
           />
         </div>
         <p className="mt-1 text-[11px] leading-snug text-gray-600 sm:text-xs sm:leading-relaxed">
-          Herramienta creada por Luis Alfonso Silvas
+          Herramienta creada por{' '}
+          <Link
+            href="https://silvasdev.vercel.app/"
+            className="font-medium text-orange-600 hover:text-orange-700 hover:underline"
+          >
+            Silvas Dev
+          </Link>
           <br />
           para la Secretaria de Educación y Cultura en Sonora
         </p>

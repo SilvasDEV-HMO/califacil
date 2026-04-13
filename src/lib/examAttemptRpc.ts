@@ -77,3 +77,13 @@ export async function rpcCompleteStudentExamAttempt(
   if (error) throw error;
   return Boolean((data as { ok?: boolean })?.ok);
 }
+
+/** Respuestas ya guardadas para (examen, alumno). -1 = no permitido (RPC no aplicada o examen inválido). */
+export async function rpcStudentAnswerCount(examId: string, studentId: string): Promise<number> {
+  const { data, error } = await supabase.rpc('student_answer_count', {
+    p_exam_id: examId,
+    p_student_id: studentId,
+  });
+  if (error) throw error;
+  return typeof data === 'number' ? data : Number(data);
+}

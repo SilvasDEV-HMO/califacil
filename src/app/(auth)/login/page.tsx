@@ -58,23 +58,23 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 items-start justify-center overflow-y-auto bg-white/35 p-4 pb-8 pt-10 backdrop-blur-[2px] app-scroll sm:pt-12 md:pt-14 lg:pt-16">
+    <div className="flex h-full min-h-0 items-start justify-center overflow-y-auto bg-white/35 p-3 pb-6 pt-4 backdrop-blur-[2px] app-scroll sm:p-4 sm:pb-8 sm:pt-6 md:pt-8 lg:pt-10">
       <div className="w-full max-w-md">
-        <div className="mb-10 flex justify-center px-1">
+        <div className="mb-6 flex justify-center px-1 sm:mb-7">
           <BrandWordmark
             priority
-            imgClassName="h-16 w-auto max-w-[min(100%,26rem)] object-contain sm:h-20 sm:max-w-[30rem] lg:h-[5.5rem] lg:max-w-[34rem]"
+            imgClassName="h-20 w-auto max-w-[min(100%,28rem)] object-contain sm:h-24 sm:max-w-[32rem] lg:h-28 lg:max-w-[36rem]"
           />
         </div>
 
-        <Card className="shadow-xl border-0">
-          <CardHeader className="space-y-1">
+        <Card className="border-0 shadow-xl">
+          <CardHeader className="space-y-1 px-5 pb-4 pt-5 sm:px-6 sm:pt-6">
             <CardTitle className="text-2xl font-bold text-center">Iniciar Sesión</CardTitle>
             <CardDescription className="text-center">
               Ingresa tus credenciales para acceder a tu cuenta
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 px-5 pb-5 sm:px-6 sm:pb-6">
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Correo electrónico</Label>
@@ -158,8 +158,8 @@ export default function LoginPage() {
               Google
             </Button>
           </CardContent>
-          <CardFooter className="flex justify-center">
-            <p className="text-sm text-gray-600">
+          <CardFooter className="flex justify-center px-5 pb-5 pt-0 sm:px-6 sm:pb-6">
+            <p className="text-center text-sm text-gray-600">
               ¿No tienes cuenta?{' '}
               <Link href="/register" className="text-orange-600 hover:underline font-medium">
                 Regístrate aquí
