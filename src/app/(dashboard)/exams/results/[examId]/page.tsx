@@ -35,7 +35,13 @@ import {
   Legend
 } from 'recharts';
 import { Answer, Question, Student } from '@/types';
-import { formatDate, calculatePercentage, getGradeLabel, getGradeColor } from '@/lib/utils';
+import {
+  formatDate,
+  calculatePercentage,
+  getGradeLabel,
+  getGradeColor,
+  isMultipleChoiceAnswerCorrect,
+} from '@/lib/utils';
 
 interface StudentResult {
   studentId: string;
@@ -93,6 +99,9 @@ export default function ExamResultsPage() {
         const maxScore = exam.questions.length;
         const totalScore = exam.questions.reduce((sum, q) => {
           const a = studentAnswers.find((x) => x.question_id === q.id);
+          if (q.type === 'multiple_choice') {
+            return sum + (a && isMultipleChoiceAnswerCorrect(q.options, a.answer_text, q.correct_answer) ? 1 : 0);
+          }
           const sc = a?.score;
           return sum + (typeof sc === 'number' ? sc : 0);
         }, 0);
@@ -112,7 +121,12 @@ export default function ExamResultsPage() {
 
       const analysis: QuestionAnalysis[] = exam.questions.map((question) => {
         const questionAnswers = answers.filter((a) => a.question_id === question.id);
-        const correctAnswers = questionAnswers.filter((a) => a.is_correct).length;
+        const correctAnswers =
+          question.type === 'multiple_choice'
+            ? questionAnswers.filter((a) =>
+                isMultipleChoiceAnswerCorrect(question.options, a.answer_text, question.correct_answer)
+              ).length
+            : questionAnswers.filter((a) => a.is_correct).length;
         return {
           question,
           totalAnswers: questionAnswers.length,
@@ -239,9 +253,6 @@ export default function ExamResultsPage() {
     );
   }
 
-  const normalizeForCompare = (value: string | null | undefined): string =>
-    (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
-
   const selectedStudentForBreakdown =
     studentResults.find((r) => r.studentId === selectedStudentBreakdownId) ?? null;
 
@@ -257,7 +268,7 @@ export default function ExamResultsPage() {
             questionText: q.text,
             studentAnswer,
             correctAnswer,
-            isCorrect: normalizeForCompare(studentAnswer) === normalizeForCompare(correctAnswer),
+            isCorrect: isMultipleChoiceAnswerCorrect(q.options, studentAnswer, correctAnswer),
           };
         }
         return {

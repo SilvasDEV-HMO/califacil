@@ -20,7 +20,12 @@ import { Loader2, Clock, CheckCircle, AlertCircle, Send, Video } from 'lucide-re
 import { BrandWordmark } from '@/components/brand-wordmark';
 import { toast } from 'sonner';
 import { Exam, Question, Student } from '@/types';
-import { calculatePercentage, getGradeLabel, getGradeColor } from '@/lib/utils';
+import {
+  calculatePercentage,
+  getGradeLabel,
+  getGradeColor,
+  isMultipleChoiceAnswerCorrect,
+} from '@/lib/utils';
 import {
   clearExamClientSession,
   readExamClientSession,
@@ -400,7 +405,11 @@ export default function StudentExamPage() {
         questions.map(async (question) => {
           const answerText = answers[question.id];
           if (question.type === 'multiple_choice') {
-            const isCorrect = answerText === question.correct_answer;
+            const isCorrect = isMultipleChoiceAnswerCorrect(
+              question.options,
+              answerText,
+              question.correct_answer
+            );
             return {
               exam_id: examId,
               student_id: studentId,

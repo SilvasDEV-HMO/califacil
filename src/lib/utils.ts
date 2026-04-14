@@ -37,6 +37,48 @@ export function calculatePercentage(score: number, maxScore: number): number {
   return Math.round((score / maxScore) * 100);
 }
 
+export function normalizeAnswerText(value: string | null | undefined): string {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+export function resolveOptionIndexFromValue(
+  options: string[] | null | undefined,
+  value: string | null | undefined
+): number | null {
+  if (!options || options.length === 0) return null;
+  const raw = (value ?? '').trim();
+  if (!raw) return null;
+
+  const exactIdx = options.findIndex((opt) => normalizeAnswerText(opt) === normalizeAnswerText(raw));
+  if (exactIdx >= 0) return exactIdx;
+
+  const letterMatch = raw.match(/^([A-Za-z])(?:[\)\].:\s-]|$)/);
+  if (letterMatch) {
+    const idx = letterMatch[1].toUpperCase().charCodeAt(0) - 65;
+    if (idx >= 0 && idx < options.length) return idx;
+  }
+
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 1 && n <= options.length) return n - 1;
+  }
+
+  return null;
+}
+
+export function isMultipleChoiceAnswerCorrect(
+  options: string[] | null | undefined,
+  studentAnswer: string | null | undefined,
+  correctAnswer: string | null | undefined
+): boolean {
+  const studentIdx = resolveOptionIndexFromValue(options, studentAnswer);
+  const correctIdx = resolveOptionIndexFromValue(options, correctAnswer);
+  if (studentIdx !== null && correctIdx !== null) {
+    return studentIdx === correctIdx;
+  }
+  return normalizeAnswerText(studentAnswer) === normalizeAnswerText(correctAnswer);
+}
+
 export function getGradeLabel(percentage: number): string {
   if (percentage >= 90) return 'Excelente';
   if (percentage >= 80) return 'Muy bien';

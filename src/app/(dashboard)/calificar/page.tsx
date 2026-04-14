@@ -16,7 +16,12 @@ import {
 } from '@/lib/printExam';
 import { fileToVisionJpegDataUrl } from '@/lib/imageCompress';
 import { fileToImage, scanCalifacilOmrSheet } from '@/lib/omrScan';
-import { calculatePercentage, getGradeColor, getGradeLabel } from '@/lib/utils';
+import {
+  calculatePercentage,
+  getGradeColor,
+  getGradeLabel,
+  isMultipleChoiceAnswerCorrect,
+} from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -126,9 +131,6 @@ export default function CalificarPage() {
     setResultBreakdown([]);
     setSelectedStudentId('');
   }, []);
-
-  const normalizeForCompare = (value: string | null | undefined): string =>
-    (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 
   const validateStudentSelection = (): boolean => {
     if (!selectedStudentId) {
@@ -326,7 +328,11 @@ export default function CalificarPage() {
         const answerText = merged[question.id];
         const isCorrect =
           question.type === 'multiple_choice'
-            ? normalizeForCompare(answerText) === normalizeForCompare(question.correct_answer)
+            ? isMultipleChoiceAnswerCorrect(
+                question.options,
+                answerText,
+                question.correct_answer
+              )
             : null;
         if (isCorrect) correctCount++;
 
@@ -649,6 +655,27 @@ export default function CalificarPage() {
               </div>
             )}
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
+              <Button
+                variant="outline"
+                className="flex-1 sm:flex-none"
+                onClick={() => {
+                  setPhase('elegir');
+                  setSheetIndex(0);
+                  setConfirmedByQuestionId({});
+                  setDraftSelections({});
+                  setPreviewUrl((u) => {
+                    if (u) URL.revokeObjectURL(u);
+                    return null;
+                  });
+                  setResultPct(0);
+                  setResultCorrect(0);
+                  setResultTotal(0);
+                  setResultBreakdown([]);
+                  setSelectedStudentId('');
+                }}
+              >
+                Calificar otro alumno (mismo examen)
+              </Button>
               <Button
                 variant="outline"
                 className="flex-1 sm:flex-none"
