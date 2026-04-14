@@ -54,6 +54,15 @@ interface QuestionAnalysis {
   percentageCorrect: number;
 }
 
+type StudentQuestionBreakdown = {
+  questionId: string;
+  questionNumber: number;
+  questionText: string;
+  studentAnswer: string;
+  correctAnswer: string;
+  isCorrect: boolean | null;
+};
+
 export default function ExamResultsPage() {
   const params = useParams();
   const router = useRouter();
@@ -63,6 +72,8 @@ export default function ExamResultsPage() {
   const [studentResults, setStudentResults] = useState<StudentResult[]>([]);
   const [questionAnalysis, setQuestionAnalysis] = useState<QuestionAnalysis[]>([]);
   const [gradeDistribution, setGradeDistribution] = useState<any[]>([]);
+  const [selectedStudentBreakdownId, setSelectedStudentBreakdownId] = useState<string>('');
+  const [expandedQuestionIds, setExpandedQuestionIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!exam) return;
@@ -153,6 +164,10 @@ export default function ExamResultsPage() {
     };
   }, [exam, answers]);
 
+  useEffect(() => {
+    setExpandedQuestionIds({});
+  }, [selectedStudentBreakdownId]);
+
   const exportToExcel = () => {
     import('xlsx').then((XLSX) => {
       const data = studentResults.map(result => ({
@@ -223,6 +238,45 @@ export default function ExamResultsPage() {
       </div>
     );
   }
+
+  const normalizeForCompare = (value: string | null | undefined): string =>
+    (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+  const selectedStudentForBreakdown =
+    studentResults.find((r) => r.studentId === selectedStudentBreakdownId) ?? null;
+
+  const breakdownRows: StudentQuestionBreakdown[] = selectedStudentForBreakdown
+    ? exam.questions.map((q, idx) => {
+        const answer = selectedStudentForBreakdown.answers.find((a) => a.question_id === q.id);
+        const studentAnswer = answer?.answer_text ?? '';
+        if (q.type === 'multiple_choice') {
+          const correctAnswer = q.correct_answer ?? '';
+          return {
+            questionId: q.id,
+            questionNumber: idx + 1,
+            questionText: q.text,
+            studentAnswer,
+            correctAnswer,
+            isCorrect: normalizeForCompare(studentAnswer) === normalizeForCompare(correctAnswer),
+          };
+        }
+        return {
+          questionId: q.id,
+          questionNumber: idx + 1,
+          questionText: q.text,
+          studentAnswer,
+          correctAnswer: q.correct_answer ?? '',
+          isCorrect: answer?.is_correct ?? null,
+        };
+      })
+    : [];
+
+  const toggleExpandedQuestion = (questionId: string) => {
+    setExpandedQuestionIds((prev) => ({
+      ...prev,
+      [questionId]: !prev[questionId],
+    }));
+  };
 
   const averageScore = studentResults.length > 0 
     ? (studentResults.reduce((sum, r) => sum + r.percentage, 0) / studentResults.length).toFixed(1)
@@ -369,6 +423,107 @@ export default function ExamResultsPage() {
                     </tbody>
                   </table>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle>Detalle por pregunta (bien/mal)</CardTitle>
+              <CardDescription>
+                Compara la respuesta del alumno con la clave correcta, sin recalificar.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {studentResults.length === 0 ? (
+                <div className="text-sm text-gray-500">Aún no hay estudiantes con resultados.</div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Alumno</label>
+                    <select
+                      className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                      value={selectedStudentBreakdownId}
+                      onChange={(e) => setSelectedStudentBreakdownId(e.target.value)}
+                    >
+                      <option value="">Selecciona un alumno</option>
+                      {studentResults.map((result) => (
+                        <option key={result.studentId} value={result.studentId}>
+                          {result.studentName} ({result.percentage}%)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {selectedStudentForBreakdown && (
+                    <div className="space-y-3">
+                      <div className="rounded-lg border bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                        <span className="font-medium">{selectedStudentForBreakdown.studentName}</span>
+                        {' · '}
+                        {selectedStudentForBreakdown.totalScore}/{selectedStudentForBreakdown.maxScore}
+                        {' · '}
+                        <span className={getGradeColor(selectedStudentForBreakdown.percentage)}>
+                          {selectedStudentForBreakdown.percentage}%
+                        </span>
+                      </div>
+
+                      <div className="max-h-[26rem] overflow-y-auto rounded-lg border">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-gray-700">
+                            <tr className="border-b">
+                              <th className="px-3 py-2 text-left font-semibold">#</th>
+                              <th className="px-3 py-2 text-left font-semibold">Respuesta alumno</th>
+                              <th className="px-3 py-2 text-left font-semibold">Correcta</th>
+                              <th className="px-3 py-2 text-left font-semibold">Estado</th>
+                              <th className="px-3 py-2 text-left font-semibold">Detalle</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {breakdownRows.flatMap((row) => {
+                              const isExpanded = Boolean(expandedQuestionIds[row.questionId]);
+                              const mainRow = (
+                                <tr key={row.questionId} className="border-b align-top">
+                                  <td className="px-3 py-2 font-medium text-gray-800">{row.questionNumber}</td>
+                                  <td className="px-3 py-2 text-gray-700">{row.studentAnswer || 'Sin respuesta'}</td>
+                                  <td className="px-3 py-2 text-gray-700">{row.correctAnswer || '—'}</td>
+                                  <td className="px-3 py-2">
+                                    {row.isCorrect === true ? (
+                                      <Badge className="bg-green-100 text-green-700">Correcta</Badge>
+                                    ) : row.isCorrect === false ? (
+                                      <Badge className="bg-red-100 text-red-700">Incorrecta</Badge>
+                                    ) : (
+                                      <Badge className="bg-gray-100 text-gray-700">No evaluada</Badge>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => toggleExpandedQuestion(row.questionId)}
+                                    >
+                                      {isExpanded ? 'Ocultar' : 'Ver pregunta'}
+                                    </Button>
+                                  </td>
+                                </tr>
+                              );
+                              if (!isExpanded) return [mainRow];
+                              const detailRow = (
+                                <tr key={`${row.questionId}-detail`} className="border-b bg-gray-50">
+                                  <td className="px-3 py-2 text-xs font-semibold text-gray-500">Enunciado</td>
+                                  <td colSpan={4} className="px-3 py-2 text-sm text-gray-800">
+                                    {row.questionText}
+                                  </td>
+                                </tr>
+                              );
+                              return [mainRow, detailRow];
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>

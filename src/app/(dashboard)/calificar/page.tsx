@@ -38,6 +38,14 @@ type Phase =
   | 'guardando'
   | 'resultado';
 
+type ResultBreakdownItem = {
+  questionId: string;
+  questionNumber: number;
+  studentAnswer: string;
+  correctAnswer: string;
+  isCorrect: boolean;
+};
+
 export default function CalificarPage() {
   const router = useRouter();
   const { user } = useAuth();
@@ -60,6 +68,7 @@ export default function CalificarPage() {
   const [resultPct, setResultPct] = useState(0);
   const [resultCorrect, setResultCorrect] = useState(0);
   const [resultTotal, setResultTotal] = useState(0);
+  const [resultBreakdown, setResultBreakdown] = useState<ResultBreakdownItem[]>([]);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -114,8 +123,12 @@ export default function CalificarPage() {
     setResultPct(0);
     setResultCorrect(0);
     setResultTotal(0);
+    setResultBreakdown([]);
     setSelectedStudentId('');
   }, []);
+
+  const normalizeForCompare = (value: string | null | undefined): string =>
+    (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 
   const validateStudentSelection = (): boolean => {
     if (!selectedStudentId) {
@@ -204,6 +217,8 @@ export default function CalificarPage() {
       }
 
       const nextDraft: Record<string, string> = {};
+      let disagreementCount = 0;
+      let unresolvedCount = 0;
       for (let i = 0; i < chunk.length; i++) {
         const q = chunk[i];
         const opts = q.options ?? [];
@@ -214,18 +229,38 @@ export default function CalificarPage() {
           );
           if (hit) fromVision = hit;
         }
+        const col = raw[i];
+        const fromLocal = col !== null && col < opts.length ? opts[col] : '';
+
+        // Preferimos lectura local del recuadro porque es más estable con la plantilla.
+        // IA solo ayuda cuando local no logró detectar una burbuja clara.
+        if (fromLocal) {
+          nextDraft[q.id] = fromLocal;
+          if (fromVision && fromVision !== fromLocal) disagreementCount++;
+          continue;
+        }
+
         if (fromVision && opts.includes(fromVision)) {
           nextDraft[q.id] = fromVision;
           continue;
         }
-        const col = raw[i];
-        nextDraft[q.id] =
-          col !== null && col < opts.length ? opts[col] : '';
+
+        nextDraft[q.id] = '';
+        unresolvedCount++;
       }
 
       setDraftSelections(nextDraft);
       setPhase('revisar_hoja');
-      toast.message(scanNote);
+      const detailParts: string[] = [];
+      if (disagreementCount > 0) {
+        detailParts.push(`${disagreementCount} con diferencia IA/local`);
+      }
+      if (unresolvedCount > 0) {
+        detailParts.push(`${unresolvedCount} sin lectura clara`);
+      }
+      toast.message(
+        detailParts.length > 0 ? `${scanNote} (${detailParts.join(' · ')})` : scanNote
+      );
     } catch {
       toast.error('No se pudo procesar la foto. Intenta otra con mejor luz y encuadre.');
     } finally {
@@ -286,11 +321,24 @@ export default function CalificarPage() {
       const studentId = selectedStudentId;
 
       let correctCount = 0;
+      const breakdown: ResultBreakdownItem[] = [];
       const rows = questions.map((question: Question) => {
         const answerText = merged[question.id];
         const isCorrect =
-          question.type === 'multiple_choice' ? answerText === question.correct_answer : null;
+          question.type === 'multiple_choice'
+            ? normalizeForCompare(answerText) === normalizeForCompare(question.correct_answer)
+            : null;
         if (isCorrect) correctCount++;
+
+        if (question.type === 'multiple_choice') {
+          breakdown.push({
+            questionId: question.id,
+            questionNumber: questions.findIndex((x) => x.id === question.id) + 1,
+            studentAnswer: answerText ?? '',
+            correctAnswer: question.correct_answer ?? '',
+            isCorrect: Boolean(isCorrect),
+          });
+        }
 
         return {
           exam_id: examId,
@@ -312,6 +360,7 @@ export default function CalificarPage() {
       setResultCorrect(correctCount);
       setResultTotal(mcTotal);
       setResultPct(pct);
+      setResultBreakdown(breakdown);
       setPhase('resultado');
       toast.success('Calificación guardada. Ya aparece en resultados.');
        } catch (err: unknown) {
@@ -569,6 +618,36 @@ export default function CalificarPage() {
                 {getGradeLabel(resultPct)}
               </p>
             </div>
+            {resultBreakdown.length > 0 && (
+              <div className="space-y-2 text-left">
+                <p className="text-sm font-semibold text-gray-800">
+                  Comparación de respuestas (alumno vs clave)
+                </p>
+                <div className="max-h-56 space-y-2 overflow-y-auto rounded-lg border p-3">
+                  {resultBreakdown.map((item) => (
+                    <div
+                      key={item.questionId}
+                      className={`rounded-md border p-2 text-sm ${
+                        item.isCorrect
+                          ? 'border-green-200 bg-green-50'
+                          : 'border-red-200 bg-red-50'
+                      }`}
+                    >
+                      <p className="font-medium text-gray-900">Pregunta {item.questionNumber}</p>
+                      <p className="text-gray-700">
+                        Alumno: <span className="font-medium">{item.studentAnswer || 'Sin respuesta'}</span>
+                      </p>
+                      <p className="text-gray-700">
+                        Correcta: <span className="font-medium">{item.correctAnswer || '—'}</span>
+                      </p>
+                      <p className={item.isCorrect ? 'text-green-700' : 'text-red-700'}>
+                        {item.isCorrect ? 'Correcta' : 'Incorrecta'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
               <Button
                 variant="outline"
