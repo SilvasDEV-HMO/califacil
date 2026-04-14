@@ -8,7 +8,6 @@ import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
-import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import {
   chunkQuestions,
   califacilOmrColumnCount,
@@ -73,8 +72,18 @@ export default function CalificarPage() {
   const [resultCorrect, setResultCorrect] = useState(0);
   const [resultTotal, setResultTotal] = useState(0);
   const [resultBreakdown, setResultBreakdown] = useState<ResultBreakdownItem[]>([]);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [liveStatus, setLiveStatus] = useState('Abre la cámara para detectar respuestas en vivo.');
+  const [liveResolvedCount, setLiveResolvedCount] = useState(0);
+  const [liveDraftSelections, setLiveDraftSelections] = useState<Record<string, string>>({});
 
   const fileRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const liveTickRef = useRef<number | null>(null);
+  const liveBusyRef = useRef(false);
+  const stableReadyTicksRef = useRef(0);
+  const scanBusyRef = useRef(false);
 
   const publishedExams = useMemo(
     () => (exams as Exam[]).filter((e) => e.status === 'published'),
@@ -97,6 +106,103 @@ export default function CalificarPage() {
   const selectedStudentName =
     sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '';
 
+  const stopLiveCamera = useCallback(() => {
+    if (liveTickRef.current !== null) {
+      window.clearInterval(liveTickRef.current);
+      liveTickRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    stableReadyTicksRef.current = 0;
+    setCameraOpen(false);
+  }, []);
+
+  const mapRawToDraft = useCallback(
+    (raw: (number | null)[], chunk: Question[]) => {
+      const nextDraft: Record<string, string> = {};
+      let unresolvedCount = 0;
+      for (let i = 0; i < chunk.length; i++) {
+        const q = chunk[i];
+        const opts = q.options ?? [];
+        const col = raw[i];
+        const value = col !== null && col < opts.length ? opts[col] : '';
+        nextDraft[q.id] = value;
+        if (!value) unresolvedCount++;
+      }
+      return {
+        draft: nextDraft,
+        unresolvedCount,
+        resolvedCount: chunk.length - unresolvedCount,
+      };
+    },
+    []
+  );
+
+  const setPreviewFromSource = useCallback(
+    async (source: HTMLImageElement | HTMLCanvasElement, fallbackFile?: File) => {
+      let nextUrl: string | null = null;
+      if (source instanceof HTMLCanvasElement) {
+        const blob = await new Promise<Blob | null>((resolve) => {
+          source.toBlob((b) => resolve(b), 'image/jpeg', 0.92);
+        });
+        if (blob) nextUrl = URL.createObjectURL(blob);
+      } else if (fallbackFile) {
+        nextUrl = URL.createObjectURL(fallbackFile);
+      }
+      if (!nextUrl && fallbackFile) nextUrl = URL.createObjectURL(fallbackFile);
+      if (nextUrl) {
+        setPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return nextUrl;
+        });
+      }
+    },
+    []
+  );
+
+  const finalizeCapturedSheet = useCallback(
+    async (source: HTMLImageElement | HTMLCanvasElement, fallbackFile?: File) => {
+      const chunk = sheets[sheetIndex] ?? [];
+      const oriented = autoOrientCalifacilSheet(source, omrCols) ?? source;
+      const raw = scanCalifacilOmrSheet(oriented, omrCols);
+      const mapped = mapRawToDraft(raw, chunk);
+      const minResolved = Math.max(1, Math.ceil(chunk.length * 0.6));
+      if (mapped.resolvedCount < minResolved) {
+        setDraftSelections({});
+        setLiveDraftSelections(mapped.draft);
+        setLiveResolvedCount(mapped.resolvedCount);
+        setLiveStatus('Lectura insuficiente: acerca el recuadro, mejora luz y evita sombras.');
+        toast.error(
+          'La captura no tiene calidad suficiente para leer el recuadro. Acerca más la cámara y vuelve a intentar.'
+        );
+        return false;
+      }
+
+      await setPreviewFromSource(oriented, fallbackFile);
+      setDraftSelections(mapped.draft);
+      setLiveDraftSelections(mapped.draft);
+      setLiveResolvedCount(mapped.resolvedCount);
+      setPhase('revisar_hoja');
+      setLiveStatus(
+        mapped.unresolvedCount > 0
+          ? `Lectura parcial: ${mapped.unresolvedCount} sin lectura clara.`
+          : 'Lectura completa lista para confirmar.'
+      );
+      const scanNote =
+        mapped.unresolvedCount > 0
+          ? `Lectura realizada (${mapped.unresolvedCount} sin lectura clara). Revisa y confirma.`
+          : 'Lectura realizada. Revisa y confirma.';
+      toast.message(scanNote);
+      return true;
+    },
+    [mapRawToDraft, omrCols, setPreviewFromSource, sheetIndex, sheets]
+  );
+
   useEffect(() => {
     if (!exam?.group_id) {
       setStudents([]);
@@ -115,11 +221,31 @@ export default function CalificarPage() {
     };
   }, [exam?.group_id]);
 
+  useEffect(() => {
+    if (phase !== 'capturar' && cameraOpen) {
+      stopLiveCamera();
+    }
+  }, [cameraOpen, phase, stopLiveCamera]);
+
+  useEffect(() => {
+    scanBusyRef.current = scanBusy;
+  }, [scanBusy]);
+
+  useEffect(() => {
+    return () => {
+      stopLiveCamera();
+    };
+  }, [stopLiveCamera]);
+
   const resetFlow = useCallback(() => {
+    stopLiveCamera();
     setPhase('elegir');
     setSheetIndex(0);
     setConfirmedByQuestionId({});
     setDraftSelections({});
+    setLiveDraftSelections({});
+    setLiveResolvedCount(0);
+    setLiveStatus('Abre la cámara para detectar respuestas en vivo.');
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
       return null;
@@ -129,7 +255,7 @@ export default function CalificarPage() {
     setResultTotal(0);
     setResultBreakdown([]);
     setSelectedStudentId('');
-  }, []);
+  }, [stopLiveCamera]);
 
   const validateStudentSelection = (): boolean => {
     if (!selectedStudentId) {
@@ -162,6 +288,10 @@ export default function CalificarPage() {
     setPhase('capturar');
     setSheetIndex(0);
     setConfirmedByQuestionId({});
+    setDraftSelections({});
+    setLiveDraftSelections({});
+    setLiveResolvedCount(0);
+    setLiveStatus('Abre la cámara para detectar respuestas en vivo.');
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
       return null;
@@ -175,65 +305,108 @@ export default function CalificarPage() {
 
     setScanBusy(true);
     try {
-      const chunk = sheets[sheetIndex] ?? [];
       const img = await fileToImage(file);
-      const oriented = autoOrientCalifacilSheet(img, omrCols) ?? img;
-      const raw = scanCalifacilOmrSheet(oriented, omrCols);
-      if (oriented instanceof HTMLCanvasElement) {
-        const blob = await new Promise<Blob | null>((resolve) => {
-          oriented.toBlob((b) => resolve(b), 'image/jpeg', 0.92);
-        });
-        setPreviewUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
-          if (!blob) return URL.createObjectURL(file);
-          return URL.createObjectURL(blob);
-        });
-      } else {
-        setPreviewUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev);
-          return URL.createObjectURL(file);
-        });
-      }
-      const scanNote = 'Lectura local del recuadro realizada. Revisa y confirma antes de guardar.';
-
-      const nextDraft: Record<string, string> = {};
-      let unresolvedCount = 0;
-      for (let i = 0; i < chunk.length; i++) {
-        const q = chunk[i];
-        const opts = q.options ?? [];
-        const col = raw[i];
-        const fromLocal = col !== null && col < opts.length ? opts[col] : '';
-        if (fromLocal) {
-          nextDraft[q.id] = fromLocal;
-          continue;
-        }
-
-        nextDraft[q.id] = '';
-        unresolvedCount++;
-      }
-
-      const resolvedCount = chunk.length - unresolvedCount;
-      const minResolved = Math.max(1, Math.ceil(chunk.length * 0.6));
-      if (resolvedCount < minResolved) {
-        setDraftSelections({});
-        setPhase('capturar');
-        toast.error(
-          'La foto no tiene calidad suficiente para leer el recuadro. Acerca más la cámara y encuadra solo la banda CaliFacil.'
-        );
-        return;
-      }
-
-      setDraftSelections(nextDraft);
-      setPhase('revisar_hoja');
-      const detailParts: string[] = [];
-      if (unresolvedCount > 0) {
-        detailParts.push(`${unresolvedCount} sin lectura clara`);
-      }
-      toast.message(
-        detailParts.length > 0 ? `${scanNote} (${detailParts.join(' · ')})` : scanNote
-      );
+      await finalizeCapturedSheet(img, file);
     } catch {
       toast.error('No se pudo procesar la foto. Intenta otra con mejor luz y encuadre.');
+    } finally {
+      setScanBusy(false);
+    }
+  };
+
+  const startLiveCamera = async () => {
+    if (cameraOpen) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setCameraOpen(true);
+      setLiveStatus('Cámara activa. Encuadra solo la banda CaliFacil dentro del marco.');
+      setLiveResolvedCount(0);
+      setLiveDraftSelections({});
+      stableReadyTicksRef.current = 0;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => undefined);
+      }
+
+      liveTickRef.current = window.setInterval(async () => {
+        if (liveBusyRef.current) return;
+        const video = videoRef.current;
+        if (!video || video.readyState < 2 || video.videoWidth < 40 || video.videoHeight < 40) return;
+        liveBusyRef.current = true;
+        try {
+          const frame = document.createElement('canvas');
+          frame.width = video.videoWidth;
+          frame.height = video.videoHeight;
+          const ctx = frame.getContext('2d');
+          if (!ctx) return;
+          ctx.drawImage(video, 0, 0, frame.width, frame.height);
+
+          const chunk = sheets[sheetIndex] ?? [];
+          const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
+          const raw = scanCalifacilOmrSheet(oriented, omrCols);
+          const mapped = mapRawToDraft(raw, chunk);
+          setLiveDraftSelections(mapped.draft);
+          setLiveResolvedCount(mapped.resolvedCount);
+
+          const minResolved = Math.max(1, Math.ceil(chunk.length * 0.6));
+          if (mapped.resolvedCount >= chunk.length) {
+            setLiveStatus('Detección completa. Captura lista.');
+          } else if (mapped.resolvedCount >= minResolved) {
+            setLiveStatus('Detección estable. Puedes capturar ahora.');
+          } else if (mapped.resolvedCount >= Math.ceil(chunk.length * 0.3)) {
+            setLiveStatus('Casi listo: centra mejor el recuadro y aumenta luz.');
+          } else {
+            setLiveStatus('Ajusta cámara: acerca la banda CaliFacil y evita sombras.');
+          }
+
+          if (mapped.resolvedCount >= minResolved) {
+            stableReadyTicksRef.current += 1;
+          } else {
+            stableReadyTicksRef.current = 0;
+          }
+
+          if (stableReadyTicksRef.current >= 3 && !scanBusyRef.current) {
+            stableReadyTicksRef.current = -999;
+            setScanBusy(true);
+            const ok = await finalizeCapturedSheet(oriented);
+            setScanBusy(false);
+            if (ok) stopLiveCamera();
+          }
+        } finally {
+          liveBusyRef.current = false;
+        }
+      }, 700);
+    } catch {
+      toast.error('No se pudo abrir la cámara. Revisa permisos o usa "Subir foto".');
+      setCameraOpen(false);
+    }
+  };
+
+  const captureLiveNow = async () => {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || video.videoWidth < 40 || video.videoHeight < 40) {
+      toast.error('La cámara aún no está lista.');
+      return;
+    }
+    setScanBusy(true);
+    try {
+      const frame = document.createElement('canvas');
+      frame.width = video.videoWidth;
+      frame.height = video.videoHeight;
+      const ctx = frame.getContext('2d');
+      if (!ctx) {
+        toast.error('No se pudo capturar el fotograma.');
+        return;
+      }
+      ctx.drawImage(video, 0, 0, frame.width, frame.height);
+      const ok = await finalizeCapturedSheet(frame);
+      if (ok) stopLiveCamera();
+    } catch {
+      toast.error('No se pudo capturar desde la cámara.');
     } finally {
       setScanBusy(false);
     }
@@ -350,7 +523,7 @@ export default function CalificarPage() {
     }
   };
 
-  const openCamera = () => fileRef.current?.click();
+  const openFilePicker = () => fileRef.current?.click();
 
   if (!user) return null;
 
@@ -482,20 +655,68 @@ export default function CalificarPage() {
             />
 
             {phase === 'capturar' && (
-              <Button
-                type="button"
-                size="lg"
-                className="h-16 w-full gap-2 bg-orange-600 text-base hover:bg-orange-700"
-                onClick={openCamera}
-                disabled={scanBusy}
-              >
-                {scanBusy ? (
-                  <Loader2 className="h-6 w-6 animate-spin" />
+              <div className="space-y-3">
+                {!cameraOpen ? (
+                  <div className="space-y-2">
+                    <Button
+                      type="button"
+                      size="lg"
+                      className="h-14 w-full gap-2 bg-orange-600 text-base hover:bg-orange-700"
+                      onClick={() => void startLiveCamera()}
+                      disabled={scanBusy}
+                    >
+                      {scanBusy ? (
+                        <Loader2 className="h-6 w-6 animate-spin" />
+                      ) : (
+                        <Camera className="h-6 w-6" />
+                      )}
+                      Abrir cámara en vivo
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full" onClick={openFilePicker}>
+                      Subir foto manual
+                    </Button>
+                  </div>
                 ) : (
-                  <Camera className="h-7 w-7" />
+                  <div className="space-y-3">
+                    <div className="relative overflow-hidden rounded-lg border bg-black">
+                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                      <video ref={videoRef} autoPlay playsInline muted className="w-full object-cover" />
+                      <div className="pointer-events-none absolute inset-[12%] rounded-xl border-2 border-orange-400/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.25)]" />
+                    </div>
+                    <div className="rounded-md border bg-orange-50 px-3 py-2 text-sm text-orange-900">
+                      {liveStatus}
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Detectadas en vivo: {liveResolvedCount}/{currentChunk.length}. Auto-captura cuando esté
+                      estable.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {currentChunk.map((q, idx) => {
+                        const detected = liveDraftSelections[q.id] || '';
+                        const liveCorrect =
+                          detected && q.type === 'multiple_choice'
+                            ? isMultipleChoiceAnswerCorrect(q.options, detected, q.correct_answer)
+                            : null;
+                        return (
+                          <div key={q.id} className="rounded-md border bg-white px-2 py-1 text-xs">
+                            <span className="font-medium">P{sheetIndex * 10 + idx + 1}</span>:{' '}
+                            <span className="font-semibold">{detected || '—'}</span>{' '}
+                            {liveCorrect === true ? '✅' : liveCorrect === false ? '❌' : '•'}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button className="flex-1 bg-orange-600 hover:bg-orange-700" onClick={() => void captureLiveNow()} disabled={scanBusy}>
+                        {scanBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Capturar ahora'}
+                      </Button>
+                      <Button variant="outline" className="flex-1" onClick={stopLiveCamera}>
+                        Cerrar cámara
+                      </Button>
+                    </div>
+                  </div>
                 )}
-                CaliFacil
-              </Button>
+              </div>
             )}
 
             {previewUrl && phase === 'revisar_hoja' && (

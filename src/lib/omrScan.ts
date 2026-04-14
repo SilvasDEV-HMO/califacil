@@ -27,6 +27,11 @@ type ScanDetailedResult = {
   confidenceSum: number;
 };
 
+type Point = { x: number; y: number };
+
+type LineXFromY = { m: number; b: number }; // x = m*y + b
+type LineYFromX = { m: number; b: number }; // y = m*x + b
+
 function sampleDiskDarkness(
   data: Uint8ClampedArray,
   width: number,
@@ -150,6 +155,355 @@ function rotateCanvasByDegrees(canvas: HTMLCanvasElement, degrees: number): HTML
   ctx.rotate(rad);
   ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
   return out;
+}
+
+function fitLineXFromY(points: Point[]): LineXFromY | null {
+  if (points.length < 6) return null;
+  let sumY = 0;
+  let sumX = 0;
+  let sumYY = 0;
+  let sumYX = 0;
+  for (const p of points) {
+    sumY += p.y;
+    sumX += p.x;
+    sumYY += p.y * p.y;
+    sumYX += p.y * p.x;
+  }
+  const n = points.length;
+  const den = n * sumYY - sumY * sumY;
+  if (Math.abs(den) < 1e-6) return null;
+  const m = (n * sumYX - sumY * sumX) / den;
+  const b = (sumX - m * sumY) / n;
+  return { m, b };
+}
+
+function fitLineYFromX(points: Point[]): LineYFromX | null {
+  if (points.length < 6) return null;
+  let sumX = 0;
+  let sumY = 0;
+  let sumXX = 0;
+  let sumXY = 0;
+  for (const p of points) {
+    sumX += p.x;
+    sumY += p.y;
+    sumXX += p.x * p.x;
+    sumXY += p.x * p.y;
+  }
+  const n = points.length;
+  const den = n * sumXX - sumX * sumX;
+  if (Math.abs(den) < 1e-6) return null;
+  const m = (n * sumXY - sumX * sumY) / den;
+  const b = (sumY - m * sumX) / n;
+  return { m, b };
+}
+
+function intersectLineXFromYAndYFromX(lineX: LineXFromY, lineY: LineYFromX): Point | null {
+  const den = 1 - lineX.m * lineY.m;
+  if (Math.abs(den) < 1e-6) return null;
+  const x = (lineX.m * lineY.b + lineX.b) / den;
+  const y = lineY.m * x + lineY.b;
+  return { x, y };
+}
+
+function solveLinearSystem8(matrix: number[][], rhs: number[]): number[] | null {
+  const n = 8;
+  const a = matrix.map((row, i) => [...row, rhs[i]]);
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    let best = Math.abs(a[col][col]);
+    for (let r = col + 1; r < n; r++) {
+      const v = Math.abs(a[r][col]);
+      if (v > best) {
+        best = v;
+        pivot = r;
+      }
+    }
+    if (best < 1e-10) return null;
+    if (pivot !== col) {
+      const tmp = a[col];
+      a[col] = a[pivot];
+      a[pivot] = tmp;
+    }
+    const div = a[col][col];
+    for (let c = col; c <= n; c++) a[col][c] /= div;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const factor = a[r][col];
+      if (factor === 0) continue;
+      for (let c = col; c <= n; c++) a[r][c] -= factor * a[col][c];
+    }
+  }
+  return a.map((row) => row[n]);
+}
+
+function computeHomographyFromRectToQuad(
+  dstWidth: number,
+  dstHeight: number,
+  quad: [Point, Point, Point, Point]
+): number[] | null {
+  const srcPts: [Point, Point, Point, Point] = [
+    { x: 0, y: 0 },
+    { x: dstWidth - 1, y: 0 },
+    { x: dstWidth - 1, y: dstHeight - 1 },
+    { x: 0, y: dstHeight - 1 },
+  ];
+  const matrix: number[][] = [];
+  const rhs: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const u = srcPts[i].x;
+    const v = srcPts[i].y;
+    const x = quad[i].x;
+    const y = quad[i].y;
+    matrix.push([u, v, 1, 0, 0, 0, -x * u, -x * v]);
+    rhs.push(x);
+    matrix.push([0, 0, 0, u, v, 1, -y * u, -y * v]);
+    rhs.push(y);
+  }
+  const sol = solveLinearSystem8(matrix, rhs);
+  if (!sol) return null;
+  return sol; // [a,b,c,d,e,f,g,h]
+}
+
+function sampleBilinear(data: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(width - 1, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const tx = x - x0;
+  const ty = y - y0;
+  const i00 = (y0 * width + x0) * 4;
+  const i10 = (y0 * width + x1) * 4;
+  const i01 = (y1 * width + x0) * 4;
+  const i11 = (y1 * width + x1) * 4;
+  const out: [number, number, number, number] = [0, 0, 0, 0];
+  for (let c = 0; c < 4; c++) {
+    const v00 = data[i00 + c];
+    const v10 = data[i10 + c];
+    const v01 = data[i01 + c];
+    const v11 = data[i11 + c];
+    const v0 = v00 * (1 - tx) + v10 * tx;
+    const v1 = v01 * (1 - tx) + v11 * tx;
+    out[c] = v0 * (1 - ty) + v1 * ty;
+  }
+  return out;
+}
+
+function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const { width, height } = canvas;
+  if (width < 120 || height < 120) return null;
+
+  const id = ctx.getImageData(0, 0, width, height);
+  const d = id.data;
+  const rowCounts = new Array<number>(height).fill(0);
+  const colCounts = new Array<number>(width).fill(0);
+
+  let darkSum = 0;
+  let n = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      const darkness = 1 - lum;
+      darkSum += darkness;
+      n++;
+    }
+  }
+  const avgDark = darkSum / Math.max(1, n);
+  const darkThreshold = Math.min(0.5, Math.max(0.22, avgDark + 0.16));
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      const darkness = 1 - lum;
+      if (darkness >= darkThreshold) {
+        rowCounts[y]++;
+        colCounts[x]++;
+      }
+    }
+  }
+
+  const rowMin = Math.max(8, Math.floor(width * 0.1));
+  const colMin = Math.max(8, Math.floor(height * 0.1));
+  let top = -1;
+  let bottom = -1;
+  let left = -1;
+  let right = -1;
+  for (let y = 0; y < height; y++) {
+    if (rowCounts[y] >= rowMin) {
+      top = y;
+      break;
+    }
+  }
+  for (let y = height - 1; y >= 0; y--) {
+    if (rowCounts[y] >= rowMin) {
+      bottom = y;
+      break;
+    }
+  }
+  for (let x = 0; x < width; x++) {
+    if (colCounts[x] >= colMin) {
+      left = x;
+      break;
+    }
+  }
+  for (let x = width - 1; x >= 0; x--) {
+    if (colCounts[x] >= colMin) {
+      right = x;
+      break;
+    }
+  }
+  if (top < 0 || bottom < 0 || left < 0 || right < 0) return null;
+  if (bottom - top < height * 0.22 || right - left < width * 0.22) return null;
+
+  const y0 = Math.max(0, top - Math.floor(height * 0.03));
+  const y1 = Math.min(height - 1, bottom + Math.floor(height * 0.03));
+  const x0 = Math.max(0, left - Math.floor(width * 0.03));
+  const x1 = Math.min(width - 1, right + Math.floor(width * 0.03));
+
+  const leftPts: Point[] = [];
+  const rightPts: Point[] = [];
+  const topPts: Point[] = [];
+  const bottomPts: Point[] = [];
+  const midX = Math.floor((x0 + x1) / 2);
+  const midY = Math.floor((y0 + y1) / 2);
+
+  for (let y = y0; y <= y1; y += 2) {
+    let lx = -1;
+    for (let x = x0; x <= midX; x++) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (1 - lum >= darkThreshold) {
+        lx = x;
+        break;
+      }
+    }
+    if (lx >= 0) leftPts.push({ x: lx, y });
+
+    let rx = -1;
+    for (let x = x1; x >= midX; x--) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (1 - lum >= darkThreshold) {
+        rx = x;
+        break;
+      }
+    }
+    if (rx >= 0) rightPts.push({ x: rx, y });
+  }
+
+  for (let x = x0; x <= x1; x += 2) {
+    let ty = -1;
+    for (let y = y0; y <= midY; y++) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (1 - lum >= darkThreshold) {
+        ty = y;
+        break;
+      }
+    }
+    if (ty >= 0) topPts.push({ x, y: ty });
+
+    let by = -1;
+    for (let y = y1; y >= midY; y--) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (1 - lum >= darkThreshold) {
+        by = y;
+        break;
+      }
+    }
+    if (by >= 0) bottomPts.push({ x, y: by });
+  }
+
+  const l = fitLineXFromY(leftPts);
+  const r = fitLineXFromY(rightPts);
+  const t = fitLineYFromX(topPts);
+  const b = fitLineYFromX(bottomPts);
+  if (!l || !r || !t || !b) return null;
+
+  const tl = intersectLineXFromYAndYFromX(l, t);
+  const tr = intersectLineXFromYAndYFromX(r, t);
+  const br = intersectLineXFromYAndYFromX(r, b);
+  const bl = intersectLineXFromYAndYFromX(l, b);
+  if (!tl || !tr || !br || !bl) return null;
+
+  const quad: [Point, Point, Point, Point] = [tl, tr, br, bl];
+  const inside = quad.every(
+    (p) => p.x >= -width * 0.1 && p.x <= width * 1.1 && p.y >= -height * 0.1 && p.y <= height * 1.1
+  );
+  if (!inside) return null;
+  const area =
+    Math.abs(
+      tl.x * tr.y +
+        tr.x * br.y +
+        br.x * bl.y +
+        bl.x * tl.y -
+        (tr.x * tl.y + br.x * tr.y + bl.x * br.y + tl.x * bl.y)
+    ) * 0.5;
+  if (area < width * height * 0.08) return null;
+  return quad;
+}
+
+function warpPerspectiveToRect(
+  canvas: HTMLCanvasElement,
+  quad: [Point, Point, Point, Point]
+): HTMLCanvasElement | null {
+  const topW = Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y);
+  const bottomW = Math.hypot(quad[2].x - quad[3].x, quad[2].y - quad[3].y);
+  const leftH = Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y);
+  const rightH = Math.hypot(quad[2].x - quad[1].x, quad[2].y - quad[1].y);
+  const outW = Math.max(120, Math.round((topW + bottomW) * 0.5));
+  const outH = Math.max(120, Math.round((leftH + rightH) * 0.5));
+
+  const h = computeHomographyFromRectToQuad(outW, outH, quad);
+  if (!h) return null;
+  const [a, b, c, d, e, f, g, hh] = h;
+
+  const srcCtx = canvas.getContext('2d');
+  if (!srcCtx) return null;
+  const src = srcCtx.getImageData(0, 0, canvas.width, canvas.height);
+  const srcData = src.data;
+
+  const out = document.createElement('canvas');
+  out.width = outW;
+  out.height = outH;
+  const outCtx = out.getContext('2d');
+  if (!outCtx) return null;
+  const outId = outCtx.createImageData(outW, outH);
+  const outData = outId.data;
+
+  for (let v = 0; v < outH; v++) {
+    for (let u = 0; u < outW; u++) {
+      const den = g * u + hh * v + 1;
+      if (Math.abs(den) < 1e-9) continue;
+      const x = (a * u + b * v + c) / den;
+      const y = (d * u + e * v + f) / den;
+      const outIdx = (v * outW + u) * 4;
+      if (x < 0 || y < 0 || x >= canvas.width - 1 || y >= canvas.height - 1) {
+        outData[outIdx] = 255;
+        outData[outIdx + 1] = 255;
+        outData[outIdx + 2] = 255;
+        outData[outIdx + 3] = 255;
+        continue;
+      }
+      const [r, gg, bb, aa] = sampleBilinear(srcData, canvas.width, canvas.height, x, y);
+      outData[outIdx] = r;
+      outData[outIdx + 1] = gg;
+      outData[outIdx + 2] = bb;
+      outData[outIdx + 3] = aa;
+    }
+  }
+  outCtx.putImageData(outId, 0, 0);
+  return out;
+}
+
+function applyPerspectiveCorrection(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  const quad = detectCalifacilQuad(canvas);
+  if (!quad) return canvas;
+  return warpPerspectiveToRect(canvas, quad) ?? canvas;
 }
 
 function scanCalifacilOmrCanvasDetailed(
@@ -314,7 +668,7 @@ export function autoOrientCalifacilSheet(
 
   // Evita variable no usada cuando el compilador endurece reglas.
   void bestCardinal;
-  return bestCanvas;
+  return applyPerspectiveCorrection(bestCanvas);
 }
 
 export function fileToImage(file: File): Promise<HTMLImageElement> {
