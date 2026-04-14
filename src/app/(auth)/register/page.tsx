@@ -84,8 +84,8 @@ export default function RegisterPage() {
           <div className="flex shrink-0 justify-center">
             <BrandWordmark
               priority
-              className="justify-center"
-              imgClassName="h-[4.25rem] w-auto max-w-[min(94vw,26rem)] object-contain sm:h-14 md:h-16"
+              className="translate-x-1.5 justify-center sm:translate-x-2 md:translate-x-2.5"
+              imgClassName="h-[5.25rem] w-auto max-w-[min(96vw,30rem)] object-contain object-center sm:h-[5.5rem] md:h-[5.75rem]"
             />
           </div>
 
