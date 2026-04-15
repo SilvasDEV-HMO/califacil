@@ -25,23 +25,23 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col">
-        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-evenly gap-2 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 lg:justify-center lg:px-10 lg:py-5">
+        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-start gap-[clamp(0.5rem,1.6vh,1.1rem)] px-3 pb-[clamp(0.6rem,1.8vh,1.4rem)] pt-[clamp(0.5rem,1.8vh,1.2rem)] sm:gap-4 sm:px-6 sm:py-4 lg:justify-center lg:px-10 lg:py-5">
           <div className="shrink-0">
-            <div className="mx-auto w-full max-w-3xl text-center lg:max-w-4xl">
-              <p className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-orange-600 sm:mb-3 sm:text-sm lg:text-base">
+            <div className="mx-auto w-full max-w-[min(100%,35rem)] text-center sm:max-w-3xl lg:max-w-4xl">
+              <p className="mb-[clamp(0.1rem,0.5vh,0.55rem)] text-[clamp(0.62rem,1.45vh,0.9rem)] font-medium uppercase tracking-wide text-orange-600 sm:mb-3 sm:text-sm lg:text-base">
                 Plataforma para Docentes
               </p>
-              <h1 className="text-balance text-[clamp(1.15rem,4.2vw,1.65rem)] font-bold leading-tight tracking-tight text-gray-900 sm:text-4xl lg:text-5xl xl:text-[2.75rem] xl:leading-tight">
+              <h1 className="text-balance text-[clamp(1.05rem,4.4vw,2rem)] font-bold leading-[1.13] tracking-tight text-gray-900 sm:text-4xl lg:text-5xl xl:text-[2.75rem] xl:leading-tight">
                 Crea tus exámenes, imprime y califica TODO el mismo día.
               </h1>
-              <p className="mx-auto mt-1.5 max-w-2xl text-pretty text-[11px] leading-snug text-gray-600 sm:mt-5 sm:text-base sm:leading-relaxed lg:mt-6 lg:text-lg">
+              <p className="mx-auto mt-[clamp(0.25rem,0.9vh,0.8rem)] max-w-2xl text-pretty text-[clamp(0.7rem,1.65vh,1.06rem)] leading-[1.32] text-gray-600 sm:mt-5 sm:text-base sm:leading-relaxed lg:mt-6 lg:text-lg">
                 Crea evaluaciones personalizadas, compártelas con tus grupos y revisa resultados en un
                 solo lugar. Sin complicaciones.
               </p>
-              <div className="mt-2.5 flex flex-col items-stretch justify-center gap-1.5 sm:mt-6 sm:flex-row sm:items-center sm:gap-3 lg:mt-8">
+              <div className="mt-[clamp(0.45rem,1.1vh,1rem)] flex flex-col items-stretch justify-center gap-[clamp(0.35rem,0.9vh,0.7rem)] sm:mt-6 sm:flex-row sm:items-center sm:gap-3 lg:mt-8">
                 <Button
                   size="sm"
-                  className="h-9 w-full min-w-0 text-sm sm:h-10 sm:min-w-[200px] sm:w-auto lg:h-12 lg:px-8 lg:text-base"
+                  className="h-[clamp(2.45rem,5.2vh,3.2rem)] w-full min-w-0 text-[clamp(1rem,2.3vh,1.2rem)] sm:h-10 sm:min-w-[200px] sm:w-auto sm:text-sm lg:h-12 lg:px-8 lg:text-base"
                   asChild
                 >
                   <Link href="/register">
@@ -52,7 +52,7 @@ export default function LandingPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-9 w-full min-w-0 border-orange-200 bg-white/80 text-sm sm:h-10 sm:min-w-[200px] sm:w-auto lg:h-12 lg:px-8 lg:text-base"
+                  className="h-[clamp(2.35rem,5vh,3.15rem)] w-full min-w-0 border-orange-200 bg-white/80 text-[clamp(0.98rem,2.15vh,1.18rem)] sm:h-10 sm:min-w-[200px] sm:w-auto sm:text-sm lg:h-12 lg:px-8 lg:text-base"
                   asChild
                 >
                   <Link href="/login">Ya tengo cuenta</Link>
@@ -61,41 +61,41 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-1.5 sm:grid-cols-3 sm:gap-3 lg:max-w-none lg:gap-4">
-            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-2.5 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-700 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
-                <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+          <div className="mx-auto grid w-full max-w-[min(100%,36rem)] grid-cols-1 gap-[clamp(0.45rem,1.1vh,0.8rem)] sm:max-w-4xl sm:grid-cols-3 sm:gap-3 lg:max-w-none lg:gap-4">
+            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-[clamp(0.6rem,1.65vh,1rem)] shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
+              <div className="flex h-[clamp(1.7rem,4vh,2.35rem)] w-[clamp(1.7rem,4vh,2.35rem)] shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-700 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
+                <Sparkles className="h-[clamp(0.85rem,1.9vh,1.2rem)] w-[clamp(0.85rem,1.9vh,1.2rem)] sm:h-4 sm:w-4" />
               </div>
               <div className="min-w-0 text-left sm:text-left">
-                <h2 className="text-xs font-semibold text-gray-900 sm:text-sm lg:text-base">
+                <h2 className="text-[clamp(0.78rem,1.9vh,1.05rem)] font-semibold text-gray-900 sm:text-sm lg:text-base">
                   Preguntas con IA
                 </h2>
-                <p className="mt-0.5 text-[10px] leading-snug text-gray-600 sm:mt-1.5 sm:text-xs lg:text-sm">
+                <p className="mt-[clamp(0.1rem,0.45vh,0.35rem)] text-[clamp(0.68rem,1.55vh,0.9rem)] leading-snug text-gray-600 sm:mt-1.5 sm:text-xs lg:text-sm">
                   Genera reactivos a partir de temas y tipos de pregunta que elijas.
                 </p>
               </div>
             </div>
-            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-2.5 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-800 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
-                <QrCode className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-[clamp(0.6rem,1.65vh,1rem)] shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
+              <div className="flex h-[clamp(1.7rem,4vh,2.35rem)] w-[clamp(1.7rem,4vh,2.35rem)] shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-800 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
+                <QrCode className="h-[clamp(0.85rem,1.9vh,1.2rem)] w-[clamp(0.85rem,1.9vh,1.2rem)] sm:h-4 sm:w-4" />
               </div>
               <div className="min-w-0 text-left sm:text-left">
-                <h2 className="text-xs font-semibold text-gray-900 sm:text-sm lg:text-base">Acceso por QR</h2>
-                <p className="mt-0.5 text-[10px] leading-snug text-gray-600 sm:mt-1.5 sm:text-xs lg:text-sm">
+                <h2 className="text-[clamp(0.78rem,1.9vh,1.05rem)] font-semibold text-gray-900 sm:text-sm lg:text-base">Acceso por QR</h2>
+                <p className="mt-[clamp(0.1rem,0.45vh,0.35rem)] text-[clamp(0.68rem,1.55vh,0.9rem)] leading-snug text-gray-600 sm:mt-1.5 sm:text-xs lg:text-sm">
                   Publica el examen y que los alumnos entren desde el móvil. O imprímelo y aplícalo en el
                   aula.
                 </p>
               </div>
             </div>
-            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-2.5 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-200/70 text-orange-800 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
-                <BarChart3 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+            <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-[clamp(0.6rem,1.65vh,1rem)] shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
+              <div className="flex h-[clamp(1.7rem,4vh,2.35rem)] w-[clamp(1.7rem,4vh,2.35rem)] shrink-0 items-center justify-center rounded-md bg-orange-200/70 text-orange-800 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
+                <BarChart3 className="h-[clamp(0.85rem,1.9vh,1.2rem)] w-[clamp(0.85rem,1.9vh,1.2rem)] sm:h-4 sm:w-4" />
               </div>
               <div className="min-w-0 text-left sm:text-left">
-                <h2 className="text-xs font-semibold text-gray-900 sm:text-sm lg:text-base">
+                <h2 className="text-[clamp(0.78rem,1.9vh,1.05rem)] font-semibold text-gray-900 sm:text-sm lg:text-base">
                   Resultados claros
                 </h2>
-                <p className="mt-0.5 text-[10px] leading-snug text-gray-600 sm:mt-1.5 sm:text-xs lg:text-sm">
+                <p className="mt-[clamp(0.1rem,0.45vh,0.35rem)] text-[clamp(0.68rem,1.55vh,0.9rem)] leading-snug text-gray-600 sm:mt-1.5 sm:text-xs lg:text-sm">
                   Visualiza el desempeño por examen y por grupo, el mismo día y cuando sea necesario.
                 </p>
               </div>
