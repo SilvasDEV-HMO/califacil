@@ -25,13 +25,13 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col">
-        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-start gap-[clamp(0.5rem,1.6vh,1.1rem)] px-3 pb-[clamp(0.6rem,1.8vh,1.4rem)] pt-[clamp(0.5rem,1.8vh,1.2rem)] sm:gap-4 sm:px-6 sm:py-4 lg:justify-center lg:px-10 lg:py-5">
+        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-between gap-[clamp(0.45rem,1.3vh,0.9rem)] px-3 pb-[clamp(0.45rem,1.2vh,0.9rem)] pt-[clamp(0.45rem,1.2vh,0.9rem)] sm:gap-4 sm:px-6 sm:py-4 lg:justify-center lg:px-10 lg:py-5">
           <div className="shrink-0">
             <div className="mx-auto w-full max-w-[min(100%,35rem)] text-center sm:max-w-3xl lg:max-w-4xl">
               <p className="mb-[clamp(0.1rem,0.5vh,0.55rem)] text-[clamp(0.62rem,1.45vh,0.9rem)] font-medium uppercase tracking-wide text-orange-600 sm:mb-3 sm:text-sm lg:text-base">
                 Plataforma para Docentes
               </p>
-              <h1 className="text-balance text-[clamp(1.05rem,4.4vw,2rem)] font-bold leading-[1.13] tracking-tight text-gray-900 sm:text-4xl lg:text-5xl xl:text-[2.75rem] xl:leading-tight">
+              <h1 className="text-balance text-[clamp(1.35rem,5.7vw,2.4rem)] font-bold leading-[1.1] tracking-tight text-gray-900 sm:text-4xl lg:text-5xl xl:text-[2.75rem] xl:leading-tight">
                 Crea tus exámenes, imprime y califica TODO el mismo día.
               </h1>
               <p className="mx-auto mt-[clamp(0.25rem,0.9vh,0.8rem)] max-w-2xl text-pretty text-[clamp(0.7rem,1.65vh,1.06rem)] leading-[1.32] text-gray-600 sm:mt-5 sm:text-base sm:leading-relaxed lg:mt-6 lg:text-lg">
