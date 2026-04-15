@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Camera, CheckCircle, LayoutDashboard, Loader2, Scan, AlertCircle } from 'lucide-react';
+import { CheckCircle, LayoutDashboard, Loader2, AlertCircle, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
@@ -15,7 +15,7 @@ import {
   califacilOmrColumnCount,
   examSupportsCalifacilOmr,
 } from '@/lib/printExam';
-import { autoOrientCalifacilSheet, fileToImage, scanCalifacilOmrSheet } from '@/lib/omrScan';
+import { autoOrientCalifacilSheet, scanCalifacilOmrSheet } from '@/lib/omrScan';
 import { calculatePercentage, getGradeColor, getGradeLabel } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -75,14 +75,16 @@ export default function CalificarPage() {
   const [liveStatus, setLiveStatus] = useState('Abre la cámara para detectar respuestas en vivo.');
   const [liveResolvedCount, setLiveResolvedCount] = useState(0);
   const [liveDraftSelections, setLiveDraftSelections] = useState<Record<string, string>>({});
+  const [flashSupported, setFlashSupported] = useState(false);
+  const [flashOn, setFlashOn] = useState(false);
 
-  const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const liveTickRef = useRef<number | null>(null);
   const liveBusyRef = useRef(false);
   const stableReadyTicksRef = useRef(0);
   const scanBusyRef = useRef(false);
+  const startingCameraRef = useRef(false);
 
   const publishedExams = useMemo(
     () => (exams as Exam[]).filter((e) => e.status === 'published'),
@@ -101,6 +103,7 @@ export default function CalificarPage() {
   const totalSheets = sheets.length;
   const currentChunk = sheets[sheetIndex] ?? [];
   const maxQuestions = 30;
+  const minResolvedForCurrentChunk = Math.max(1, Math.ceil(currentChunk.length * MIN_AUTO_READ_RATIO));
 
   const sortedStudents = useMemo(
     () => [...students].sort((a, b) => a.name.localeCompare(b.name, 'es')),
@@ -109,9 +112,31 @@ export default function CalificarPage() {
 
   const selectedStudentName =
     sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '';
-  const isMobileDevice = useMemo(() => {
-    if (typeof navigator === 'undefined') return false;
-    return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+  const setTorchEnabled = useCallback(async (enabled: boolean) => {
+    const track = streamRef.current?.getVideoTracks?.()[0];
+    if (!track) return false;
+    const capabilities =
+      typeof track.getCapabilities === 'function'
+        ? (track.getCapabilities() as MediaTrackCapabilities & { torch?: boolean })
+        : null;
+    if (!capabilities?.torch) return false;
+    try {
+      await track.applyConstraints({
+        advanced: [{ torch: enabled } as MediaTrackConstraintSet],
+      });
+      setFlashOn(enabled);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const resetLiveReadings = useCallback(() => {
+    stableReadyTicksRef.current = 0;
+    setLiveDraftSelections({});
+    setLiveResolvedCount(0);
+    setLiveStatus('Cámara activa. Encuadra solo la banda CaliFacil dentro del marco.');
   }, []);
 
   const stopLiveCamera = useCallback(() => {
@@ -119,6 +144,7 @@ export default function CalificarPage() {
       window.clearInterval(liveTickRef.current);
       liveTickRef.current = null;
     }
+    void setTorchEnabled(false);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -127,8 +153,10 @@ export default function CalificarPage() {
       videoRef.current.srcObject = null;
     }
     stableReadyTicksRef.current = 0;
+    setFlashSupported(false);
+    setFlashOn(false);
     setCameraOpen(false);
-  }, []);
+  }, [setTorchEnabled]);
 
   const attachStreamToVideo = useCallback(async () => {
     const video = videoRef.current;
@@ -293,40 +321,20 @@ export default function CalificarPage() {
     setSelectedStudentId('');
   }, [stopLiveCamera]);
 
-  const validateStudentSelection = (): boolean => {
-    if (!selectedStudentId) {
-      toast.error('Selecciona un alumno de la lista');
-      return false;
-    }
-    if (!sortedStudents.some((s) => s.id === selectedStudentId)) {
-      toast.error('El alumno elegido no es válido');
-      return false;
-    }
-    return true;
-  };
-
-  const startCapturePhase = () => {
-    if (!examId || !exam) {
-      toast.error('Selecciona un examen');
-      return;
-    }
-    if (!supportsCalifacil || omrCols < 2) {
-      toast.error(
-        'Este examen no es compatible con CaliFacil (solo opción múltiple, 2–5 opciones por pregunta).'
-      );
-      return;
-    }
-    if (questions.length > maxQuestions) {
-      toast.error(`Máximo ${maxQuestions} preguntas para calificación por hoja.`);
-      return;
-    }
-    if (virtualKey.issues.length > 0) {
-      toast.error('No se pudo construir la clave virtual del examen', {
-        description: virtualKey.issues[0],
-      });
-      return;
-    }
-    if (!validateStudentSelection()) return;
+  const handleStudentChange = (studentId: string) => {
+    setSelectedStudentId(studentId);
+    if (!studentId) return;
+    const canAutoStart =
+      Boolean(examId) &&
+      Boolean(exam) &&
+      !examLoading &&
+      supportsCalifacil &&
+      questions.length > 0 &&
+      questions.length <= maxQuestions &&
+      virtualKey.issues.length === 0 &&
+      sortedStudents.some((s) => s.id === studentId);
+    if (!canAutoStart) return;
+    stopLiveCamera();
     setPhase('capturar');
     setSheetIndex(0);
     setConfirmedByQuestionId({});
@@ -340,28 +348,13 @@ export default function CalificarPage() {
     });
   };
 
-  const onPickImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file || !exam) return;
-
-    setScanBusy(true);
-    try {
-      const img = await fileToImage(file);
-      await finalizeCapturedSheet(img, file);
-    } catch {
-      toast.error('No se pudo procesar la foto. Intenta otra con mejor luz y encuadre.');
-    } finally {
-      setScanBusy(false);
-    }
-  };
-
   const startLiveCamera = async () => {
-    if (cameraOpen) return;
+    if (cameraOpen || startingCameraRef.current) return;
+    startingCameraRef.current = true;
     try {
       if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-        toast.error('Tu navegador no permite cámara en vivo aquí. Usa "Subir foto manual".');
-        openFilePicker();
+        toast.error('Tu navegador no permite cámara en vivo en esta pantalla.');
+        startingCameraRef.current = false;
         return;
       }
       const attempts: MediaStreamConstraints[] = [
@@ -384,11 +377,18 @@ export default function CalificarPage() {
       }
       streamRef.current = stream;
       setCameraOpen(true);
-      setLiveStatus('Cámara activa. Encuadra solo la banda CaliFacil dentro del marco.');
-      setLiveResolvedCount(0);
-      setLiveDraftSelections({});
-      stableReadyTicksRef.current = 0;
+      resetLiveReadings();
       await attachStreamToVideo();
+      const track = stream.getVideoTracks()[0];
+      const capabilities =
+        typeof track?.getCapabilities === 'function'
+          ? (track.getCapabilities() as MediaTrackCapabilities & { torch?: boolean })
+          : null;
+      const supportsTorch = Boolean(capabilities?.torch);
+      setFlashSupported(supportsTorch);
+      if (supportsTorch) {
+        await setTorchEnabled(true);
+      }
 
       liveTickRef.current = window.setInterval(async () => {
         if (liveBusyRef.current) return;
@@ -414,7 +414,7 @@ export default function CalificarPage() {
           if (mapped.resolvedCount >= chunk.length) {
             setLiveStatus('Detección completa. Captura lista.');
           } else if (mapped.resolvedCount >= minResolved) {
-            setLiveStatus('Detección estable. Puedes capturar ahora.');
+            setLiveStatus('Detección estable. Guarda calificación o escanea otra vez.');
           } else if (mapped.resolvedCount >= Math.ceil(chunk.length * 0.3)) {
             setLiveStatus('Casi listo: centra mejor el recuadro y aumenta luz.');
           } else {
@@ -445,8 +445,15 @@ export default function CalificarPage() {
         description: toSpanishAuthMessage(message),
       });
       setCameraOpen(false);
+    } finally {
+      startingCameraRef.current = false;
     }
   };
+
+  useEffect(() => {
+    if (phase !== 'capturar' || cameraOpen || scanBusy) return;
+    void startLiveCamera();
+  }, [cameraOpen, phase, scanBusy, startLiveCamera]);
 
   const captureLiveNow = async () => {
     const video = videoRef.current;
@@ -585,13 +592,8 @@ export default function CalificarPage() {
     }
   };
 
-  const openFilePicker = () => fileRef.current?.click();
-  const openPreferredCamera = () => {
-    if (isMobileDevice) {
-      openFilePicker();
-      return;
-    }
-    void startLiveCamera();
+  const scanAgainInLive = () => {
+    resetLiveReadings();
   };
 
   if (!user) return null;
@@ -672,8 +674,8 @@ export default function CalificarPage() {
               id="calif-alumno"
               students={sortedStudents}
               value={selectedStudentId}
-              onValueChange={setSelectedStudentId}
-              disabled={phase === 'guardando' || phase === 'resultado'}
+              onValueChange={handleStudentChange}
+              disabled={phase === 'guardando'}
               placeholder="Busca y elige al alumno"
               searchPlaceholder="Escribe para buscar…"
               emptyText="Ningún alumno coincide."
@@ -688,25 +690,6 @@ export default function CalificarPage() {
             </p>
           </div>
 
-          {phase === 'elegir' && (
-            <Button
-              className="w-full bg-orange-600 hover:bg-orange-700"
-              onClick={startCapturePhase}
-              disabled={
-                !examId ||
-                examLoading ||
-                !supportsCalifacil ||
-                questions.length === 0 ||
-                questions.length > maxQuestions ||
-                virtualKey.issues.length > 0 ||
-                sortedStudents.length === 0 ||
-                !selectedStudentId
-              }
-            >
-              <Scan className="mr-2 h-4 w-4" />
-              Comenzar calificación
-            </Button>
-          )}
         </CardContent>
       </Card>
 
@@ -722,47 +705,22 @@ export default function CalificarPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={onPickImage}
-            />
-
             {phase === 'capturar' && (
               <div className="space-y-3">
                 {!cameraOpen ? (
-                  <div className="space-y-2">
+                  <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-900">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Abriendo cámara en vivo...
+                    </div>
                     <Button
                       type="button"
-                      size="lg"
-                      className="h-14 w-full gap-2 bg-orange-600 text-base hover:bg-orange-700"
-                      onClick={openPreferredCamera}
-                      disabled={scanBusy}
+                      variant="outline"
+                      className="mt-3 w-full"
+                      onClick={() => void startLiveCamera()}
                     >
-                      {scanBusy ? (
-                        <Loader2 className="h-6 w-6 animate-spin" />
-                      ) : (
-                        <Camera className="h-6 w-6" />
-                      )}
-                      {isMobileDevice ? 'Abrir cámara del teléfono' : 'Abrir cámara en vivo'}
+                      Reintentar cámara
                     </Button>
-                    {isMobileDevice ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => void startLiveCamera()}
-                      >
-                        Probar cámara en vivo (beta)
-                      </Button>
-                    ) : (
-                      <Button type="button" variant="outline" className="w-full" onClick={openFilePicker}>
-                        Subir foto manual
-                      </Button>
-                    )}
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -784,6 +742,17 @@ export default function CalificarPage() {
                     <div className="rounded-md border bg-orange-50 px-3 py-2 text-sm text-orange-900">
                       {liveStatus}
                     </div>
+                    {flashSupported && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => void setTorchEnabled(!flashOn)}
+                      >
+                        <Zap className="mr-2 h-4 w-4" />
+                        {flashOn ? 'Apagar flash' : 'Encender flash'}
+                      </Button>
+                    )}
                     <p className="text-xs text-gray-500">
                       Detectadas en vivo: {liveResolvedCount}/{currentChunk.length}. Auto-captura cuando esté
                       estable.
@@ -800,11 +769,15 @@ export default function CalificarPage() {
                       })}
                     </div>
                     <div className="flex gap-2">
-                      <Button className="flex-1 bg-orange-600 hover:bg-orange-700" onClick={() => void captureLiveNow()} disabled={scanBusy}>
-                        {scanBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Capturar ahora'}
+                      <Button
+                        className="flex-1 bg-orange-600 hover:bg-orange-700"
+                        onClick={() => void captureLiveNow()}
+                        disabled={scanBusy || liveResolvedCount < minResolvedForCurrentChunk}
+                      >
+                        {scanBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Guardar calificación'}
                       </Button>
-                      <Button variant="outline" className="flex-1" onClick={stopLiveCamera}>
-                        Cerrar cámara
+                      <Button variant="outline" className="flex-1" onClick={scanAgainInLive}>
+                        Escanear otra vez
                       </Button>
                     </div>
                   </div>
@@ -821,34 +794,17 @@ export default function CalificarPage() {
 
             {phase === 'revisar_hoja' && (
               <div className="space-y-3">
-                <p className="text-sm font-medium text-gray-800">Confirmar respuestas</p>
+                <p className="text-sm font-medium text-gray-800">
+                  Lectura congelada. Guarda la calificación o vuelve a escanear.
+                </p>
                 {currentChunk.map((q, idx) => {
                   const globalNum = sheetIndex * 10 + idx + 1;
-                  const opts = q.options ?? [];
                   return (
                     <div key={q.id} className="flex flex-col gap-1">
                       <Label className="text-xs text-gray-600">Pregunta {globalNum}</Label>
-                      <Select
-                        value={
-                          draftSelections[q.id] && opts.includes(draftSelections[q.id])
-                            ? draftSelections[q.id]
-                            : undefined
-                        }
-                        onValueChange={(v) =>
-                          setDraftSelections((d) => ({ ...d, [q.id]: v }))
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Elige respuesta" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {opts.map((opt) => (
-                            <SelectItem key={opt} value={opt}>
-                              {opt}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="rounded-md border bg-white px-3 py-2 text-sm">
+                        {draftSelections[q.id] || 'Sin lectura clara'}
+                      </div>
                     </div>
                   );
                 })}
@@ -864,15 +820,16 @@ export default function CalificarPage() {
                         return null;
                       });
                       setDraftSelections({});
+                      resetLiveReadings();
                     }}
                   >
-                    Tomar otra foto
+                    Escanear otra vez
                   </Button>
                   <Button
                     className="flex-1 bg-orange-600 hover:bg-orange-700"
                     onClick={confirmCurrentSheet}
                   >
-                    {sheetIndex >= totalSheets - 1 ? 'Guardar calificación' : 'Siguiente hoja'}
+                    Guardar calificación
                   </Button>
                 </div>
               </div>
