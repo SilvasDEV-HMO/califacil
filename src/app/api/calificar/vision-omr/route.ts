@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
         : '';
     const prompt = `Eres un lector experto de hojas de examen tipo OPSCAN/CaliFacil.
 
-La imagen muestra la parte inferior de una hoja impresa: un recuadro con filas numeradas y burbujas circulares por fila (letras A, B, C…).
+La imagen muestra la parte inferior de una hoja impresa: un recuadro CaliFacil con una primera fila de tabla que solo indica las columnas A, B, C… y debajo filas numeradas en la primera columna; cada fila de pregunta tiene burbujas. Usa la cabecera A/B/C… para saber qué columna es cada opción; las preguntas son las filas con número a la izquierda.
 
 TAREA:
 - Identifica qué burbuja está rellenada (más oscura/tinta) en cada fila de pregunta.

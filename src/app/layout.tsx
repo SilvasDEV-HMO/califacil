@@ -38,7 +38,15 @@ export default function RootLayout({
             <div className="relative z-[1] isolate flex min-h-0 flex-1 flex-col overflow-hidden">
               {children}
             </div>
-            <Toaster position="top-center" richColors />
+            <Toaster
+              position="top-right"
+              offset={{ top: '0.5rem', right: '0.75rem' }}
+              mobileOffset={{
+                top: 'max(0.5rem, env(safe-area-inset-top, 0px))',
+                right: 'max(0.75rem, env(safe-area-inset-right, 0px))',
+              }}
+              richColors
+            />
           </div>
         </ThemeProvider>
       </body>

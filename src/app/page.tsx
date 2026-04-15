@@ -30,7 +30,7 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col max-sm:overflow-hidden">
-        <section className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-1 flex-col justify-between gap-1 px-3 py-2 max-sm:pb-1 max-sm:pt-1 sm:gap-4 sm:px-6 sm:py-4 sm:pb-[clamp(0.45rem,1.2vh,0.9rem)] sm:pt-[clamp(0.45rem,1.2vh,0.9rem)] lg:justify-start lg:px-10 lg:pt-10 lg:pb-8">
+        <section className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-1 flex-col justify-start gap-3 px-3 py-2 max-sm:gap-2.5 max-sm:pb-1 max-sm:pt-1 sm:gap-6 sm:px-6 sm:py-4 sm:pb-[clamp(0.45rem,1.2vh,0.9rem)] sm:pt-[clamp(0.45rem,1.2vh,0.9rem)] lg:gap-10 lg:px-10 lg:pt-10 lg:pb-8">
           <div className="min-h-0 shrink-0 sm:shrink-0">
             <div className="mx-auto w-full max-w-[min(100%,35rem)] text-center sm:max-w-3xl lg:max-w-4xl">
               <p className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-orange-600 sm:mb-3 sm:text-sm lg:text-base">
@@ -66,7 +66,7 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="mx-auto grid w-full max-w-[min(100%,36rem)] shrink-0 grid-cols-1 gap-1.5 sm:max-w-4xl sm:grid-cols-3 sm:gap-3 lg:mt-10 lg:max-w-none lg:gap-4">
+          <div className="mx-auto grid w-full max-w-[min(100%,36rem)] shrink-0 grid-cols-1 gap-1.5 sm:max-w-4xl sm:grid-cols-3 sm:gap-3 lg:max-w-none lg:gap-4">
             <div className="flex flex-row items-start gap-2 rounded-md border border-orange-100/80 bg-white/80 p-2 shadow-sm backdrop-blur-md sm:flex-col sm:gap-2.5 sm:rounded-xl sm:p-3.5 lg:p-4">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-700 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
                 <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />

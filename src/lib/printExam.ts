@@ -1,6 +1,7 @@
 import type { ExamWithQuestions, Question } from '@/types';
 
-export const CALIFACIL_OMR_GUIDE_ASPECT_RATIO = 3.55;
+/** Relación ancho:alto aproximada del recuadro CaliFacil (incl. título + tabla con cabecera A–D). */
+export const CALIFACIL_OMR_GUIDE_ASPECT_RATIO = 3.28;
 
 export type CalifacilVirtualKeyRow = {
   questionId: string;
@@ -114,6 +115,17 @@ function califacilOmrTableHtml(
   startIdx: number,
   omrCols: number
 ): string {
+  const headerCells: string[] = [
+    `<th class="omr-qnum omr-th" scope="col"><span class="omr-th-num">N.º</span></th>`,
+  ];
+  for (let c = 0; c < omrCols; c++) {
+    const letter = String.fromCharCode(65 + c);
+    headerCells.push(
+      `<th class="omr-bubble-cell omr-th" scope="col"><span class="omr-th-letter">${letter}</span></th>`
+    );
+  }
+  const thead = `<thead><tr class="omr-tr omr-tr--head">${headerCells.join('')}</tr></thead>`;
+
   const rows: string[] = [];
   for (let i = 0; i < 10; i++) {
     const q = chunkQs[i];
@@ -130,7 +142,7 @@ function califacilOmrTableHtml(
       const letter = String.fromCharCode(65 + c);
       if (c < nOpts) {
         cells.push(
-          `<td class="omr-bubble-cell"><div class="omr-bubble-wrap"><span class="omr-bubble" title="${letter}"></span><span class="omr-letter">${letter}</span></div></td>`
+          `<td class="omr-bubble-cell"><div class="omr-bubble-wrap"><span class="omr-bubble" aria-label="Opción ${letter}" title="Opción ${letter}"></span></div></td>`
         );
       } else {
         cells.push(`<td class="omr-bubble-cell omr-bubble-cell--muted"></td>`);
@@ -140,9 +152,10 @@ function califacilOmrTableHtml(
   }
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
-      <p class="omr-title">CaliFacil — Rellena un círculo por fila (bolígrafo oscuro). Usa número de pregunta (fila) y letra (columna). Incluye este recuadro al fotografiar.</p>
+      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena el <strong>círculo entero</strong> con bolígrafo <strong>azul o negro</strong> (tinta bien oscura). La <strong>fila</strong> es el número de pregunta; la <strong>columna</strong> es A, B, C… Incluye <strong>todo</strong> este recuadro al fotografiar.</p>
       <table class="omr-table" data-califacil-omr-cols="${omrCols}">
-        ${rows.join('')}
+        ${thead}
+        <tbody>${rows.join('')}</tbody>
       </table>
     </aside>`;
 }
@@ -253,25 +266,47 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     .empty-note { font-size: 9pt; color: #666; font-style: italic; }
     .califacil-omr {
       margin-top: 12pt;
-      padding: 4pt 5pt 5pt;
-      border: 1.5pt solid #000;
+      padding: 5pt 6pt 6pt;
+      border: 2pt solid #000;
       page-break-inside: avoid;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
     .omr-title {
-      font-size: 6.5pt;
+      font-size: 6.75pt;
       font-weight: bold;
       text-align: center;
-      margin: 0 0 4pt;
-      line-height: 1.15;
+      margin: 0 0 5pt;
+      line-height: 1.2;
     }
     .omr-table {
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
+      font-size: 7.25pt;
+      border: 1.2pt solid #000;
+    }
+    .omr-tr--head .omr-th {
+      font-weight: 800;
+      text-align: center;
+      vertical-align: middle;
+      padding: 3pt 3pt;
+      border: 0.9pt solid #000;
+      background: #d8d8d8;
+      color: #000;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .omr-tr--head .omr-qnum.omr-th {
+      text-align: center;
+      background: #c8c8c8;
+    }
+    .omr-th-letter {
+      font-size: 9pt;
+      letter-spacing: 0.02em;
+    }
+    .omr-th-num {
       font-size: 7pt;
-      border: 1pt solid #000;
     }
     .omr-tr--inactive .omr-inactive {
       text-align: center;
@@ -283,47 +318,45 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       width: 9%;
       font-weight: bold;
       text-align: right;
-      padding: 2pt 4pt 2pt 0;
+      padding: 3pt 5pt 3pt 3pt;
       vertical-align: middle;
-      border: 0.8pt solid #000;
-      background: #f6f6f6;
+      border: 0.9pt solid #000;
+      background: #efefef;
+      font-size: 8pt;
     }
     .omr-bubble-cell {
       text-align: center;
       vertical-align: middle;
-      padding: 1pt 2pt;
-      border: 0.8pt solid #000;
+      padding: 2.5pt 4pt;
+      border: 0.9pt solid #000;
     }
     .omr-bubble-cell--muted {
-      background: #f5f5f5;
+      background: #ebebeb;
     }
     .omr-bubble-wrap {
       display: flex;
       flex-direction: row;
       align-items: center;
       justify-content: center;
-      gap: 2pt;
+      min-height: 13pt;
     }
     .omr-bubble {
-      width: 9pt;
-      height: 9pt;
-      min-width: 9pt;
-      min-height: 9pt;
-      border: 1pt solid #000;
+      width: 11pt;
+      height: 11pt;
+      min-width: 11pt;
+      min-height: 11pt;
+      border: 1.25pt solid #000;
       border-radius: 50%;
       background: #fff;
       box-sizing: border-box;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
-    .omr-letter {
-      font-size: 6.5pt;
-      font-weight: bold;
-      line-height: 1;
-      min-width: 5pt;
+    tbody .omr-tr:nth-child(2n) .omr-bubble-cell {
+      background: #faf8f5;
     }
-    .omr-tr:nth-child(2n) .omr-bubble-cell {
-      background: #fcfcfc;
+    tbody .omr-tr:nth-child(2n) .omr-qnum {
+      background: #e8e8e8;
     }
     @media print {
       body { max-width: none; }

@@ -48,7 +48,9 @@ import { useIsMobile } from '@/hooks/use-mobile';
 
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando';
 
-const MIN_AUTO_READ_RATIO = 0.8;
+/** Umbral mínimo de reactivos leídos para fijar borrador y habilitar guardado en cámara en vivo. */
+const MIN_AUTO_READ_RATIO = 0.9;
+const STABLE_PARTIAL_TICKS = 2;
 
 /** Letra de inciso (A–E) a partir del texto de opción elegido; vacío si no hay lectura. */
 function optionAnswerToLetter(q: Question, answerText: string): string {
@@ -91,14 +93,13 @@ export default function CalificarPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const liveTickRef = useRef<number | null>(null);
   const liveBusyRef = useRef(false);
-  const stableFullDetectionTicksRef = useRef(0);
+  const stablePartialTicksRef = useRef(0);
   const submitAllRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
   const scanBusyRef = useRef(false);
   const startingCameraRef = useRef(false);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const confirmedAnswersRef = useRef<Record<string, string>>({});
   const sheetIndexRef = useRef(0);
-  const autoScanPipelineLockRef = useRef(false);
 
   const [autoGradeDialogOpen, setAutoGradeDialogOpen] = useState(false);
   const [autoGradeStats, setAutoGradeStats] = useState<{
@@ -163,7 +164,7 @@ export default function CalificarPage() {
   }, []);
 
   const resetLiveReadings = useCallback(() => {
-    stableFullDetectionTicksRef.current = 0;
+    stablePartialTicksRef.current = 0;
     setLiveDraftSelections({});
     setLiveResolvedCount(0);
     setLiveStatus(
@@ -186,7 +187,7 @@ export default function CalificarPage() {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-    stableFullDetectionTicksRef.current = 0;
+    stablePartialTicksRef.current = 0;
     setFlashSupported(false);
     setFlashOn(false);
     setCameraOpen(false);
@@ -537,59 +538,34 @@ export default function CalificarPage() {
           setLiveResolvedCount(mapped.resolvedCount);
 
           const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
-          if (mapped.resolvedCount >= chunk.length) {
-            setLiveStatus('Detección completa. Guardando…');
+          if (mapped.resolvedCount >= chunk.length && chunk.length > 0) {
+            setLiveStatus('Detección completa. Pulsa «Guardar calificación» o sigue afinando.');
           } else if (mapped.resolvedCount >= minResolved) {
-            setLiveStatus('Detección estable. Guarda calificación o escanea otra vez.');
+            setLiveStatus(
+              'Lectura fijada al mover la cámara. Completa las faltantes y pulsa «Guardar calificación».'
+            );
           } else if (mapped.resolvedCount >= Math.ceil(chunk.length * 0.3)) {
             setLiveStatus('Casi listo: centra mejor el recuadro y aumenta luz.');
           } else {
             setLiveStatus('Ajusta cámara: acerca la banda CaliFacil y evita sombras.');
           }
 
-          if (mapped.resolvedCount >= chunk.length && chunk.length > 0) {
-            stableFullDetectionTicksRef.current += 1;
+          if (mapped.resolvedCount >= minResolved && chunk.length > 0) {
+            stablePartialTicksRef.current += 1;
           } else {
-            stableFullDetectionTicksRef.current = 0;
+            stablePartialTicksRef.current = 0;
           }
 
-          if (
-            stableFullDetectionTicksRef.current >= 2 &&
-            !scanBusyRef.current &&
-            !autoScanPipelineLockRef.current &&
-            mapped.resolvedCount >= chunk.length &&
-            chunk.length > 0
-          ) {
-            autoScanPipelineLockRef.current = true;
-            stableFullDetectionTicksRef.current = 0;
-            setScanBusy(true);
-            try {
-              const res = await finalizeCapturedSheet(oriented, undefined, { skipReviewUi: true });
-              if (!res.success || !res.chunkDraft) {
-                return;
+          if (stablePartialTicksRef.current >= STABLE_PARTIAL_TICKS && chunk.length > 0) {
+            stablePartialTicksRef.current = 0;
+            setDraftSelections((prev) => {
+              const next = { ...prev };
+              for (const q of chunk) {
+                const v = mapped.draft[q.id]?.trim();
+                if (v) next[q.id] = v;
               }
-              const si = sheetIndexRef.current;
-              const mergedAll = { ...confirmedAnswersRef.current, ...res.chunkDraft };
-              confirmedAnswersRef.current = mergedAll;
-              setConfirmedByQuestionId(mergedAll);
-
-              const isLastSheet = si >= sheets.length - 1;
-              if (!isLastSheet) {
-                setSheetIndex(si + 1);
-                setPreviewUrl((u) => {
-                  if (u) URL.revokeObjectURL(u);
-                  return null;
-                });
-                setDraftSelections({});
-                resetLiveReadings();
-                toast.success(`Hoja ${si + 1} guardada. Escanea la hoja ${si + 2}.`);
-              } else {
-                await submitAllRef.current(mergedAll);
-              }
-            } finally {
-              autoScanPipelineLockRef.current = false;
-              setScanBusy(false);
-            }
+              return next;
+            });
           }
         } finally {
           liveBusyRef.current = false;
@@ -612,32 +588,6 @@ export default function CalificarPage() {
     if (phase !== 'capturar' || cameraOpen || scanBusy) return;
     void startLiveCamera();
   }, [isMobile, cameraOpen, phase, scanBusy, startLiveCamera]);
-
-  const captureLiveNow = async () => {
-    const video = videoRef.current;
-    if (!video || video.readyState < 2 || video.videoWidth < 40 || video.videoHeight < 40) {
-      toast.error('La cámara aún no está lista.');
-      return;
-    }
-    setScanBusy(true);
-    try {
-      const frame = document.createElement('canvas');
-      frame.width = video.videoWidth;
-      frame.height = video.videoHeight;
-      const ctx = frame.getContext('2d');
-      if (!ctx) {
-        toast.error('No se pudo capturar el fotograma.');
-        return;
-      }
-      ctx.drawImage(video, 0, 0, frame.width, frame.height);
-      const res = await finalizeCapturedSheet(frame);
-      if (res.success) stopLiveCamera();
-    } catch {
-      toast.error('No se pudo capturar desde la cámara.');
-    } finally {
-      setScanBusy(false);
-    }
-  };
 
   const confirmCurrentSheet = () => {
     const chunk = sheets[sheetIndex] ?? [];
@@ -758,9 +708,98 @@ export default function CalificarPage() {
     }
   };
 
+  const commitGradeFromLive = useCallback(async () => {
+    const chunk = sheets[sheetIndex] ?? [];
+    if (chunk.length === 0) return;
+
+    setScanBusy(true);
+    try {
+      const mergedChunk: Record<string, string> = { ...draftSelections };
+      for (const q of chunk) {
+        const live = liveDraftSelections[q.id]?.trim();
+        if (live) mergedChunk[q.id] = live;
+      }
+
+      const missing = chunk.filter((q) => !mergedChunk[q.id]?.trim());
+      if (missing.length > 0) {
+        toast.error(
+          `Faltan ${missing.length} respuesta(s) en esta hoja. Acerca el recuadro o espera la lectura en vivo.`
+        );
+        return;
+      }
+
+      setDraftSelections(mergedChunk);
+
+      const mergedNow: Record<string, string> = { ...confirmedByQuestionId };
+      for (const q of chunk) {
+        mergedNow[q.id] = mergedChunk[q.id]!;
+      }
+      setConfirmedByQuestionId(mergedNow);
+      confirmedAnswersRef.current = mergedNow;
+
+      const isLast = sheetIndex >= totalSheets - 1;
+      if (!isLast) {
+        const cur = sheetIndex + 1;
+        const next = sheetIndex + 2;
+        setSheetIndex((s) => s + 1);
+        setDraftSelections({});
+        resetLiveReadings();
+        toast.success(
+          isMobile
+            ? `Hoja ${cur} guardada. Escanea la hoja ${next}.`
+            : `Hoja ${cur} guardada. Importa la imagen de la hoja ${next}.`
+        );
+        return;
+      }
+
+      await submitAll(mergedNow);
+    } finally {
+      setScanBusy(false);
+    }
+  }, [
+    confirmedByQuestionId,
+    draftSelections,
+    isMobile,
+    liveDraftSelections,
+    resetLiveReadings,
+    sheetIndex,
+    sheets,
+    submitAll,
+    totalSheets,
+  ]);
+
+  const switchToAnotherStudentScan = useCallback(() => {
+    stopLiveCamera();
+    setSelectedStudentId('');
+    setPhase('elegir');
+    setSheetIndex(0);
+    setConfirmedByQuestionId({});
+    confirmedAnswersRef.current = {};
+    setDraftSelections({});
+    setLiveDraftSelections({});
+    setLiveResolvedCount(0);
+    stablePartialTicksRef.current = 0;
+    setPreviewUrl((u) => {
+      if (u) URL.revokeObjectURL(u);
+      return null;
+    });
+    setLiveStatus(
+      isMobile
+        ? 'Abre la cámara para detectar respuestas en vivo.'
+        : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
+    );
+    toast.message('Elige otro alumno para escanear su examen.');
+  }, [isMobile, stopLiveCamera]);
+
   submitAllRef.current = submitAll;
 
   const scanAgainInLive = () => {
+    const chunk = sheets[sheetIndex] ?? [];
+    setDraftSelections((prev) => {
+      const next = { ...prev };
+      for (const q of chunk) delete next[q.id];
+      return next;
+    });
     resetLiveReadings();
   };
 
@@ -985,6 +1024,12 @@ export default function CalificarPage() {
                         <div className="rounded-md border bg-orange-50 px-3 py-2 text-sm text-orange-900">
                           {liveStatus}
                         </div>
+                        <p className="text-[11px] leading-snug text-gray-600">
+                          <span className="font-medium text-gray-800">Tip:</span> encuadra el recuadro
+                          negro completo, luz uniforme y relleno <strong>oscuro y redondo</strong> dentro
+                          del círculo. La fila es el número de pregunta; las columnas son A, B, C… según la
+                          primera fila de la tabla impresa.
+                        </p>
                         {flashSupported && (
                           <Button
                             type="button"
@@ -997,12 +1042,23 @@ export default function CalificarPage() {
                           </Button>
                         )}
                         <p className="text-xs text-gray-500">
-                          Detectadas en vivo: {liveResolvedCount}/{currentChunk.length}. Auto-captura cuando
-                          esté estable.
+                          Leídas{' '}
+                          {
+                            currentChunk.filter(
+                              (q) =>
+                                Boolean(draftSelections[q.id]?.trim()) ||
+                                Boolean(liveDraftSelections[q.id]?.trim())
+                            ).length
+                          }
+                          /{currentChunk.length} (vivo + fijadas). Con al menos {minResolvedForCurrentChunk}{' '}
+                          estables se guarda el borrador para que puedas mover la cámara.
                         </p>
                         <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                           {currentChunk.map((q, idx) => {
-                            const letter = optionAnswerToLetter(q, liveDraftSelections[q.id] || '');
+                            const letter = optionAnswerToLetter(
+                              q,
+                              draftSelections[q.id] || liveDraftSelections[q.id] || ''
+                            );
                             return (
                               <div key={q.id} className="rounded-md border bg-white px-2 py-1 text-xs">
                                 <span className="font-medium">P{sheetIndex * 10 + idx + 1}</span>:{' '}
@@ -1011,20 +1067,38 @@ export default function CalificarPage() {
                             );
                           })}
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-col gap-2">
+                          <div className="flex gap-2">
+                            <Button
+                              className="flex-1 bg-orange-600 hover:bg-orange-700"
+                              onClick={() => void commitGradeFromLive()}
+                              disabled={
+                                scanBusy ||
+                                !currentChunk.every(
+                                  (q) =>
+                                    Boolean(draftSelections[q.id]?.trim()) ||
+                                    Boolean(liveDraftSelections[q.id]?.trim())
+                                )
+                              }
+                            >
+                              {scanBusy ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                'Guardar calificación'
+                              )}
+                            </Button>
+                            <Button variant="outline" className="flex-1" onClick={scanAgainInLive}>
+                              Escanear otra vez
+                            </Button>
+                          </div>
                           <Button
-                            className="flex-1 bg-orange-600 hover:bg-orange-700"
-                            onClick={() => void captureLiveNow()}
-                            disabled={scanBusy || liveResolvedCount < minResolvedForCurrentChunk}
+                            type="button"
+                            variant="secondary"
+                            className="w-full"
+                            onClick={switchToAnotherStudentScan}
+                            disabled={scanBusy}
                           >
-                            {scanBusy ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              'Guardar calificación'
-                            )}
-                          </Button>
-                          <Button variant="outline" className="flex-1" onClick={scanAgainInLive}>
-                            Escanear otra vez
+                            Escanear examen de otro alumno
                           </Button>
                         </div>
                       </div>

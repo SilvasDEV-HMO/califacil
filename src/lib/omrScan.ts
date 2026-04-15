@@ -6,8 +6,8 @@
 export const CALIFACIL_OMR_SCAN = {
   /** Fracción inferior de la imagen donde cae el recuadro CaliFacil impreso */
   bottomBandRatio: 0.46,
-  /** Parte superior de esa banda reservada al título (se ignora al muestrear) */
-  titleStripRatioOfBand: 0.16,
+  /** Incluye título + cabecera A–D; el muestreo de 10 filas usa solo el cuerpo de la tabla. */
+  titleStripRatioOfBand: 0.19,
   /** Ancho relativo reservado a la columna del número de pregunta */
   qnumWidthRatio: 0.09,
   /**
