@@ -10,14 +10,22 @@ export const CALIFACIL_OMR_SCAN = {
   titleStripRatioOfBand: 0.16,
   /** Ancho relativo reservado a la columna del número de pregunta */
   qnumWidthRatio: 0.09,
-  /** Intensidad mínima de relleno real (centro más oscuro que el anillo impreso) */
-  minMarkDarkness: 0.06,
+  /**
+   * Peso del anillo en (fillDark - ringDark * R). Menor R = mejor para burbujas bien
+   * rellenas (centro y anillo igual de oscuros); con R≈0.9 el score quedaba casi 0 y
+   * se rechazaban marcas claras a simple vista.
+   */
+  ringDarknessWeight: 0.68,
+  /** Intensidad mínima de relleno real (score fill − weight·ring tras elegir mejor columna) */
+  minMarkDarkness: 0.045,
   /** Ventaja mínima de la mejor burbuja contra la segunda */
-  minBestVsSecondGap: 0.03,
+  minBestVsSecondGap: 0.028,
   /** Relación mínima entre mejor y segunda para evitar dobles marcas */
-  minBestVsSecondRatio: 1.28,
-  /** Diferencia mínima centro-anillo para confirmar relleno real */
+  minBestVsSecondRatio: 1.2,
+  /** Diferencia mínima centro-anillo para confirmar anillo impreso + centro claro (no relleno) */
   minCenterVsRingDelta: 0.03,
+  /** Si el disco interior es tan oscuro, damos por válida una marca aunque centro≈anillo (tinta llena). */
+  minSolidCenterDarkness: 0.19,
 } as const;
 
 type ScanThresholds = {
@@ -25,6 +33,8 @@ type ScanThresholds = {
   minBestVsSecondGap: number;
   minBestVsSecondRatio?: number;
   minCenterVsRingDelta?: number;
+  minSolidCenterDarkness?: number;
+  ringDarknessWeight?: number;
 };
 
 type ScanDetailedResult = {
@@ -585,8 +595,9 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       fills.push(fillDark);
       rings.push(ringDark);
       // Burbuja vacía: anillo oscuro y centro claro => score bajo/negativo.
-      // Burbuja rellena: centro oscuro y diferencia positiva => score alto.
-      scores.push(fillDark - ringDark * 0.9);
+      // Burbuja rellena: centro oscuro; si está muy llena, anillo también oscuro (sigue ganando vs vacías).
+      const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
+      scores.push(fillDark - ringDark * rw);
     }
     let bestIdx = 0;
     for (let c = 1; c < cols; c++) {
@@ -605,10 +616,14 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     const dynamicMin = Math.max(thresholds.minMarkDarkness, rowMean + 0.012);
     const dynamicGap = Math.max(thresholds.minBestVsSecondGap, Math.abs(best) * 0.26);
     const ratio = best / Math.max(0.001, second + 0.001);
-    const centerVsRing = (fills[bestIdx] ?? 0) - (rings[bestIdx] ?? 0);
+    const fillBest = fills[bestIdx] ?? 0;
+    const ringBest = rings[bestIdx] ?? 0;
+    const centerVsRing = fillBest - ringBest;
     const minRatio = thresholds.minBestVsSecondRatio ?? CALIFACIL_OMR_SCAN.minBestVsSecondRatio;
     const minCenterVsRingDelta =
       thresholds.minCenterVsRingDelta ?? CALIFACIL_OMR_SCAN.minCenterVsRingDelta;
+    const solidCenterMin =
+      thresholds.minSolidCenterDarkness ?? CALIFACIL_OMR_SCAN.minSolidCenterDarkness;
     if (best < dynamicMin) {
       out[row] = null;
       continue;
@@ -622,7 +637,9 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       out[row] = null;
       continue;
     }
-    if (centerVsRing < minCenterVsRingDelta) {
+    // Vacía: centro claro y anillo impreso => centerVsRing negativo o muy bajo.
+    // Muy rellena: centro y anillo igual de oscuros => centerVsRing≈0; exigir entonces tinta fuerte en el disco.
+    if (centerVsRing < minCenterVsRingDelta && fillBest < solidCenterMin) {
       out[row] = null;
       continue;
     }
@@ -669,6 +686,8 @@ export function scanCalifacilOmrSheet(
     minBestVsSecondGap: CALIFACIL_OMR_SCAN.minBestVsSecondGap,
     minBestVsSecondRatio: CALIFACIL_OMR_SCAN.minBestVsSecondRatio,
     minCenterVsRingDelta: CALIFACIL_OMR_SCAN.minCenterVsRingDelta,
+    minSolidCenterDarkness: CALIFACIL_OMR_SCAN.minSolidCenterDarkness,
+    ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
   };
 
   const fullSheetProfile: OmrGeometryProfile = {
