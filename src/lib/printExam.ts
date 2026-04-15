@@ -1,5 +1,46 @@
 import type { ExamWithQuestions, Question } from '@/types';
 
+export const CALIFACIL_OMR_GUIDE_ASPECT_RATIO = 3.55;
+
+export type CalifacilVirtualKeyRow = {
+  questionId: string;
+  questionNumber: number;
+  options: string[];
+  correctIndex: number;
+  correctOption: string;
+};
+
+/**
+ * Construye una "clave virtual" determinista del examen para comparar contra la lectura OMR.
+ * Esta simulación usa exactamente el texto/opciones guardadas en BD.
+ */
+export function buildCalifacilVirtualKey(questions: Question[]): {
+  rows: CalifacilVirtualKeyRow[];
+  issues: string[];
+} {
+  const rows: CalifacilVirtualKeyRow[] = [];
+  const issues: string[] = [];
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i];
+    if (q.type !== 'multiple_choice') continue;
+    const options = (q.options ?? []).map((opt) => opt.trim()).filter(Boolean);
+    const correct = (q.correct_answer ?? '').trim();
+    const correctIndex = options.findIndex((opt) => opt === correct);
+    if (correctIndex < 0) {
+      issues.push(`La pregunta ${i + 1} no tiene respuesta correcta válida dentro de sus opciones.`);
+      continue;
+    }
+    rows.push({
+      questionId: q.id,
+      questionNumber: i + 1,
+      options,
+      correctIndex,
+      correctOption: options[correctIndex],
+    });
+  }
+  return { rows, issues };
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -127,20 +168,22 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     .sheet-header {
       display: flex;
       flex-direction: column;
-      gap: 3pt;
+      gap: 4pt;
       border-bottom: 1px solid #000;
-      padding-bottom: 2pt;
-      margin-bottom: 3pt;
+      padding-bottom: 3pt;
+      margin-bottom: 4pt;
     }
     .sheet-banner-wrap {
       width: 100%;
       background: #fff;
       line-height: 0;
+      display: flex;
+      justify-content: center;
     }
     .sheet-banner {
       width: 100%;
       height: auto;
-      max-height: 0.72in;
+      max-height: 0.95in;
       object-fit: contain;
       object-position: center;
       display: block;
@@ -165,13 +208,17 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     .meta-grid {
       display: grid;
       grid-template-columns: minmax(0, 2.35fr) minmax(0, 0.55fr) minmax(0, 1.1fr);
-      gap: 2pt 6pt;
-      margin-top: 7pt;
-      margin-bottom: 7pt;
+      gap: 3pt 8pt;
+      margin-top: 9pt;
+      margin-bottom: 10pt;
       font-size: 8pt;
     }
     .meta-grid label { font-weight: bold; }
-    .meta-line { border-bottom: 1px solid #000; min-height: 9pt; margin-top: 0; }
+    .meta-line {
+      border-bottom: 1px solid #000;
+      min-height: 16pt;
+      margin-top: 6pt;
+    }
     .questions-block { margin-top: 0; }
     .question { margin-bottom: 2.5pt; page-break-inside: avoid; }
     .q-num { margin: 0 0 1pt; text-align: justify; font-size: 8.5pt; line-height: 1.1; }
@@ -205,7 +252,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     }
     .empty-note { font-size: 9pt; color: #666; font-style: italic; }
     .califacil-omr {
-      margin-top: 5pt;
+      margin-top: 12pt;
       padding: 4pt 5pt 5pt;
       border: 1.5pt solid #000;
       page-break-inside: avoid;
@@ -336,6 +383,7 @@ export function buildPrintExamHtml(
     <div class="questions-block">
       ${questionsInPage || '<p class="empty-note">Sin preguntas en esta sección.</p>'}
     </div>
+    <!-- Cada hoja: 10 preguntas + recuadro CaliFacil para esa hoja -->
     ${omrCols > 0 ? califacilOmrTableHtml(chunkQs, startIdx, omrCols) : ''}
     <p class="footer-note">
       ${includeAnswerKey ? 'Clave de respuestas (uso docente).' : 'Hoja para el estudiante.'} · Hoja ${pageIdx + 1} de ${chunks.length}

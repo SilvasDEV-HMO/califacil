@@ -9,17 +9,14 @@ import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
 import { supabase } from '@/lib/supabase';
 import {
+  buildCalifacilVirtualKey,
+  CALIFACIL_OMR_GUIDE_ASPECT_RATIO,
   chunkQuestions,
   califacilOmrColumnCount,
   examSupportsCalifacilOmr,
 } from '@/lib/printExam';
 import { autoOrientCalifacilSheet, fileToImage, scanCalifacilOmrSheet } from '@/lib/omrScan';
-import {
-  calculatePercentage,
-  getGradeColor,
-  getGradeLabel,
-  isMultipleChoiceAnswerCorrect,
-} from '@/lib/utils';
+import { calculatePercentage, getGradeColor, getGradeLabel } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -95,6 +92,11 @@ export default function CalificarPage() {
   const questions = useMemo(() => exam?.questions ?? [], [exam]);
   const omrCols = califacilOmrColumnCount(questions);
   const supportsCalifacil = exam ? examSupportsCalifacilOmr(questions) : false;
+  const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
+  const virtualKeyByQuestionId = useMemo(
+    () => new Map(virtualKey.rows.map((row) => [row.questionId, row])),
+    [virtualKey.rows]
+  );
   const sheets = useMemo(() => chunkQuestions(questions, 10), [questions]);
   const totalSheets = sheets.length;
   const currentChunk = sheets[sheetIndex] ?? [];
@@ -318,6 +320,12 @@ export default function CalificarPage() {
       toast.error(`Máximo ${maxQuestions} preguntas para calificación por hoja.`);
       return;
     }
+    if (virtualKey.issues.length > 0) {
+      toast.error('No se pudo construir la clave virtual del examen', {
+        description: virtualKey.issues[0],
+      });
+      return;
+    }
     if (!validateStudentSelection()) return;
     setPhase('capturar');
     setSheetIndex(0);
@@ -521,14 +529,14 @@ export default function CalificarPage() {
       let correctCount = 0;
       const breakdown: ResultBreakdownItem[] = [];
       const rows = questions.map((question: Question) => {
-        const answerText = merged[question.id];
+        const answerText = (merged[question.id] ?? '').trim();
+        const key = virtualKeyByQuestionId.get(question.id);
+        const answerIdx = key ? key.options.findIndex((opt) => opt === answerText) : -1;
         const isCorrect =
           question.type === 'multiple_choice'
-            ? isMultipleChoiceAnswerCorrect(
-                question.options,
-                answerText,
-                question.correct_answer
-              )
+            ? key
+              ? answerIdx === key.correctIndex
+              : false
             : null;
         if (isCorrect) correctCount++;
 
@@ -536,8 +544,8 @@ export default function CalificarPage() {
           breakdown.push({
             questionId: question.id,
             questionNumber: questions.findIndex((x) => x.id === question.id) + 1,
-            studentAnswer: answerText ?? '',
-            correctAnswer: question.correct_answer ?? '',
+            studentAnswer: answerText || '',
+            correctAnswer: key?.correctOption ?? question.correct_answer ?? '',
             isCorrect: Boolean(isCorrect),
           });
         }
@@ -557,7 +565,7 @@ export default function CalificarPage() {
       });
       if (answersError) throw answersError;
 
-      const mcTotal = questions.filter((q) => q.type === 'multiple_choice').length;
+      const mcTotal = virtualKey.rows.length;
       const pct = calculatePercentage(correctCount, mcTotal);
       setResultCorrect(correctCount);
       setResultTotal(mcTotal);
@@ -651,6 +659,13 @@ export default function CalificarPage() {
             </div>
           )}
 
+          {exam && supportsCalifacil && virtualKey.issues.length > 0 && (
+            <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+              <AlertCircle className="h-5 w-5 shrink-0" />
+              {virtualKey.issues[0]}
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="calif-alumno">Alumno</Label>
             <StudentCombobox
@@ -683,6 +698,7 @@ export default function CalificarPage() {
                 !supportsCalifacil ||
                 questions.length === 0 ||
                 questions.length > maxQuestions ||
+                virtualKey.issues.length > 0 ||
                 sortedStudents.length === 0 ||
                 !selectedStudentId
               }
@@ -759,7 +775,11 @@ export default function CalificarPage() {
                         muted
                         className="aspect-[4/3] min-h-[12rem] w-full bg-black object-cover"
                       />
-                      <div className="pointer-events-none absolute inset-[12%] rounded-xl border-2 border-orange-400/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.25)]" />
+                      <div className="pointer-events-none absolute inset-0 bg-black/20" />
+                      <div
+                        className="pointer-events-none absolute left-1/2 top-[62%] w-[86%] -translate-x-1/2 -translate-y-1/2 rounded-lg border-[2.5px] border-orange-400/95 shadow-[0_0_0_9999px_rgba(0,0,0,0.2)]"
+                        style={{ aspectRatio: `${CALIFACIL_OMR_GUIDE_ASPECT_RATIO} / 1` }}
+                      />
                     </div>
                     <div className="rounded-md border bg-orange-50 px-3 py-2 text-sm text-orange-900">
                       {liveStatus}
@@ -771,9 +791,10 @@ export default function CalificarPage() {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                       {currentChunk.map((q, idx) => {
                         const detected = liveDraftSelections[q.id] || '';
+                        const key = virtualKeyByQuestionId.get(q.id);
                         const liveCorrect =
-                          detected && q.type === 'multiple_choice'
-                            ? isMultipleChoiceAnswerCorrect(q.options, detected, q.correct_answer)
+                          detected && key
+                            ? key.options.findIndex((opt) => opt === detected.trim()) === key.correctIndex
                             : null;
                         return (
                           <div key={q.id} className="rounded-md border bg-white px-2 py-1 text-xs">
