@@ -149,7 +149,7 @@ export default function DashboardLayout({
 
         <main
           className={cn(
-            'min-h-0 flex-1 overscroll-contain px-3 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-4 sm:pt-4 lg:mx-auto lg:w-full lg:max-w-[1400px] lg:px-5 lg:pb-4 xl:px-6',
+            'min-h-0 flex-1 overscroll-contain px-3 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-4 sm:pt-4 lg:px-5 lg:pb-4 xl:px-6',
             dashboardHome ? 'flex flex-col overflow-hidden' : 'app-scroll overflow-y-auto'
           )}
         >

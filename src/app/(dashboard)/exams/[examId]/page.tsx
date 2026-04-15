@@ -8,7 +8,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -25,7 +24,6 @@ import {
   Trash2,
   Loader2,
   FileText,
-  Image as ImageIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import QRCode from 'qrcode';
@@ -118,6 +116,7 @@ export default function ExamDetailPage() {
     correctAnswer: 'Opción A',
     illustration: '',
   });
+  const newQuestionOptions = normalizeOptions(newQuestion.optionsText);
 
   const generateQRCode = useCallback(async () => {
     if (!exam) return;
@@ -337,6 +336,16 @@ export default function ExamDetailPage() {
         </TabsList>
 
         <TabsContent value="questions" className="space-y-4">
+          {exam.questions.map((question, index) => (
+            <QuestionCard
+              key={question.id}
+              question={question}
+              index={index}
+              onUpdate={updateQuestion}
+              onDelete={deleteQuestion}
+            />
+          ))}
+
           <Card className="border-dashed border-orange-300">
             <CardHeader className="space-y-1">
               <CardTitle className="flex items-center gap-2 text-lg">
@@ -357,42 +366,48 @@ export default function ExamDetailPage() {
                   placeholder="Escribe la pregunta..."
                 />
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>Tipo</Label>
-                  <Select
-                    value={newQuestion.type}
-                    onValueChange={(v: 'multiple_choice' | 'open_answer') =>
-                      setNewQuestion((prev) => ({
-                        ...prev,
-                        type: v,
-                        optionsText: v === 'multiple_choice' ? prev.optionsText || 'Opción A\nOpción B' : '',
-                        correctAnswer: v === 'multiple_choice' ? prev.correctAnswer || 'Opción A' : prev.correctAnswer,
-                      }))
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
-                      <SelectItem value="open_answer">Respuesta abierta</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Figura / referencia (opcional)</Label>
-                  <Input
-                    value={newQuestion.illustration}
-                    onChange={(e) => setNewQuestion((prev) => ({ ...prev, illustration: e.target.value }))}
-                    placeholder="Descripción de apoyo"
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label>Tipo</Label>
+                <Select
+                  value={newQuestion.type}
+                  onValueChange={(v: 'multiple_choice' | 'open_answer') =>
+                    setNewQuestion((prev) => ({
+                      ...prev,
+                      type: v,
+                      optionsText: v === 'multiple_choice' ? prev.optionsText || 'Opción A\nOpción B' : '',
+                      correctAnswer: v === 'multiple_choice' ? prev.correctAnswer || 'Opción A' : prev.correctAnswer,
+                      illustration: '',
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
+                    <SelectItem value="open_answer">Respuesta abierta</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               {newQuestion.type === 'multiple_choice' ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label>Opciones (una por línea)</Label>
+                    <div className="flex items-center justify-between gap-2">
+                      <Label>Opciones (una por línea)</Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setNewQuestion((prev) => ({
+                            ...prev,
+                            optionsText: `${prev.optionsText.trim()}\nOpción ${String.fromCharCode(65 + normalizeOptions(prev.optionsText).length)}`.trim(),
+                          }))
+                        }
+                      >
+                        Agregar opción
+                      </Button>
+                    </div>
                     <Textarea
                       value={newQuestion.optionsText}
                       onChange={(e) => setNewQuestion((prev) => ({ ...prev, optionsText: e.target.value }))}
@@ -400,15 +415,23 @@ export default function ExamDetailPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Respuesta correcta (texto exacto)</Label>
-                    <Input
-                      value={newQuestion.correctAnswer}
-                      onChange={(e) => setNewQuestion((prev) => ({ ...prev, correctAnswer: e.target.value }))}
-                      placeholder="Debe coincidir con una opción"
-                    />
-                    <p className="text-xs text-gray-500">
-                      Recomendación: copia y pega una de las opciones para evitar errores.
-                    </p>
+                    <Label>Respuesta correcta</Label>
+                    <Select
+                      value={newQuestionOptions.includes(newQuestion.correctAnswer) ? newQuestion.correctAnswer : undefined}
+                      onValueChange={(v) => setNewQuestion((prev) => ({ ...prev, correctAnswer: v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecciona la opción correcta" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {newQuestionOptions.map((opt) => (
+                          <SelectItem key={opt} value={opt}>
+                            {opt}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-500">Primero escribe las opciones, luego elige la correcta.</p>
                   </div>
                 </div>
               ) : (
@@ -438,16 +461,6 @@ export default function ExamDetailPage() {
               </Button>
             </CardContent>
           </Card>
-
-          {exam.questions.map((question, index) => (
-            <QuestionCard
-              key={question.id}
-              question={question}
-              index={index}
-              onUpdate={updateQuestion}
-              onDelete={deleteQuestion}
-            />
-          ))}
         </TabsContent>
 
         {exam.status === 'published' && (
@@ -534,6 +547,7 @@ function QuestionCard({
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<QuestionDraft>(draftFromQuestion(question));
+  const draftOptions = normalizeOptions(draft.optionsText);
 
   useEffect(() => {
     setDraft(draftFromQuestion(question));
@@ -588,41 +602,47 @@ function QuestionCard({
                     rows={3}
                   />
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <Label className="text-xs text-gray-600">Tipo</Label>
-                    <Select
-                      value={draft.type}
-                      onValueChange={(v: 'multiple_choice' | 'open_answer') =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          type: v,
-                          optionsText: v === 'multiple_choice' ? prev.optionsText || 'Opción A\nOpción B' : '',
-                        }))
-                      }
-                    >
-                      <SelectTrigger className="h-9">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
-                        <SelectItem value="open_answer">Respuesta abierta</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-gray-600">Figura / referencia</Label>
-                    <Input
-                      value={draft.illustration}
-                      onChange={(e) => setDraft((prev) => ({ ...prev, illustration: e.target.value }))}
-                      className="h-9"
-                    />
-                  </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-gray-600">Tipo</Label>
+                  <Select
+                    value={draft.type}
+                    onValueChange={(v: 'multiple_choice' | 'open_answer') =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        type: v,
+                        optionsText: v === 'multiple_choice' ? prev.optionsText || 'Opción A\nOpción B' : '',
+                        illustration: '',
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="multiple_choice">Opción múltiple</SelectItem>
+                      <SelectItem value="open_answer">Respuesta abierta</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 {draft.type === 'multiple_choice' ? (
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="space-y-1">
-                      <Label className="text-xs text-gray-600">Opciones (una por línea)</Label>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label className="text-xs text-gray-600">Opciones (una por línea)</Label>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              optionsText: `${prev.optionsText.trim()}\nOpción ${String.fromCharCode(65 + normalizeOptions(prev.optionsText).length)}`.trim(),
+                            }))
+                          }
+                        >
+                          + Opción
+                        </Button>
+                      </div>
                       <Textarea
                         value={draft.optionsText}
                         onChange={(e) => setDraft((prev) => ({ ...prev, optionsText: e.target.value }))}
@@ -631,11 +651,21 @@ function QuestionCard({
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs text-gray-600">Respuesta correcta</Label>
-                      <Input
-                        value={draft.correctAnswer}
-                        onChange={(e) => setDraft((prev) => ({ ...prev, correctAnswer: e.target.value }))}
-                        className="h-9"
-                      />
+                      <Select
+                        value={draftOptions.includes(draft.correctAnswer) ? draft.correctAnswer : undefined}
+                        onValueChange={(v) => setDraft((prev) => ({ ...prev, correctAnswer: v }))}
+                      >
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Selecciona la correcta" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {draftOptions.map((opt) => (
+                            <SelectItem key={opt} value={opt}>
+                              {opt}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
                 ) : (
@@ -671,12 +701,6 @@ function QuestionCard({
                         {option === question.correct_answer && ' ✓'}
                       </div>
                     ))}
-                  </div>
-                )}
-                {question.illustration && (
-                  <div className="mt-2 flex items-center gap-2 text-sm text-gray-500">
-                    <ImageIcon className="h-4 w-4" />
-                    <span className="italic">{question.illustration}</span>
                   </div>
                 )}
               </>

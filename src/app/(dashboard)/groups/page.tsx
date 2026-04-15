@@ -33,12 +33,8 @@ export default function GroupsPage() {
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
 
   useEffect(() => {
-    if (groups.length === 0) {
+    if (selectedGroup && !groups.some((g) => g.id === selectedGroup)) {
       setSelectedGroup(null);
-      return;
-    }
-    if (!selectedGroup || !groups.some((g) => g.id === selectedGroup)) {
-      setSelectedGroup(groups[0].id);
     }
   }, [groups, selectedGroup]);
 
@@ -105,7 +101,7 @@ export default function GroupsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
           {/* Groups List */}
-          <div className="space-y-3 sm:space-y-4 lg:col-span-1">
+          <div className={`space-y-3 sm:space-y-4 ${selectedGroup ? 'lg:col-span-1' : 'lg:col-span-3'}`}>
             <h2 className="text-lg font-semibold text-gray-900">Mis Grupos</h2>
             <div className="space-y-3">
               {groups.map((group) => (
@@ -155,22 +151,14 @@ export default function GroupsPage() {
           </div>
 
           {/* Students Management */}
-          <div className="lg:col-span-2">
-            {selectedGroup ? (
+          {selectedGroup && (
+            <div className="lg:col-span-2">
               <StudentsManager 
                 groupId={selectedGroup} 
                 groupName={groups.find(g => g.id === selectedGroup)?.name || ''}
               />
-            ) : (
-              <Card className="h-full flex items-center justify-center p-12">
-                <div className="text-center">
-                  <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-gray-900 mb-2">Selecciona un grupo</h3>
-                  <p className="text-gray-500">Haz clic en un grupo para ver y gestionar sus estudiantes</p>
-                </div>
-              </Card>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -242,7 +230,7 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
       const names = await parseStudentNamesFromImportFile(file);
       if (names.length === 0) {
         toast.error(
-          'No se encontraron nombres. Descarga la plantilla, complétala con un nombre por fila y súbela de nuevo.'
+          'No se encontraron nombres. Descarga la plantilla, completa APELLIDO (S) y NOMBRE (S), y súbela de nuevo.'
         );
         return;
       }
@@ -298,8 +286,8 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
         <div className="flex flex-col gap-2 rounded-lg border border-orange-100 bg-orange-50/50 p-3">
           <p className="text-xs text-gray-700 sm:text-sm">
             <span className="font-medium text-orange-900">Lista de alumnos:</span> descarga la plantilla,
-            escribe un nombre por fila (columna <span className="font-mono text-xs">nombre</span>) y súbela
-            aquí.
+            escribe cada alumno en columnas <span className="font-mono text-xs">APELLIDO (S)</span> y{' '}
+            <span className="font-mono text-xs">NOMBRE (S)</span>, y súbela aquí.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" className="border-orange-200 bg-white" asChild>

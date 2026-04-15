@@ -107,6 +107,10 @@ export default function CalificarPage() {
 
   const selectedStudentName =
     sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '';
+  const isMobileDevice = useMemo(() => {
+    if (typeof navigator === 'undefined') return false;
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  }, []);
 
   const stopLiveCamera = useCallback(() => {
     if (liveTickRef.current !== null) {
@@ -122,6 +126,20 @@ export default function CalificarPage() {
     }
     stableReadyTicksRef.current = 0;
     setCameraOpen(false);
+  }, []);
+
+  const attachStreamToVideo = useCallback(async () => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!video || !stream) return;
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
+    await video.play().catch(() => undefined);
   }, []);
 
   const mapRawToDraft = useCallback(
@@ -230,6 +248,20 @@ export default function CalificarPage() {
   }, [cameraOpen, phase, stopLiveCamera]);
 
   useEffect(() => {
+    if (!cameraOpen) return;
+    void attachStreamToVideo();
+    const video = videoRef.current;
+    if (!video) return;
+    const onLoadedMetadata = () => {
+      void attachStreamToVideo();
+    };
+    video.addEventListener('loadedmetadata', onLoadedMetadata);
+    return () => {
+      video.removeEventListener('loadedmetadata', onLoadedMetadata);
+    };
+  }, [attachStreamToVideo, cameraOpen]);
+
+  useEffect(() => {
     scanBusyRef.current = scanBusy;
   }, [scanBusy]);
 
@@ -319,6 +351,11 @@ export default function CalificarPage() {
   const startLiveCamera = async () => {
     if (cameraOpen) return;
     try {
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+        toast.error('Tu navegador no permite cámara en vivo aquí. Usa "Subir foto manual".');
+        openFilePicker();
+        return;
+      }
       const attempts: MediaStreamConstraints[] = [
         { video: { facingMode: { exact: 'environment' } }, audio: false },
         { video: { facingMode: { ideal: 'environment' } }, audio: false },
@@ -343,12 +380,7 @@ export default function CalificarPage() {
       setLiveResolvedCount(0);
       setLiveDraftSelections({});
       stableReadyTicksRef.current = 0;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true;
-        videoRef.current.playsInline = true;
-        await videoRef.current.play().catch(() => undefined);
-      }
+      await attachStreamToVideo();
 
       liveTickRef.current = window.setInterval(async () => {
         if (liveBusyRef.current) return;
@@ -398,8 +430,12 @@ export default function CalificarPage() {
           liveBusyRef.current = false;
         }
       }, 700);
-    } catch {
-      toast.error('No se pudo abrir la cámara. Revisa permisos o usa "Subir foto".');
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : 'No se pudo abrir la cámara. Revisa permisos o usa "Subir foto".';
+      toast.error('No se pudo abrir la cámara', {
+        description: toSpanishAuthMessage(message),
+      });
       setCameraOpen(false);
     }
   };
@@ -542,6 +578,13 @@ export default function CalificarPage() {
   };
 
   const openFilePicker = () => fileRef.current?.click();
+  const openPreferredCamera = () => {
+    if (isMobileDevice) {
+      openFilePicker();
+      return;
+    }
+    void startLiveCamera();
+  };
 
   if (!user) return null;
 
@@ -680,7 +723,7 @@ export default function CalificarPage() {
                       type="button"
                       size="lg"
                       className="h-14 w-full gap-2 bg-orange-600 text-base hover:bg-orange-700"
-                      onClick={() => void startLiveCamera()}
+                      onClick={openPreferredCamera}
                       disabled={scanBusy}
                     >
                       {scanBusy ? (
@@ -688,11 +731,22 @@ export default function CalificarPage() {
                       ) : (
                         <Camera className="h-6 w-6" />
                       )}
-                      Abrir cámara en vivo
+                      {isMobileDevice ? 'Abrir cámara del teléfono' : 'Abrir cámara en vivo'}
                     </Button>
-                    <Button type="button" variant="outline" className="w-full" onClick={openFilePicker}>
-                      Subir foto manual
-                    </Button>
+                    {isMobileDevice ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => void startLiveCamera()}
+                      >
+                        Probar cámara en vivo (beta)
+                      </Button>
+                    ) : (
+                      <Button type="button" variant="outline" className="w-full" onClick={openFilePicker}>
+                        Subir foto manual
+                      </Button>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-3">

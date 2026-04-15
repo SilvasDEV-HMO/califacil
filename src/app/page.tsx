@@ -5,7 +5,7 @@ import { QrCode, Sparkles, BarChart3, ArrowRight, Copyright } from 'lucide-react
 
 export default function LandingPage() {
   return (
-    <div className="flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-transparent">
+    <div className="flex min-h-[100dvh] flex-col overflow-y-auto bg-transparent app-scroll">
       <header className="shrink-0 border-b border-orange-200/50 bg-white/75 backdrop-blur-md">
         <div className="mx-auto flex min-h-[4rem] max-w-7xl items-center justify-between gap-2 px-3 py-1.5 sm:min-h-[4.5rem] sm:gap-3 sm:px-6 sm:py-2 lg:min-h-[5rem] lg:px-10">
           <BrandWordmark
@@ -24,21 +24,21 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-center gap-3 overflow-hidden px-3 py-2 sm:gap-4 sm:px-6 sm:py-4 lg:px-10 lg:py-5">
+      <main className="flex min-h-0 flex-1 flex-col">
+        <section className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col justify-start gap-2 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 lg:justify-center lg:px-10 lg:py-5">
           <div className="shrink-0">
             <div className="mx-auto w-full max-w-3xl text-center lg:max-w-4xl">
-              <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-orange-600 sm:mb-3 sm:text-sm lg:text-base">
+              <p className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-orange-600 sm:mb-3 sm:text-sm lg:text-base">
                 Plataforma para Docentes
               </p>
               <h1 className="text-balance text-[clamp(1.15rem,4.2vw,1.65rem)] font-bold leading-tight tracking-tight text-gray-900 sm:text-4xl lg:text-5xl xl:text-[2.75rem] xl:leading-tight">
                 Crea tus exámenes, imprime y califica TODO el mismo día.
               </h1>
-              <p className="mx-auto mt-2 max-w-2xl text-pretty text-[11px] leading-snug text-gray-600 sm:mt-5 sm:text-base sm:leading-relaxed lg:mt-6 lg:text-lg">
+              <p className="mx-auto mt-1.5 max-w-2xl text-pretty text-[11px] leading-snug text-gray-600 sm:mt-5 sm:text-base sm:leading-relaxed lg:mt-6 lg:text-lg">
                 Crea evaluaciones personalizadas, compártelas con tus grupos y revisa resultados en un
                 solo lugar. Sin complicaciones.
               </p>
-              <div className="mt-3 flex flex-col items-stretch justify-center gap-1.5 sm:mt-6 sm:flex-row sm:items-center sm:gap-3 lg:mt-8">
+              <div className="mt-2.5 flex flex-col items-stretch justify-center gap-1.5 sm:mt-6 sm:flex-row sm:items-center sm:gap-3 lg:mt-8">
                 <Button
                   size="sm"
                   className="h-9 w-full min-w-0 text-sm sm:h-10 sm:min-w-[200px] sm:w-auto lg:h-12 lg:px-8 lg:text-base"
@@ -61,7 +61,7 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3 lg:max-w-none lg:gap-4">
+          <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-1.5 sm:grid-cols-3 sm:gap-3 lg:max-w-none lg:gap-4">
             <div className="flex flex-row items-start gap-2.5 rounded-lg border border-orange-100/80 bg-white/80 p-2.5 shadow-sm backdrop-blur-md sm:flex-col sm:rounded-xl sm:p-3.5 lg:p-4">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-700 sm:mb-2 sm:h-8 sm:w-8 lg:h-9 lg:w-9">
                 <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
