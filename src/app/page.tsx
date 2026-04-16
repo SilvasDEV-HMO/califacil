@@ -109,7 +109,7 @@ export default function LandingPage() {
         </section>
       </main>
 
-      <footer className="shrink-0 border-t border-orange-100/80 bg-white/70 px-2 pt-1 pb-[max(0.35rem,env(safe-area-inset-bottom,0px))] text-center text-gray-600 backdrop-blur-md sm:px-3 sm:pt-2.5 sm:pb-8 lg:px-10">
+      <footer className="shrink-0 border-t border-orange-100/80 bg-white/70 px-2 pt-1 pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))] text-center text-gray-600 backdrop-blur-md sm:px-3 sm:pt-2.5 sm:pb-8 lg:px-10">
         <div className="flex justify-center">
           <BrandWordmark
             href={false}
