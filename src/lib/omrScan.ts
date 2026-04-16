@@ -1047,6 +1047,68 @@ function refineOmrRowBoundariesFromTableLines(
   return lines;
 }
 
+/**
+ * Comprueba si la imagen (recorte guía CaliFacil ya orientado) muestra la rejilla impresa
+ * de la tabla de respuestas (~11 líneas horizontales coherentes). Las escenas sin examen
+ * suelen no cumplir esto, así que sirve para no “leer” basura con la cámara.
+ */
+export function hasCalifacilPrintedTableGrid(
+  canvas: HTMLCanvasElement,
+  columns: number
+): boolean {
+  void columns;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return false;
+  const { width, height } = canvas;
+  if (width < 80 || height < 80) return false;
+  const id = ctx.getImageData(0, 0, width, height);
+  const { data } = id;
+
+  const profiles: OmrGeometryProfile[] = [
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.12, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+    { bottomBandRatio: 1, titleStripRatioOfBand: 0.05, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
+  ];
+  const shifts = [0, -8, 8, -14, 14];
+
+  for (const profile of profiles) {
+    const bandH = height * profile.bottomBandRatio;
+    const bandTop = height - bandH;
+    const dataTop = bandTop + bandH * profile.titleStripRatioOfBand;
+    const dataHeight = bandH * (1 - profile.titleStripRatioOfBand);
+    const qNumW = width * profile.qnumWidthRatio;
+    for (const colShift of shifts) {
+      const bubbleAreaLeft = Math.max(
+        2,
+        Math.min(width * 0.45, Math.round(qNumW + colShift))
+      );
+      const lineYs = refineOmrRowBoundariesFromTableLines(
+        data,
+        width,
+        height,
+        bubbleAreaLeft,
+        dataTop,
+        dataHeight
+      );
+      if (lineYs && lineYs.length === 11) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True si parece una hoja CaliFacil impresa (rejilla detectable). Aplica la misma
+ * corrección de perspectiva que el escaneo OMR.
+ */
+export function isCalifacilExamSheetLikely(
+  canvas: HTMLCanvasElement,
+  columns: number
+): boolean {
+  if (typeof document === 'undefined') return false;
+  const corrected = applyPerspectiveCorrection(canvas);
+  return hasCalifacilPrintedTableGrid(corrected, columns);
+}
+
 function scanCalifacilOmrCanvasDetailed(
   canvas: HTMLCanvasElement,
   columns: number,
@@ -1117,6 +1179,21 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       yRowTop = lineYs[row]!;
       yRowBot = lineYs[row + 1]!;
       cy = (yRowTop + yRowBot) * 0.5;
+      // Última fila: si el hueco entre la línea 9 y 10 no coincide con el resto, la rejilla
+      // detectada suele desplazar el centro vertical y se lee mal la columna (p. ej. B → A).
+      if (row === 9) {
+        let sumG = 0;
+        for (let i = 0; i < 9; i++) {
+          sumG += lineYs[i + 1]! - lineYs[i]!;
+        }
+        const meanGap = sumG / 9;
+        const lastGap = lineYs[10]! - lineYs[9]!;
+        if (lastGap < meanGap * 0.68 || lastGap > meanGap * 1.42) {
+          yRowTop = dataTop + 9 * rowH;
+          yRowBot = dataTop + 10 * rowH;
+          cy = dataTop + 9.5 * rowH;
+        }
+      }
     } else {
       yRowTop = dataTop + row * rowH;
       yRowBot = dataTop + (row + 1) * rowH;

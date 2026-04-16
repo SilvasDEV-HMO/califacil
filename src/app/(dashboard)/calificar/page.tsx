@@ -19,6 +19,8 @@ import {
   autoOrientCalifacilSheet,
   califacilImageToJpegDataUrl,
   fileToImage,
+  isCalifacilExamSheetLikely,
+  prepareCalifacilScanInput,
   scanCalifacilOmrSheet,
   scanCalifacilOmrSheetWithMeta,
 } from '@/lib/omrScan';
@@ -99,6 +101,8 @@ export default function CalificarPage() {
   const liveTickRef = useRef<number | null>(null);
   const liveBusyRef = useRef(false);
   const stablePartialTicksRef = useRef(0);
+  /** Respuestas ya capturadas en vivo por id de pregunta; no se sobrescriben hasta «Escanear otra vez». */
+  const liveLockedAnswersRef = useRef<Record<string, string>>({});
   const submitAllRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
   const scanBusyRef = useRef(false);
   const startingCameraRef = useRef(false);
@@ -172,6 +176,7 @@ export default function CalificarPage() {
 
   const resetLiveReadings = useCallback(() => {
     stablePartialTicksRef.current = 0;
+    liveLockedAnswersRef.current = {};
     setLiveDraftSelections({});
     setLiveResolvedCount(0);
     setLiveStatus(
@@ -266,6 +271,23 @@ export default function CalificarPage() {
       const skipReviewUi = opts?.skipReviewUi;
       const chunk = sheets[sheetIndexRef.current] ?? [];
       const oriented = autoOrientCalifacilSheet(source, omrCols) ?? source;
+      const examCanvas =
+        oriented instanceof HTMLCanvasElement
+          ? oriented
+          : prepareCalifacilScanInput(oriented);
+      if (!examCanvas || !isCalifacilExamSheetLikely(examCanvas, omrCols)) {
+        setLiveStatus(
+          isMobile
+            ? 'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso del examen.'
+            : 'No se detecta la tabla CaliFacil en la imagen. Usa una foto clara del recuadro del examen.'
+        );
+        toast.error(
+          isMobile
+            ? 'No se reconoce el examen CaliFacil. Centra el recuadro con la tabla de burbujas.'
+            : 'No se reconoce el examen CaliFacil en esta imagen. Elige una foto del recuadro impreso.'
+        );
+        return { success: false };
+      }
       const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, { skipGuideCrop: true });
       const raw = [...meta.picks];
 
@@ -421,11 +443,28 @@ export default function CalificarPage() {
       }
 
       const mapped = mapRawToDraft(raw, chunk);
+      const locks = liveLockedAnswersRef.current;
+      const mergedDraft: Record<string, string> = {};
+      let mergedResolved = 0;
+      for (const q of chunk) {
+        const locked = locks[q.id]?.trim();
+        if (locked) {
+          mergedDraft[q.id] = locked;
+          mergedResolved++;
+        } else {
+          const v = mapped.draft[q.id]?.trim() ?? '';
+          mergedDraft[q.id] = v;
+          if (v) {
+            locks[q.id] = v;
+            mergedResolved++;
+          }
+        }
+      }
       const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
-      if (mapped.resolvedCount < minResolved) {
+      if (mergedResolved < minResolved) {
         setDraftSelections({});
-        setLiveDraftSelections(mapped.draft);
-        setLiveResolvedCount(mapped.resolvedCount);
+        setLiveDraftSelections(mergedDraft);
+        setLiveResolvedCount(mergedResolved);
         setLiveStatus(
           isMobile
             ? 'Lectura insuficiente: acerca el recuadro, mejora luz y evita sombras.'
@@ -439,6 +478,11 @@ export default function CalificarPage() {
         return { success: false };
       }
 
+      liveLockedAnswersRef.current = {};
+      for (const q of chunk) {
+        const v = mapped.draft[q.id]?.trim() ?? '';
+        if (v) liveLockedAnswersRef.current[q.id] = v;
+      }
       setDraftSelections(mapped.draft);
       setLiveDraftSelections(mapped.draft);
       setLiveResolvedCount(mapped.resolvedCount);
@@ -657,29 +701,65 @@ export default function CalificarPage() {
 
           const chunk = sheets[sheetIndexRef.current] ?? [];
           const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
+          if (!isCalifacilExamSheetLikely(oriented, omrCols)) {
+            stablePartialTicksRef.current = 0;
+            const locksNoExam = liveLockedAnswersRef.current;
+            const mergedNoExam: Record<string, string> = {};
+            let resolvedNoExam = 0;
+            for (const q of chunk) {
+              const locked = locksNoExam[q.id]?.trim();
+              mergedNoExam[q.id] = locked || '';
+              if (locked) resolvedNoExam++;
+            }
+            setLiveDraftSelections(mergedNoExam);
+            setLiveResolvedCount(resolvedNoExam);
+            setLiveStatus(
+              'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso (números y burbujas).'
+            );
+            return;
+          }
           const raw = scanCalifacilOmrSheet(oriented, omrCols, {
             skipGuideCrop: true,
             qnumSweep: 'live',
             columnShiftSweep: 'live',
           });
           const mapped = mapRawToDraft(raw, chunk);
-          setLiveDraftSelections(mapped.draft);
-          setLiveResolvedCount(mapped.resolvedCount);
+          const locks = liveLockedAnswersRef.current;
+          const mergedLive: Record<string, string> = {};
+          let mergedResolved = 0;
+          for (const q of chunk) {
+            const locked = locks[q.id]?.trim();
+            if (locked) {
+              mergedLive[q.id] = locked;
+              mergedResolved++;
+            } else {
+              const v = mapped.draft[q.id]?.trim() ?? '';
+              mergedLive[q.id] = v;
+              if (v) {
+                locks[q.id] = v;
+                mergedResolved++;
+              }
+            }
+          }
+          setLiveDraftSelections(mergedLive);
+          setLiveResolvedCount(mergedResolved);
 
           const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
-          if (mapped.resolvedCount >= chunk.length && chunk.length > 0) {
-            setLiveStatus('Detección completa. Pulsa «Guardar calificación» o sigue afinando.');
-          } else if (mapped.resolvedCount >= minResolved) {
+          if (mergedResolved >= chunk.length && chunk.length > 0) {
             setLiveStatus(
-              'Lectura fijada al mover la cámara. Completa las faltantes y pulsa «Guardar calificación».'
+              'Detección completa. Puedes mover la cámara; las lecturas se mantienen hasta «Escanear otra vez».'
             );
-          } else if (mapped.resolvedCount >= Math.ceil(chunk.length * 0.3)) {
+          } else if (mergedResolved >= minResolved) {
+            setLiveStatus(
+              'Lecturas capturadas se mantienen aunque muevas el teléfono. Completa las faltantes o pulsa «Revisar y confirmar».'
+            );
+          } else if (mergedResolved >= Math.ceil(chunk.length * 0.3)) {
             setLiveStatus('Casi listo: centra mejor el recuadro y aumenta luz.');
           } else {
             setLiveStatus('Ajusta cámara: acerca la banda CaliFacil y evita sombras.');
           }
 
-          if (mapped.resolvedCount >= minResolved && chunk.length > 0) {
+          if (mergedResolved >= minResolved && chunk.length > 0) {
             stablePartialTicksRef.current += 1;
           } else {
             stablePartialTicksRef.current = 0;
@@ -690,7 +770,7 @@ export default function CalificarPage() {
             setDraftSelections((prev) => {
               const next = { ...prev };
               for (const q of chunk) {
-                const v = mapped.draft[q.id]?.trim();
+                const v = mergedLive[q.id]?.trim();
                 if (v) next[q.id] = v;
               }
               return next;
@@ -742,6 +822,7 @@ export default function CalificarPage() {
         return null;
       });
       setDraftSelections({});
+      resetLiveReadings();
       setPhase('capturar');
       toast.success(
         isMobile
@@ -825,6 +906,7 @@ export default function CalificarPage() {
       });
       setLiveDraftSelections({});
       setLiveResolvedCount(0);
+      liveLockedAnswersRef.current = {};
     } catch (err: unknown) {
       const msg =
         err && typeof err === 'object' && 'message' in err
@@ -905,6 +987,7 @@ export default function CalificarPage() {
     setLiveDraftSelections({});
     setLiveResolvedCount(0);
     stablePartialTicksRef.current = 0;
+    liveLockedAnswersRef.current = {};
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
       return null;
@@ -1176,8 +1259,9 @@ export default function CalificarPage() {
                                 Boolean(liveDraftSelections[q.id]?.trim())
                             ).length
                           }
-                          /{currentChunk.length} (vivo + fijadas). Con al menos {minResolvedForCurrentChunk}{' '}
-                          estables se guarda el borrador para que puedas mover la cámara.
+                          /{currentChunk.length}. Cada respuesta detectada se mantiene aunque muevas el
+                          teléfono; con al menos {minResolvedForCurrentChunk} lecturas se copian al borrador
+                          inferior. «Escanear otra vez» borra esta hoja y vuelve a leer desde cero.
                         </p>
                         <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                           {currentChunk.map((q, idx) => {
