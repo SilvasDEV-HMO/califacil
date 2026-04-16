@@ -119,11 +119,11 @@ export default function DashboardLayout({
             className="flex items-center justify-between gap-2 px-3 py-2"
             style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top, 0px))' }}
           >
-            <span className="inline-flex max-h-10 origin-left scale-[1.14] items-center overflow-hidden sm:max-h-11 sm:scale-100">
+            <span className="inline-flex min-w-0 max-w-[min(100%,18rem)] items-center sm:max-w-[20rem]">
               <BrandWordmark
                 href="/dashboard"
                 priority
-                imgClassName="h-11 w-auto max-w-[min(64vw,15rem)] object-contain object-left sm:h-[3.25rem] sm:max-w-[16rem]"
+                imgClassName="h-[50px] w-auto max-w-full object-contain object-left sm:h-[3.25rem] sm:max-w-[16rem]"
               />
             </span>
             <DropdownMenu>

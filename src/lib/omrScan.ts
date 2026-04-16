@@ -34,6 +34,13 @@ export const CALIFACIL_OMR_SCAN = {
   minInkFractionGap: 0.11,
   /** Dos columnas por encima de esto (binario) ⇒ posible doble marca / ambigüedad. */
   ambiguousInkTwinFloor: 0.3,
+  /**
+   * Franja horizontal por columna (toda la celda A–D): ventaja mínima de la mejor columna
+   * sobre la segunda tras restar la mediana por fila (anula sombras / viñeteado).
+   */
+  minStripMedianGap: 0.018,
+  /** Mínimo exceso sobre la mediana por fila en la franja elegida para contar como marca. */
+  minStripAboveMedian: 0.012,
 } as const;
 
 /**
@@ -250,6 +257,92 @@ function sampleDiskInkFractionAtThreshold(
     }
   }
   return n > 0 ? ink / n : 0;
+}
+
+function medianOfNumbers(values: number[]): number {
+  if (values.length === 0) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+}
+
+/** Mejor columna y separación entre 1.º y 2.º tras restar mediana (franjas A/B/C/D). */
+function bestMedianStripPick(adj: number[]): {
+  bestIdx: number;
+  gap: number;
+  aboveMed: number;
+} {
+  if (adj.length === 0) return { bestIdx: 0, gap: 0, aboveMed: 0 };
+  let bestIdx = 0;
+  for (let c = 1; c < adj.length; c++) {
+    if (adj[c]! > adj[bestIdx]!) bestIdx = c;
+  }
+  let second = -Infinity;
+  for (let c = 0; c < adj.length; c++) {
+    if (c === bestIdx) continue;
+    second = Math.max(second, adj[c]!);
+  }
+  return {
+    bestIdx,
+    gap: adj[bestIdx]! - second,
+    aboveMed: adj[bestIdx]!,
+  };
+}
+
+/** Fracción de píxeles oscuros (Otsu) en rectángulo; paso 2 para fotos grandes. */
+function sampleRectInkFractionAtThreshold(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+  grayThreshold: number,
+  step = 2
+): number {
+  const xa = Math.max(0, Math.floor(x0));
+  const xb = Math.min(width - 1, Math.ceil(x1));
+  const ya = Math.max(0, Math.floor(y0));
+  const yb = Math.min(height - 1, Math.ceil(y1));
+  if (xb < xa || yb < ya) return 0;
+  let ink = 0;
+  let n = 0;
+  for (let y = ya; y <= yb; y += step) {
+    for (let x = xa; x <= xb; x += step) {
+      const i = (y * width + x) * 4;
+      if (pixelGray255(data, i) < grayThreshold) ink++;
+      n++;
+    }
+  }
+  return n > 0 ? ink / n : 0;
+}
+
+/**
+ * Por cada columna de burbujas, integra tinta en toda la franja (A/B/C/D), no solo el centro.
+ * Reduce errores cuando el círculo está desplazado o la foto está borrosa / con sombra lateral.
+ */
+function columnStripInkFractions(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  bubbleAreaLeft: number,
+  cellW: number,
+  cols: number,
+  y0: number,
+  y1: number,
+  grayThreshold: number
+): number[] {
+  const out: number[] = [];
+  const margin = cellW * 0.07;
+  for (let c = 0; c < cols; c++) {
+    const xa = bubbleAreaLeft + c * cellW + margin;
+    const xb = bubbleAreaLeft + (c + 1) * cellW - margin;
+    out.push(
+      sampleRectInkFractionAtThreshold(data, width, height, xa, xb, y0, y1, grayThreshold)
+    );
+  }
+  return out;
 }
 
 function drawSourceToCanvas(
@@ -1215,6 +1308,40 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     );
     const otsuT = otsuThreshold256(hist, Math.max(1, total));
 
+    const stripPad = Math.max(1, Math.floor(localRowH * 0.2));
+    let stripY0 = Math.min(height - 1, Math.ceil(yRowTop + stripPad));
+    let stripY1 = Math.max(stripY0, Math.floor(yRowBot - stripPad));
+    let stripFracs = columnStripInkFractions(
+      data,
+      width,
+      height,
+      bubbleAreaLeft,
+      cellW,
+      cols,
+      stripY0,
+      stripY1,
+      otsuT
+    );
+    if (row === 9 && lineYs && lineYs.length === 11) {
+      const y0g = Math.min(height - 1, Math.ceil(dataTop + 9 * rowH + stripPad));
+      const y1g = Math.max(y0g, Math.floor(dataTop + 10 * rowH - stripPad));
+      const stripGeo = columnStripInkFractions(
+        data,
+        width,
+        height,
+        bubbleAreaLeft,
+        cellW,
+        cols,
+        y0g,
+        y1g,
+        otsuT
+      );
+      const medAdj = (arr: number[]) => arr.map((f) => f - medianOfNumbers(arr));
+      const pLine = bestMedianStripPick(medAdj(stripFracs));
+      const pGeo = bestMedianStripPick(medAdj(stripGeo));
+      if (pGeo.gap > pLine.gap + 0.006) stripFracs = stripGeo;
+    }
+
     const scores: number[] = [];
     const fills: number[] = [];
     const rings: number[] = [];
@@ -1301,35 +1428,55 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       inkPick = inkBestIdx;
     }
 
-    const twins = inkFracs.filter((f) => f >= twinFloor).length;
+    const medianAdj = stripFracs.map((f) => f - medianOfNumbers(stripFracs));
+    const stripPickInfo = bestMedianStripPick(medianAdj);
+    const minStripGap = CALIFACIL_OMR_SCAN.minStripMedianGap;
+    const minAbove = CALIFACIL_OMR_SCAN.minStripAboveMedian;
+    let stripPrimaryPick: number | null = null;
+    if (stripPickInfo.aboveMed >= minAbove && stripPickInfo.gap >= minStripGap) {
+      stripPrimaryPick = stripPickInfo.bestIdx;
+    }
 
     let pick: number | null = null;
     let ambiguous = false;
 
-    if (rulePick !== null && inkPick !== null) {
-      if (rulePick === inkPick) {
+    if (stripPrimaryPick !== null) {
+      pick = stripPrimaryPick;
+      const twinsStrip = stripFracs.filter((f) => f >= twinFloor).length;
+      ambiguous = twinsStrip >= 2 && stripPickInfo.gap < 0.055;
+    } else {
+      const twins = inkFracs.filter((f) => f >= twinFloor).length;
+      if (rulePick !== null && inkPick !== null) {
+        if (rulePick === inkPick) {
+          pick = rulePick;
+          ambiguous = twins >= 2 && inkGap < 0.17;
+        } else {
+          pick = null;
+          ambiguous = true;
+        }
+      } else if (rulePick !== null) {
         pick = rulePick;
-        ambiguous = twins >= 2 && inkGap < 0.17;
+        ambiguous = twins >= 2;
+      } else if (inkPick !== null) {
+        pick = inkPick;
+        ambiguous = twins >= 2 || inkGap < minInkGap + 0.04;
       } else {
         pick = null;
-        ambiguous = true;
+        ambiguous = maxInk > 0.22 && (twins >= 2 || inkGap < 0.09);
       }
-    } else if (rulePick !== null) {
-      pick = rulePick;
-      ambiguous = twins >= 2;
-    } else if (inkPick !== null) {
-      pick = inkPick;
-      ambiguous = twins >= 2 || inkGap < minInkGap + 0.04;
-    } else {
-      pick = null;
-      ambiguous = maxInk > 0.22 && (twins >= 2 || inkGap < 0.09);
     }
 
     out[row] = pick;
-    rowMetas.push({ pick, ambiguous, inkFractions: [...inkFracs] });
+    rowMetas.push({ pick, ambiguous, inkFractions: [...stripFracs] });
     if (pick !== null) {
       resolvedCount++;
-      confidenceSum += best + gap + maxInk * 0.15;
+      if (stripPrimaryPick !== null) {
+        const maxStrip = stripFracs.reduce((a, b) => Math.max(a, b), 0);
+        confidenceSum +=
+          stripPickInfo.aboveMed + stripPickInfo.gap * 2.5 + maxStrip * 0.2;
+      } else {
+        confidenceSum += best + gap + maxInk * 0.15;
+      }
     }
   }
   return { picks: out, resolvedCount, confidenceSum, rows: rowMetas };

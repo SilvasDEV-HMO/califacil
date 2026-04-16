@@ -11,7 +11,9 @@ type BrandWordmarkProps = {
 };
 
 /**
- * Logo CALIFÁCIL (PNG de alta resolución, escalado con CSS para nitidez en móvil).
+ * Logo CALIFÁCIL (PNG de alta resolución).
+ * Evita `transform: scale()` en contenedores: fuerza reescalado suave del bitmap.
+ * `sizes` generoso + calidad alta para pantallas Retina vía `next/image`.
  */
 export function BrandWordmark({
   href,
@@ -27,7 +29,8 @@ export function BrandWordmark({
       alt=""
       width={1024}
       height={500}
-      sizes="(max-width: 640px) 85vw, 320px"
+      quality={92}
+      sizes="(max-width: 640px) min(100vw, 20rem), (max-width: 1024px) 24rem, 32rem"
       className={cn('h-auto w-auto max-w-full object-contain object-left', imgClassName)}
       priority={priority}
     />
