@@ -101,10 +101,10 @@ export async function POST(request: NextRequest) {
         : '';
     const prompt = `Eres un lector experto de hojas de examen tipo OPSCAN/CaliFacil.
 
-La imagen muestra la parte inferior de una hoja impresa: un recuadro CaliFacil con una primera fila de tabla que solo indica las columnas A, B, C… y debajo filas numeradas en la primera columna; cada fila de pregunta tiene burbujas. Usa la cabecera A/B/C… para saber qué columna es cada opción; las preguntas son las filas con número a la izquierda.
+La imagen muestra la parte inferior de una hoja impresa: un recuadro CaliFacil con una primera fila de tabla que solo indica las columnas A, B, C… y debajo filas numeradas en la primera columna; cada fila de pregunta tiene casillas (cuadrados) para marcar. Usa la cabecera A/B/C… para saber qué columna es cada opción; las preguntas son las filas con número a la izquierda.
 
 TAREA:
-- Identifica qué burbuja está rellenada (más oscura/tinta) en cada fila de pregunta.
+- Identifica qué casilla está rellenada (más oscura/tinta) en cada fila de pregunta.
 - Solo UNA respuesta por número. Si ninguna está clara o hay dos marcas, usa null para esa pregunta.
 - Responde ÚNICAMENTE con JSON: un objeto "byNumber" cuyas claves son STRINGS con el número de pregunta global (${numList}), y valores la letra elegida ("A","B",…) o null.
 

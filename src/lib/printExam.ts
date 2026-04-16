@@ -142,7 +142,7 @@ function califacilOmrTableHtml(
       const letter = String.fromCharCode(65 + c);
       if (c < nOpts) {
         cells.push(
-          `<td class="omr-bubble-cell"><div class="omr-bubble-wrap"><span class="omr-bubble" aria-label="Opción ${letter}" title="Opción ${letter}"></span></div></td>`
+          `<td class="omr-bubble-cell"><div class="omr-bubble-wrap"><span class="omr-square" aria-label="Opción ${letter}" title="Opción ${letter}"></span></div></td>`
         );
       } else {
         cells.push(`<td class="omr-bubble-cell omr-bubble-cell--muted"></td>`);
@@ -152,8 +152,8 @@ function califacilOmrTableHtml(
   }
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
-      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena el <strong>círculo entero</strong> con bolígrafo <strong>azul o negro</strong> (tinta bien oscura). La <strong>fila</strong> es el número de pregunta; la <strong>columna</strong> es A, B, C… Incluye <strong>todo</strong> este recuadro al fotografiar.</p>
-      <table class="omr-table" data-califacil-omr-cols="${omrCols}">
+      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>toda la casilla</strong> (cuadrado) con bolígrafo <strong>azul o negro</strong> (tinta bien oscura). La <strong>fila</strong> es el número de pregunta; la <strong>columna</strong> es A, B, C… Incluye <strong>todo</strong> este recuadro al fotografiar.</p>
+      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-version="2">
         ${thead}
         <tbody>${rows.join('')}</tbody>
       </table>
@@ -338,15 +338,15 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       flex-direction: row;
       align-items: center;
       justify-content: center;
-      min-height: 13pt;
+      min-height: 15pt;
     }
-    .omr-bubble {
-      width: 11pt;
-      height: 11pt;
-      min-width: 11pt;
-      min-height: 11pt;
-      border: 1.25pt solid #000;
-      border-radius: 50%;
+    .omr-square {
+      width: 14pt;
+      height: 14pt;
+      min-width: 14pt;
+      min-height: 14pt;
+      border: 1.35pt solid #000;
+      border-radius: 1.5pt;
       background: #fff;
       box-sizing: border-box;
       -webkit-print-color-adjust: exact;

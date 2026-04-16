@@ -106,6 +106,19 @@ export type OmrScanMetaResult = {
   needsVisionAssist: boolean;
   /** Máximo de filas que el OMR local asignó a la misma columna (posible desalineación). */
   maxSameColumnCount: number;
+  /** Geometría de celdas del barrido ganador (coordenadas normalizadas 0–1). */
+  geometry: CalifacilOmrScanGeometry | null;
+};
+
+/** Rectángulo normalizado 0–1 respecto al canvas escaneado (misma relación de aspecto que la foto de revisión). */
+export type OmrNormRect = { x: number; y: number; w: number; h: number };
+
+export type CalifacilOmrScanGeometry = {
+  /** Dimensiones del canvas usado en la lectura (puede estar escalado respecto a la foto original). */
+  imageWidth: number;
+  imageHeight: number;
+  /** 10 filas × `cols` celdas de opción (solo cuerpo de tabla, sin cabecera). */
+  cells: OmrNormRect[][];
 };
 
 type ScanDetailedResult = {
@@ -117,6 +130,7 @@ type ScanDetailedResult = {
   clarityStripGapSum: number;
   /** Máximo de filas con la misma columna elegida (penaliza desalineación que da todo igual). */
   maxSameColumnCount: number;
+  geometry: CalifacilOmrScanGeometry | null;
 };
 
 /** Elige el mejor barrido perfil×qnw×colShift: claridad agregada y penalización si todo coincide en una columna. */
@@ -360,6 +374,100 @@ function columnStripInkFractionsForEdges(
     const xa = xL + margin;
     const xb = xR - margin;
     out.push(sampleRectInkFractionAtThreshold(data, width, height, xa, xb, y0, y1, grayThreshold));
+  }
+  return out;
+}
+
+/**
+ * Interior de cada celda (casilla cuadrada rellena): ignora bordes impresos gruesos y muestrea el centro.
+ * Mejor que la franja completa cuando la marca llena la casilla.
+ */
+function columnInnerBubbleInkFractions(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  edges: number[],
+  cols: number,
+  yRowTop: number,
+  yRowBot: number,
+  grayThreshold: number
+): number[] {
+  const out: number[] = [];
+  const rowH = Math.max(1, yRowBot - yRowTop);
+  for (let c = 0; c < cols; c++) {
+    const xL = edges[c]!;
+    const xR = edges[c + 1]!;
+    const cw = Math.max(1, xR - xL);
+    const marginX = cw * 0.14;
+    const marginY = rowH * 0.13;
+    const xa = xL + marginX;
+    const xb = xR - marginX;
+    const ya = yRowTop + marginY;
+    const yb = yRowBot - marginY;
+    out.push(
+      sampleRectInkFractionAtThreshold(data, width, height, xa, xb, ya, yb, grayThreshold, 2)
+    );
+  }
+  return out;
+}
+
+function sampleRectMeanDarkness(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  step = 2
+): number {
+  const xa = Math.max(0, Math.floor(x0));
+  const xb = Math.min(width - 1, Math.ceil(x1));
+  const ya = Math.max(0, Math.floor(y0));
+  const yb = Math.min(height - 1, Math.ceil(y1));
+  if (xb < xa || yb < ya) return 0;
+  let sum = 0;
+  let n = 0;
+  for (let y = ya; y <= yb; y += step) {
+    for (let x = xa; x <= xb; x += step) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255;
+      sum += 1 - lum;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 0;
+}
+
+/** Oscuridad media en el interior de cada celda (relleno de casilla), para combinar con modelo circular. */
+function columnInnerRectMeanDarkness(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  edges: number[],
+  cols: number,
+  yRowTop: number,
+  yRowBot: number
+): number[] {
+  const out: number[] = [];
+  const rowH = Math.max(1, yRowBot - yRowTop);
+  for (let c = 0; c < cols; c++) {
+    const xL = edges[c]!;
+    const xR = edges[c + 1]!;
+    const cw = Math.max(1, xR - xL);
+    const marginX = cw * 0.14;
+    const marginY = rowH * 0.13;
+    out.push(
+      sampleRectMeanDarkness(
+        data,
+        width,
+        height,
+        xL + marginX,
+        yRowTop + marginY,
+        xR - marginX,
+        yRowBot - marginY
+      )
+    );
   }
   return out;
 }
@@ -1187,7 +1295,7 @@ function inferColumnEdgesFromVerticalLines(
   boxSmoothInRangeX(proj, xLo, xHi, 2);
 
   const minDist = Math.max(3, cellGuess * 0.26);
-  const peaks = findVerticalLinePeaks(proj, xLo, xHi, minDist, 0.11);
+  const peaks = findVerticalLinePeaks(proj, xLo, xHi, minDist, 0.088);
   const need = cols + 1;
   if (peaks.length < need) return null;
 
@@ -1202,7 +1310,7 @@ function inferColumnEdgesFromVerticalLines(
     if (mean < cellGuess * 0.52 || mean > cellGuess * 1.55) continue;
     const var_ = gaps.reduce((acc, g) => acc + (g - mean) * (g - mean), 0) / gaps.length;
     const cv = mean > 1e-6 ? Math.sqrt(var_) / mean : 1;
-    if (cv > 0.4) continue;
+    if (cv > 0.44) continue;
     const score =
       var_ + (Math.abs(mean - cellGuess) / (cellGuess + 1e-6)) * cellGuess * cellGuess * 0.15;
     if (score < bestScore) {
@@ -1213,7 +1321,7 @@ function inferColumnEdgesFromVerticalLines(
   if (!bestWindow) return null;
 
   const left0 = bestWindow[0]!;
-  if (Math.abs(left0 - bubbleAreaLeft) > bubbleAreaW * 0.38) return null;
+  if (Math.abs(left0 - bubbleAreaLeft) > bubbleAreaW * 0.5) return null;
 
   return bestWindow;
 }
@@ -1390,6 +1498,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       rows: rowMetas,
       clarityStripGapSum: 0,
       maxSameColumnCount: 0,
+      geometry: null,
     };
   }
   const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -1448,6 +1557,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   let resolvedCount = 0;
   let confidenceSum = 0;
   let clarityStripGapSum = 0;
+  const cells: OmrNormRect[][] = [];
   for (let row = 0; row < 10; row++) {
     let yRowTop: number;
     let yRowBot: number;
@@ -1523,6 +1633,47 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       const pGeo = bestMedianStripPick(medAdj(stripGeo));
       if (pGeo.gap > pLine.gap + 0.006) stripFracs = stripGeo;
     }
+
+    const innerFracs = columnInnerBubbleInkFractions(
+      data,
+      width,
+      height,
+      columnEdges,
+      cols,
+      yRowTop,
+      yRowBot,
+      otsuT
+    );
+    const innerMedianAdj = innerFracs.map((f) => f - medianOfNumbers(innerFracs));
+    const innerPickInfo = bestMedianStripPick(innerMedianAdj);
+    const innerRectDark = columnInnerRectMeanDarkness(
+      data,
+      width,
+      height,
+      columnEdges,
+      cols,
+      yRowTop,
+      yRowBot
+    );
+    let innerRectBest = 0;
+    for (let c = 1; c < cols; c++) {
+      if (innerRectDark[c]! > innerRectDark[innerRectBest]!) innerRectBest = c;
+    }
+    let innerRectSecond = innerRectBest === 0 ? 1 : 0;
+    for (let c = 0; c < cols; c++) {
+      if (c === innerRectBest) continue;
+      if (innerRectDark[c]! > innerRectDark[innerRectSecond]!) innerRectSecond = c;
+    }
+    const rectGap =
+      (innerRectDark[innerRectBest] ?? 0) - (innerRectDark[innerRectSecond] ?? 0);
+    const rectMean = innerRectDark.reduce((a, b) => a + b, 0) / Math.max(1, cols);
+    const dynamicRectMin = Math.max(0.038, rectMean + 0.014);
+    const rectRulePick: number | null =
+      (innerRectDark[innerRectBest] ?? 0) >= dynamicRectMin &&
+      rectGap >= 0.022 &&
+      (innerRectDark[innerRectBest] ?? 0) / Math.max(0.001, (innerRectDark[innerRectSecond] ?? 0) + 0.001) >= 1.12
+        ? innerRectBest
+        : null;
 
     const scores: number[] = [];
     const fills: number[] = [];
@@ -1632,6 +1783,23 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       clarityStripGapSum += stripPickInfo.gap;
       const twinsStrip = stripFracs.filter((f) => f >= twinFloor).length;
       ambiguous = twinsStrip >= 2 && stripPickInfo.gap < 0.055;
+    } else if (
+      innerPickInfo.aboveMed >= minAbove * 0.86 &&
+      innerPickInfo.gap >= minStripGap * 0.82 &&
+      !(maxStripRaw < CALIFACIL_OMR_SCAN.maxStripFracBlankRow && innerPickInfo.gap < 0.038)
+    ) {
+      /** Casillas cuadradas rellenas: el interior de la celda marca mejor que la franja completa. */
+      pick = innerPickInfo.bestIdx;
+      clarityStripGapSum += innerPickInfo.gap * 0.95;
+      const twinsIn = innerFracs.filter((f) => f >= twinFloor * 0.95).length;
+      ambiguous = twinsIn >= 2 && innerPickInfo.gap < 0.048;
+    } else if (
+      rectRulePick !== null &&
+      (inkPick === null || inkPick === rectRulePick || rulePick === rectRulePick)
+    ) {
+      pick = rectRulePick;
+      const twinsR = innerFracs.filter((f) => f >= twinFloor * 0.92).length;
+      ambiguous = twinsR >= 2 && rectGap < 0.04;
     } else {
       const twins = inkFracs.filter((f) => f >= twinFloor).length;
       if (rulePick !== null && inkPick !== null) {
@@ -1662,10 +1830,33 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
         const maxStrip = stripFracs.reduce((a, b) => Math.max(a, b), 0);
         confidenceSum +=
           stripPickInfo.aboveMed + stripPickInfo.gap * 2.5 + maxStrip * 0.2;
+      } else if (
+        pick === innerPickInfo.bestIdx &&
+        innerPickInfo.aboveMed >= minAbove * 0.86 &&
+        innerPickInfo.gap >= minStripGap * 0.82
+      ) {
+        const maxIn = innerFracs.reduce((a, b) => Math.max(a, b), 0);
+        confidenceSum +=
+          innerPickInfo.aboveMed * 1.05 + innerPickInfo.gap * 2.5 + maxIn * 0.18;
+      } else if (rectRulePick !== null && pick === rectRulePick) {
+        confidenceSum += rectGap * 18 + (innerRectDark[pick] ?? 0) * 12;
       } else {
         confidenceSum += best + gap + maxInk * 0.15;
       }
     }
+
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      const x0 = columnEdges[c]!;
+      const x1 = columnEdges[c + 1]!;
+      rowRects.push({
+        x: x0 / width,
+        y: yRowTop / height,
+        w: Math.max(0, (x1 - x0) / width),
+        h: Math.max(0, (yRowBot - yRowTop) / height),
+      });
+    }
+    cells.push(rowRects);
   }
   let maxSameColumnCount = 0;
   const colTally = new Map<number, number>();
@@ -1676,6 +1867,12 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     maxSameColumnCount = Math.max(maxSameColumnCount, v);
   });
 
+  const geometry: CalifacilOmrScanGeometry = {
+    imageWidth: width,
+    imageHeight: height,
+    cells,
+  };
+
   return {
     picks: out,
     resolvedCount,
@@ -1683,6 +1880,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     rows: rowMetas,
     clarityStripGapSum,
     maxSameColumnCount,
+    geometry,
   };
 }
 
@@ -1757,6 +1955,7 @@ export function scanCalifacilOmrSheet(
     rows: emptyRows,
     clarityStripGapSum: 0,
     maxSameColumnCount: 0,
+    geometry: null,
   };
 
   const qnumSweep =
@@ -1804,6 +2003,7 @@ export function scanCalifacilOmrSheetWithMeta(
       rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
       needsVisionAssist: false,
       maxSameColumnCount: 0,
+      geometry: null,
     };
   }
   let canvas = drawSourceToCanvas(source);
@@ -1813,6 +2013,7 @@ export function scanCalifacilOmrSheetWithMeta(
       rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
       needsVisionAssist: false,
       maxSameColumnCount: 0,
+      geometry: null,
     };
   }
   if (!opts?.skipGuideCrop) {
@@ -1855,6 +2056,7 @@ export function scanCalifacilOmrSheetWithMeta(
     rows: emptyRows,
     clarityStripGapSum: 0,
     maxSameColumnCount: 0,
+    geometry: null,
   };
 
   const qnumSweep =
@@ -1891,6 +2093,7 @@ export function scanCalifacilOmrSheetWithMeta(
     rows: best.rows,
     needsVisionAssist,
     maxSameColumnCount: best.maxSameColumnCount,
+    geometry: best.geometry,
   };
 }
 

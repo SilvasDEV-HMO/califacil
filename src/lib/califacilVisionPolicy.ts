@@ -9,6 +9,14 @@ function envBool(name: string): boolean {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+/** Por defecto activo si la variable no está definida; desactivar con false. */
+function envDefaultTrue(name: string): boolean {
+  if (typeof process === 'undefined' || !process.env) return true;
+  const v = process.env[name]?.trim().toLowerCase();
+  if (v === undefined || v === '') return true;
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
 export const CALIFACIL_VISION_POLICY = {
   /** Filas marcadas como ambiguas por el OMR local. */
   onAmbiguousRows: true,
@@ -16,6 +24,11 @@ export const CALIFACIL_VISION_POLICY = {
   onManySameColumnAlign: true,
   /** Todas las filas leen la misma columna (sospecha de desalineación sistemática). */
   onAllSameColumn: true,
+  /**
+   * Tras pulsar «Revisar y confirmar» con la cámara en vivo: verificar toda la hoja con visión.
+   * Por defecto activo. Desactivar: `NEXT_PUBLIC_CALIFACIL_VISION_ON_LIVE_COMMIT=false`
+   */
+  onLiveCommitVision: envDefaultTrue('NEXT_PUBLIC_CALIFACIL_VISION_ON_LIVE_COMMIT'),
   /**
    * Tras importar/capturar imagen, segunda pasada sobre toda la hoja (más coste).
    * `NEXT_PUBLIC_CALIFACIL_VISION_ON_FINAL=true` en `.env.local`

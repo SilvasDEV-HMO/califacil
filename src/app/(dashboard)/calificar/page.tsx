@@ -23,7 +23,9 @@ import {
   prepareCalifacilScanInput,
   scanCalifacilOmrSheet,
   scanCalifacilOmrSheetWithMeta,
+  type CalifacilOmrScanGeometry,
 } from '@/lib/omrScan';
+import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import { calculatePercentage, getGradeColor, getGradeLabel } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,6 +51,12 @@ import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { CALIFACIL_VISION_POLICY } from '@/lib/califacilVisionPolicy';
+import {
+  playScanCompleteChime,
+  resumeScanAudioContext,
+  startScanningHum,
+  stopScanningHum,
+} from '@/lib/scanSounds';
 
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando';
 
@@ -58,6 +66,22 @@ const MIN_AUTO_READ_RATIO = 0.9;
 const STABLE_PARTIAL_TICKS = 3;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
+
+/** Convierte borrador de texto a índice de columna OMR por fila (0 = A). */
+function draftSelectionsToColumnPicks(
+  chunk: Question[],
+  draft: Record<string, string>
+): (number | null)[] {
+  const out: (number | null)[] = Array(10).fill(null);
+  for (let i = 0; i < chunk.length; i++) {
+    const q = chunk[i];
+    const text = draft[q.id]?.trim() ?? '';
+    const opts = q.options ?? [];
+    const idx = opts.findIndex((o) => o.trim() === text);
+    out[i] = idx >= 0 ? idx : null;
+  }
+  return out;
+}
 
 /** Letra de inciso (A–E) a partir del texto de opción elegido; vacío si no hay lectura. */
 function optionAnswerToLetter(q: Question, answerText: string): string {
@@ -87,6 +111,8 @@ export default function CalificarPage() {
   /** Lectura OMR de la hoja actual (antes de confirmar) */
   const [draftSelections, setDraftSelections] = useState<Record<string, string>>({});
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  /** Geometría de celdas del último escaneo (misma relación de aspecto que la vista previa). */
+  const [reviewOmrGeometry, setReviewOmrGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
 
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -103,6 +129,8 @@ export default function CalificarPage() {
   const stablePartialTicksRef = useRef(0);
   /** Respuestas ya capturadas en vivo por id de pregunta; no se sobrescriben hasta «Escanear otra vez». */
   const liveLockedAnswersRef = useRef<Record<string, string>>({});
+  /** Evita repetir el sonido de «hoja completa» en cada fotograma. */
+  const liveCompleteSoundPlayedRef = useRef(false);
   const submitAllRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
   const scanBusyRef = useRef(false);
   const startingCameraRef = useRef(false);
@@ -177,6 +205,8 @@ export default function CalificarPage() {
   const resetLiveReadings = useCallback(() => {
     stablePartialTicksRef.current = 0;
     liveLockedAnswersRef.current = {};
+    liveCompleteSoundPlayedRef.current = false;
+    stopScanningHum();
     setLiveDraftSelections({});
     setLiveResolvedCount(0);
     setLiveStatus(
@@ -187,6 +217,7 @@ export default function CalificarPage() {
   }, [isMobile]);
 
   const stopLiveCamera = useCallback(() => {
+    stopScanningHum();
     if (liveTickRef.current !== null) {
       window.clearInterval(liveTickRef.current);
       liveTickRef.current = null;
@@ -283,7 +314,7 @@ export default function CalificarPage() {
         );
         toast.error(
           isMobile
-            ? 'No se reconoce el examen CaliFacil. Centra el recuadro con la tabla de burbujas.'
+            ? 'No se reconoce el examen CaliFacil. Centra el recuadro con la tabla de casillas A–D.'
             : 'No se reconoce el examen CaliFacil en esta imagen. Elige una foto del recuadro impreso.'
         );
         return { success: false };
@@ -557,6 +588,7 @@ export default function CalificarPage() {
         }
 
         await setPreviewFromSource(oriented, fallbackFile);
+        setReviewOmrGeometry(meta.geometry);
         setPhase('revisar_hoja');
         setLiveStatus(
           mapped.unresolvedCount > 0
@@ -643,6 +675,7 @@ export default function CalificarPage() {
       if (u) URL.revokeObjectURL(u);
       return null;
     });
+    setReviewOmrGeometry(null);
     setSelectedStudentId('');
   }, [stopLiveCamera, isMobile]);
 
@@ -754,6 +787,7 @@ export default function CalificarPage() {
           const chunk = sheets[sheetIndexRef.current] ?? [];
           const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
           if (!isCalifacilExamSheetLikely(oriented, omrCols)) {
+            stopScanningHum();
             stablePartialTicksRef.current = 0;
             const locksNoExam = liveLockedAnswersRef.current;
             const mergedNoExam: Record<string, string> = {};
@@ -766,7 +800,7 @@ export default function CalificarPage() {
             setLiveDraftSelections(mergedNoExam);
             setLiveResolvedCount(resolvedNoExam);
             setLiveStatus(
-              'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso (números y burbujas).'
+              'No se detecta la tabla CaliFacil. Encuadra solo el recuadro impreso (números y casillas).'
             );
             return;
           }
@@ -795,6 +829,22 @@ export default function CalificarPage() {
           }
           setLiveDraftSelections(mergedLive);
           setLiveResolvedCount(mergedResolved);
+
+          if (chunk.length > 0) {
+            if (mergedResolved >= chunk.length) {
+              stopScanningHum();
+              if (!liveCompleteSoundPlayedRef.current) {
+                liveCompleteSoundPlayedRef.current = true;
+                playScanCompleteChime();
+              }
+            } else if (mergedResolved > 0) {
+              startScanningHum();
+            } else {
+              stopScanningHum();
+            }
+          } else {
+            stopScanningHum();
+          }
 
           const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
           if (mergedResolved >= chunk.length && chunk.length > 0) {
@@ -869,6 +919,7 @@ export default function CalificarPage() {
     const isLast = sheetIndex >= totalSheets - 1;
     if (!isLast) {
       setSheetIndex((s) => s + 1);
+      setReviewOmrGeometry(null);
       setPreviewUrl((u) => {
         if (u) URL.revokeObjectURL(u);
         return null;
@@ -991,8 +1042,7 @@ export default function CalificarPage() {
         return;
       }
 
-      setDraftSelections(mergedChunk);
-
+      let orientedForPreview: HTMLCanvasElement | null = null;
       const video = videoRef.current;
       if (video && video.readyState >= 2 && video.videoWidth >= 40) {
         const frame = document.createElement('canvas');
@@ -1001,14 +1051,74 @@ export default function CalificarPage() {
         const ctx = frame.getContext('2d');
         if (ctx) {
           ctx.drawImage(video, 0, 0, frame.width, frame.height);
-          const oriented = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
-          await setPreviewFromSource(oriented);
-        } else {
-          setPreviewUrl((u) => {
-            if (u) URL.revokeObjectURL(u);
-            return null;
-          });
+          orientedForPreview = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
         }
+      }
+
+      let visionToastShown = false;
+      if (
+        CALIFACIL_VISION_POLICY.onLiveCommitVision &&
+        examId &&
+        orientedForPreview &&
+        chunk.length > 0
+      ) {
+        const si = sheetIndexRef.current;
+        const rowsPayload = chunk.map((q, i) => ({
+          questionId: q.id,
+          globalNumber: si * 10 + i + 1,
+          options: q.options ?? [],
+        }));
+        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
+        try {
+          const imageBase64 = califacilImageToJpegDataUrl(orientedForPreview);
+          const res = await fetch('/api/calificar/vision-omr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              examId,
+              imageBase64,
+              rows: rowsPayload,
+              omrColumnCount: omrCols,
+              focusNumbers,
+            }),
+          });
+          const payload = (await res.json().catch(() => ({}))) as {
+            selections?: Record<string, string>;
+            code?: string;
+            error?: string;
+          };
+          if (res.ok && payload.selections) {
+            for (let i = 0; i < chunk.length; i++) {
+              const q = chunk[i];
+              const text = (payload.selections![q.id] ?? '').trim();
+              const opts = q.options ?? [];
+              if (text && opts.includes(text)) {
+                mergedChunk[q.id] = text;
+              }
+            }
+            visionToastShown = true;
+            toast.message('Lectura verificada con visión (revisa antes de guardar).');
+          } else if (res.status === 503 && payload.code === 'NO_KEY') {
+            visionToastShown = true;
+            toast.message('Lectura automática sin verificación IA (sin clave en el servidor).');
+          }
+        } catch {
+          /* mantener lectura OMR local */
+        }
+      }
+
+      if (orientedForPreview) {
+        const mg = scanCalifacilOmrSheetWithMeta(orientedForPreview, omrCols, { skipGuideCrop: true });
+        setReviewOmrGeometry(mg.geometry);
+      } else {
+        setReviewOmrGeometry(null);
+      }
+
+      setDraftSelections(mergedChunk);
+
+      if (orientedForPreview) {
+        await setPreviewFromSource(orientedForPreview);
       } else {
         setPreviewUrl((u) => {
           if (u) URL.revokeObjectURL(u);
@@ -1017,15 +1127,19 @@ export default function CalificarPage() {
       }
 
       setReviewQualityHint(
-        'Revisa y corrige cada opción si hace falta; la lectura en vivo es orientativa.'
+        CALIFACIL_VISION_POLICY.onLiveCommitVision
+          ? 'Revisa cada opción; si hay clave de IA se ha intentado una segunda lectura de la foto.'
+          : 'Revisa y corrige cada opción si hace falta; la lectura en vivo es orientativa.'
       );
       setPhase('revisar_hoja');
       setLiveStatus('Revisa cada respuesta y confirma con «Guardar calificación».');
-      toast.message('Revisa las lecturas antes de confirmar.');
+      if (!visionToastShown) {
+        toast.message('Revisa las lecturas antes de confirmar.');
+      }
     } finally {
       setScanBusy(false);
     }
-  }, [draftSelections, liveDraftSelections, omrCols, setPreviewFromSource, setPreviewUrl, sheetIndex, sheets]);
+  }, [draftSelections, examId, liveDraftSelections, omrCols, setPreviewFromSource, setPreviewUrl, sheetIndex, sheets]);
 
   const switchToAnotherStudentScan = useCallback(() => {
     stopLiveCamera();
@@ -1402,9 +1516,22 @@ export default function CalificarPage() {
             )}
 
             {previewUrl && phase === 'revisar_hoja' && (
-              <div className="overflow-hidden rounded-lg border bg-gray-50">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={previewUrl} alt="Vista previa" className="max-h-48 w-full object-contain" />
+              <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
+                <div className="relative inline-block max-h-96 max-w-full">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={previewUrl}
+                    alt="Vista previa del recuadro CaliFacil"
+                    className="relative z-0 block max-h-96 w-auto max-w-full"
+                  />
+                  {reviewOmrGeometry ? (
+                    <CalifacilOmrReviewOverlay
+                      geometry={reviewOmrGeometry}
+                      picks={draftSelectionsToColumnPicks(currentChunk, draftSelections)}
+                      rowCount={currentChunk.length}
+                    />
+                  ) : null}
+                </div>
               </div>
             )}
 
@@ -1418,8 +1545,8 @@ export default function CalificarPage() {
                   </Alert>
                 ) : null}
                 <p className="text-sm font-medium text-gray-800">
-                  Confirma o corrige cada respuesta antes de guardar. La lectura automática puede fallar con
-                  poca luz o encuadre.
+                  Confirma o corrige cada respuesta antes de guardar. Verde = opción leída; azul = resto de
+                  casillas detectadas. Con buena luz y casillas bien rellenas la lectura suele coincidir.
                 </p>
                 {currentChunk.map((q, idx) => {
                   const globalNum = sheetIndex * 10 + idx + 1;
@@ -1455,6 +1582,7 @@ export default function CalificarPage() {
                     className="flex-1"
                     onClick={() => {
                       setPhase('capturar');
+                      setReviewOmrGeometry(null);
                       setPreviewUrl((u) => {
                         if (u) URL.revokeObjectURL(u);
                         return null;
