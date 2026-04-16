@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { normalizeAnswerText } from '@/lib/utils';
 import { Group, Student } from '@/types';
 
 export function useGroups(teacherId: string | undefined) {
@@ -109,16 +110,26 @@ export function useStudents(groupId: string | undefined) {
 
   const addStudent = async (name: string): Promise<Student | null> => {
     if (!groupId) return null;
-    
+
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+
+    const key = normalizeAnswerText(trimmed);
+    if (students.some((s) => normalizeAnswerText(s.name) === key)) {
+      setError('Ya existe un estudiante con ese nombre en el grupo.');
+      return null;
+    }
+
     try {
+      setError(null);
       const { data, error } = await supabase
         .from('students')
-        .insert([{ group_id: groupId, name }])
+        .insert([{ group_id: groupId, name: trimmed }])
         .select()
         .single();
 
       if (error) throw error;
-      setStudents(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      setStudents((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
       return data;
     } catch (err: any) {
       setError(err.message);
@@ -126,22 +137,43 @@ export function useStudents(groupId: string | undefined) {
     }
   };
 
-  const addStudentsBatch = async (names: string[]): Promise<Student[]> => {
-    if (!groupId) return [];
-    
+  const addStudentsBatch = async (
+    names: string[]
+  ): Promise<{ added: Student[]; skipped: number }> => {
+    if (!groupId) return { added: [], skipped: 0 };
+
+    const existingKeys = new Set(students.map((s) => normalizeAnswerText(s.name)));
+    const batchKeys = new Set<string>();
+    const inserts: { group_id: string; name: string }[] = [];
+    let skipped = 0;
+
+    for (const raw of names) {
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+      const key = normalizeAnswerText(trimmed);
+      if (existingKeys.has(key) || batchKeys.has(key)) {
+        skipped++;
+        continue;
+      }
+      batchKeys.add(key);
+      inserts.push({ group_id: groupId, name: trimmed });
+    }
+
+    if (inserts.length === 0) {
+      return { added: [], skipped };
+    }
+
     try {
-      const inserts = names.map(name => ({ group_id: groupId, name }));
-      const { data, error } = await supabase
-        .from('students')
-        .insert(inserts)
-        .select();
+      setError(null);
+      const { data, error } = await supabase.from('students').insert(inserts).select();
 
       if (error) throw error;
-      setStudents(prev => [...prev, ...(data || [])].sort((a, b) => a.name.localeCompare(b.name)));
-      return data || [];
+      const added = data || [];
+      setStudents((prev) => [...prev, ...added].sort((a, b) => a.name.localeCompare(b.name)));
+      return { added, skipped };
     } catch (err: any) {
       setError(err.message);
-      return [];
+      return { added: [], skipped };
     }
   };
 

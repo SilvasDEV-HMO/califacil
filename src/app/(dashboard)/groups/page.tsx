@@ -234,8 +234,16 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
         );
         return;
       }
-      const added = await addStudentsBatch(names);
-      toast.success(`${added.length} estudiantes importados`);
+      const { added, skipped } = await addStudentsBatch(names);
+      if (added.length === 0 && skipped > 0) {
+        toast.error('No se importó ningún alumno: todos los nombres ya estaban en el grupo o repetidos en el archivo.');
+      } else if (added.length > 0) {
+        toast.success(
+          skipped > 0
+            ? `${added.length} estudiantes importados (${skipped} omitidos por duplicado)`
+            : `${added.length} estudiantes importados`
+        );
+      }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : '';
       toast.error('Error al procesar el archivo', {
