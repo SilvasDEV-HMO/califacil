@@ -209,8 +209,10 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
     }
     
     setIsAdding(true);
-    const student = await addStudent(newStudentName.trim());
-    if (student) {
+    const result = await addStudent(newStudentName.trim());
+    if (result === 'duplicate') {
+      toast.error('Alumno Repetido, verifique el nombre y vuelva a intentar');
+    } else if (result) {
       toast.success('Estudiante agregado');
       setNewStudentName('');
     } else {

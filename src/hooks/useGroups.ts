@@ -108,7 +108,7 @@ export function useStudents(groupId: string | undefined) {
     fetchStudents();
   }, [fetchStudents]);
 
-  const addStudent = async (name: string): Promise<Student | null> => {
+  const addStudent = async (name: string): Promise<Student | 'duplicate' | null> => {
     if (!groupId) return null;
 
     const trimmed = name.trim();
@@ -116,8 +116,8 @@ export function useStudents(groupId: string | undefined) {
 
     const key = normalizeAnswerText(trimmed);
     if (students.some((s) => normalizeAnswerText(s.name) === key)) {
-      setError('Ya existe un estudiante con ese nombre en el grupo.');
-      return null;
+      setError(null);
+      return 'duplicate';
     }
 
     try {
