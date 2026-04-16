@@ -350,6 +350,58 @@ export default function CalificarPage() {
       }
 
       if (
+        CALIFACIL_VISION_POLICY.onManySameColumnAlign &&
+        examId &&
+        chunk.length >= 8 &&
+        meta.maxSameColumnCount >= 8 &&
+        !allSameCol
+      ) {
+        const rowsPayload = chunk.map((q, i) => ({
+          questionId: q.id,
+          globalNumber: si * 10 + i + 1,
+          options: q.options ?? [],
+        }));
+        const focusNumbers = rowsPayload.map((r) => r.globalNumber);
+        try {
+          const imageBase64 = califacilImageToJpegDataUrl(oriented);
+          const res = await fetch('/api/calificar/vision-omr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              examId,
+              imageBase64,
+              rows: rowsPayload,
+              omrColumnCount: omrCols,
+              focusNumbers,
+            }),
+          });
+          const payload = (await res.json().catch(() => ({}))) as {
+            selections?: Record<string, string>;
+            code?: string;
+            error?: string;
+          };
+          if (res.ok && payload.selections) {
+            for (let i = 0; i < chunk.length; i++) {
+              const q = chunk[i];
+              const text = (payload.selections![q.id] ?? '').trim();
+              const opts = q.options ?? [];
+              if (text && opts.includes(text)) {
+                raw[i] = opts.indexOf(text);
+              }
+            }
+            if (!skipReviewUi) {
+              toast.message(
+                'Lectura revisada con visión (muchas filas en la misma columna; posible desalineación).'
+              );
+            }
+          }
+        } catch {
+          /* mantener lectura local */
+        }
+      }
+
+      if (
         CALIFACIL_VISION_POLICY.onAllSameColumn &&
         allSameCol &&
         examId &&
@@ -779,7 +831,7 @@ export default function CalificarPage() {
         } finally {
           liveBusyRef.current = false;
         }
-      }, 700);
+      }, 750);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'No se pudo abrir la cámara. Revisa permisos o usa "Subir foto".';

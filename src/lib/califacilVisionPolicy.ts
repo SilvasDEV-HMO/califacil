@@ -12,6 +12,8 @@ function envBool(name: string): boolean {
 export const CALIFACIL_VISION_POLICY = {
   /** Filas marcadas como ambiguas por el OMR local. */
   onAmbiguousRows: true,
+  /** ≥8 filas con la misma columna pero no todas (posible rejilla desplazada). */
+  onManySameColumnAlign: true,
   /** Todas las filas leen la misma columna (sospecha de desalineación sistemática). */
   onAllSameColumn: true,
   /**

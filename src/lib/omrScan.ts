@@ -38,9 +38,11 @@ export const CALIFACIL_OMR_SCAN = {
    * Franja horizontal por columna (toda la celda A–D): ventaja mínima de la mejor columna
    * sobre la segunda tras restar la mediana por fila (anula sombras / viñeteado).
    */
-  minStripMedianGap: 0.018,
+  minStripMedianGap: 0.022,
   /** Mínimo exceso sobre la mediana por fila en la franja elegida para contar como marca. */
-  minStripAboveMedian: 0.012,
+  minStripAboveMedian: 0.018,
+  /** Si la tinta máxima en la fila es muy baja, tratar como sin respuesta (evita falsas «A»). */
+  maxStripFracBlankRow: 0.095,
 } as const;
 
 /**
@@ -61,22 +63,22 @@ const OMRCHECKER_STYLE_PRE = {
  */
 const QNUM_WIDTH_SWEEP = [0.065, 0.075, 0.085, 0.09, 0.1, 0.11, 0.125, 0.14] as const;
 
-/** Subconjunto para cámara en vivo (menos latencia por frame). */
-const QNUM_WIDTH_SWEEP_LIVE = [0.075, 0.085, 0.09, 0.1, 0.11, 0.125] as const;
+/** Subconjunto para cámara en vivo: alineado con barrido completo para no perder el candidato óptimo. */
+const QNUM_WIDTH_SWEEP_LIVE = QNUM_WIDTH_SWEEP;
 
 /**
  * Traslación horizontal del área de burbujas en px (corrige desalineación cámara vs rejilla).
  * Se combina con el barrido de `qnumWidthRatio`.
  */
 const COLUMN_SHIFT_PX_SWEEP = [-14, -10, -6, -3, 0, 3, 6, 10, 14] as const;
-const COLUMN_SHIFT_PX_LIVE = [-10, -6, 0, 6, 10] as const;
+const COLUMN_SHIFT_PX_LIVE = COLUMN_SHIFT_PX_SWEEP;
 
 export type CalifacilScanOptions = {
   /** Si true, no recorta al marco guía (la imagen ya pasó por prepare/autoOrient). */
   skipGuideCrop?: boolean;
-  /** Barrido de `qnumWidthRatio`: `live` = menos valores (vídeo en vivo). */
+  /** Barrido de `qnumWidthRatio`; `live` usa el mismo conjunto que `full` (rendimiento similar). */
   qnumSweep?: 'full' | 'live';
-  /** Barrido de desplazamiento horizontal en px: `live` = menos valores. */
+  /** Barrido de desplazamiento horizontal en px; `live` coincide con `full`. */
   columnShiftSweep?: 'full' | 'live';
 };
 
@@ -102,6 +104,8 @@ export type OmrScanMetaResult = {
   rows: OmrScanRowDetail[];
   /** Hay filas ambiguas donde la visión puede ayudar. */
   needsVisionAssist: boolean;
+  /** Máximo de filas que el OMR local asignó a la misma columna (posible desalineación). */
+  maxSameColumnCount: number;
 };
 
 type ScanDetailedResult = {
@@ -109,7 +113,25 @@ type ScanDetailedResult = {
   resolvedCount: number;
   confidenceSum: number;
   rows: OmrScanRowDetail[];
+  /** Suma de gaps mediana-franja por filas con lectura por franja (mayor = columnas mejor alineadas). */
+  clarityStripGapSum: number;
+  /** Máximo de filas con la misma columna elegida (penaliza desalineación que da todo igual). */
+  maxSameColumnCount: number;
 };
+
+/** Elige el mejor barrido perfil×qnw×colShift: claridad agregada y penalización si todo coincide en una columna. */
+function omrSweepCandidateScore(d: ScanDetailedResult): number {
+  const avgConf = d.resolvedCount > 0 ? d.confidenceSum / d.resolvedCount : 0;
+  const samePenalty =
+    d.maxSameColumnCount >= 10 ? 520 : d.maxSameColumnCount >= 8 ? 240 : d.maxSameColumnCount >= 7 ? 90 : 0;
+  return (
+    d.resolvedCount * 52 +
+    d.confidenceSum * 11 +
+    avgConf * 72 +
+    d.clarityStripGapSum * 125 -
+    samePenalty
+  );
+}
 
 type OmrGeometryProfile = {
   bottomBandRatio: number;
@@ -318,29 +340,26 @@ function sampleRectInkFractionAtThreshold(
   return n > 0 ? ink / n : 0;
 }
 
-/**
- * Por cada columna de burbujas, integra tinta en toda la franja (A/B/C/D), no solo el centro.
- * Reduce errores cuando el círculo está desplazado o la foto está borrosa / con sombra lateral.
- */
-function columnStripInkFractions(
+/** Franjas por columna usando bordes x medidos (rejilla real A|B|C|D). */
+function columnStripInkFractionsForEdges(
   data: Uint8ClampedArray,
   width: number,
   height: number,
-  bubbleAreaLeft: number,
-  cellW: number,
+  edges: number[],
   cols: number,
   y0: number,
   y1: number,
   grayThreshold: number
 ): number[] {
   const out: number[] = [];
-  const margin = cellW * 0.07;
   for (let c = 0; c < cols; c++) {
-    const xa = bubbleAreaLeft + c * cellW + margin;
-    const xb = bubbleAreaLeft + (c + 1) * cellW - margin;
-    out.push(
-      sampleRectInkFractionAtThreshold(data, width, height, xa, xb, y0, y1, grayThreshold)
-    );
+    const xL = edges[c]!;
+    const xR = edges[c + 1]!;
+    const cw = Math.max(1, xR - xL);
+    const margin = cw * 0.07;
+    const xa = xL + margin;
+    const xb = xR - margin;
+    out.push(sampleRectInkFractionAtThreshold(data, width, height, xa, xb, y0, y1, grayThreshold));
   }
   return out;
 }
@@ -1016,6 +1035,51 @@ function buildHorizontalEdgeProjection(
   return proj;
 }
 
+/**
+ * Proyección de borde vertical: promedio de |I(y,x) − I(y,x−1)| en la franja de la tabla.
+ * Los trazos verticales entre columnas A–D producen picos en x.
+ */
+function buildVerticalEdgeProjection(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number
+): Float64Array {
+  const proj = new Float64Array(width);
+  const xa = Math.max(1, Math.floor(x0));
+  const xb = Math.min(width - 2, Math.ceil(x1));
+  const ya = Math.max(1, Math.floor(y0));
+  const yb = Math.min(height - 1, Math.ceil(y1));
+  const denom = Math.max(1, yb - ya);
+  for (let x = xa; x <= xb; x++) {
+    let s = 0;
+    for (let y = ya; y < yb; y++) {
+      const i1 = (y * width + x) * 4;
+      const i0 = (y * width + (x - 1)) * 4;
+      s += Math.abs(pixelGray255(data, i1) - pixelGray255(data, i0));
+    }
+    proj[x] = s / denom;
+  }
+  return proj;
+}
+
+function boxSmoothInRangeX(proj: Float64Array, x0: number, x1: number, radius: number): void {
+  if (radius < 1) return;
+  const lo = Math.max(0, x0);
+  const hi = Math.min(proj.length - 1, x1);
+  const tmp = new Float64Array(hi - lo + 1);
+  for (let i = lo; i <= hi; i++) tmp[i - lo] = proj[i];
+  const w = radius * 2 + 1;
+  for (let x = lo + radius; x <= hi - radius; x++) {
+    let sum = 0;
+    for (let k = -radius; k <= radius; k++) sum += tmp[x - lo + k];
+    proj[x] = sum / w;
+  }
+}
+
 function boxSmoothInRange(proj: Float64Array, y0: number, y1: number, radius: number): void {
   if (radius < 1) return;
   const lo = Math.max(0, y0);
@@ -1063,6 +1127,95 @@ function findHorizontalLinePeaks(
     }
   }
   return merged;
+}
+
+function findVerticalLinePeaks(
+  proj: Float64Array,
+  x0: number,
+  x1: number,
+  minDist: number,
+  minRel: number
+): number[] {
+  let peakMax = 0;
+  for (let x = x0 + 2; x < x1 - 2; x++) peakMax = Math.max(peakMax, proj[x]);
+  const thr = Math.max(peakMax * minRel, 1e-6);
+  const raw: number[] = [];
+  for (let x = x0 + 2; x < x1 - 2; x++) {
+    const v = proj[x];
+    if (v < thr) continue;
+    if (v <= proj[x - 1] || v < proj[x + 1]) continue;
+    raw.push(x);
+  }
+  raw.sort((a, b) => a - b);
+  const merged: number[] = [];
+  for (const x of raw) {
+    if (merged.length === 0) {
+      merged.push(x);
+      continue;
+    }
+    const last = merged[merged.length - 1]!;
+    if (x - last < minDist) {
+      if (proj[x] > proj[last]) merged[merged.length - 1] = x;
+    } else {
+      merged.push(x);
+    }
+  }
+  return merged;
+}
+
+/**
+ * Infiere bordes x entre columnas A… usando líneas verticales impresas (cols+1 valores).
+ */
+function inferColumnEdgesFromVerticalLines(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  bubbleAreaLeft: number,
+  bubbleAreaW: number,
+  cols: number,
+  dataTop: number,
+  rowH: number
+): number[] | null {
+  const cellGuess = bubbleAreaW / Math.max(1, cols);
+  const y0 = Math.max(1, Math.floor(dataTop + 1.2 * rowH));
+  const y1 = Math.min(height - 1, Math.ceil(dataTop + 8.8 * rowH));
+  const xLo = Math.max(1, Math.floor(bubbleAreaLeft - cellGuess * 0.2));
+  const xHi = Math.min(width - 2, Math.ceil(bubbleAreaLeft + bubbleAreaW + cellGuess * 0.25));
+  if (y1 <= y0 + 6 || xHi <= xLo + 24) return null;
+
+  const proj = buildVerticalEdgeProjection(data, width, height, xLo, xHi, y0, y1);
+  boxSmoothInRangeX(proj, xLo, xHi, 2);
+
+  const minDist = Math.max(3, cellGuess * 0.26);
+  const peaks = findVerticalLinePeaks(proj, xLo, xHi, minDist, 0.11);
+  const need = cols + 1;
+  if (peaks.length < need) return null;
+
+  peaks.sort((a, b) => a - b);
+  let bestWindow: number[] | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (let s = 0; s <= peaks.length - need; s++) {
+    const w = peaks.slice(s, s + need);
+    const gaps: number[] = [];
+    for (let i = 0; i < need - 1; i++) gaps.push(w[i + 1]! - w[i]!);
+    const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    if (mean < cellGuess * 0.52 || mean > cellGuess * 1.55) continue;
+    const var_ = gaps.reduce((acc, g) => acc + (g - mean) * (g - mean), 0) / gaps.length;
+    const cv = mean > 1e-6 ? Math.sqrt(var_) / mean : 1;
+    if (cv > 0.4) continue;
+    const score =
+      var_ + (Math.abs(mean - cellGuess) / (cellGuess + 1e-6)) * cellGuess * cellGuess * 0.15;
+    if (score < bestScore) {
+      bestScore = score;
+      bestWindow = w;
+    }
+  }
+  if (!bestWindow) return null;
+
+  const left0 = bestWindow[0]!;
+  if (Math.abs(left0 - bubbleAreaLeft) > bubbleAreaW * 0.38) return null;
+
+  return bestWindow;
 }
 
 /**
@@ -1230,7 +1383,14 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     for (let i = 0; i < 10; i++) {
       rowMetas.push({ pick: null, ambiguous: false, inkFractions: [] });
     }
-    return { picks: out, resolvedCount: 0, confidenceSum: 0, rows: rowMetas };
+    return {
+      picks: out,
+      resolvedCount: 0,
+      confidenceSum: 0,
+      rows: rowMetas,
+      clarityStripGapSum: 0,
+      maxSameColumnCount: 0,
+    };
   }
   const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const { data, width, height } = id;
@@ -1258,12 +1418,36 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     dataHeight
   );
 
+  const inferredColEdges = inferColumnEdgesFromVerticalLines(
+    data,
+    width,
+    height,
+    bubbleAreaLeft,
+    bubbleAreaW,
+    cols,
+    dataTop,
+    rowH
+  );
+  const uniformColEdges: number[] = [];
+  for (let c = 0; c <= cols; c++) {
+    uniformColEdges.push(
+      c === cols
+        ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
+        : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
+    );
+  }
+  const columnEdges = inferredColEdges ?? uniformColEdges;
+  const minCellW = Math.min(
+    ...Array.from({ length: cols }, (_, c) => Math.max(1, columnEdges[c + 1]! - columnEdges[c]!))
+  );
+
   const minInkFrac = CALIFACIL_OMR_SCAN.minBubbleInkFraction;
   const minInkGap = CALIFACIL_OMR_SCAN.minInkFractionGap;
   const twinFloor = CALIFACIL_OMR_SCAN.ambiguousInkTwinFloor;
 
   let resolvedCount = 0;
   let confidenceSum = 0;
+  let clarityStripGapSum = 0;
   for (let row = 0; row < 10; row++) {
     let yRowTop: number;
     let yRowBot: number;
@@ -1293,7 +1477,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       cy = dataTop + (row + 0.5) * rowH;
     }
     const localRowH = Math.max(1, yRowBot - yRowTop);
-    const radiusPx = Math.max(2, Math.min(cellW, localRowH) * 0.22);
+    const radiusPx = Math.max(2, Math.min(minCellW, localRowH) * 0.22);
     const diskRInk = Math.max(2, Math.round(radiusPx * 0.9));
 
     const { hist, total } = buildRowGrayHistogram(
@@ -1311,12 +1495,11 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     const stripPad = Math.max(1, Math.floor(localRowH * 0.2));
     let stripY0 = Math.min(height - 1, Math.ceil(yRowTop + stripPad));
     let stripY1 = Math.max(stripY0, Math.floor(yRowBot - stripPad));
-    let stripFracs = columnStripInkFractions(
+    let stripFracs = columnStripInkFractionsForEdges(
       data,
       width,
       height,
-      bubbleAreaLeft,
-      cellW,
+      columnEdges,
       cols,
       stripY0,
       stripY1,
@@ -1325,12 +1508,11 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     if (row === 9 && lineYs && lineYs.length === 11) {
       const y0g = Math.min(height - 1, Math.ceil(dataTop + 9 * rowH + stripPad));
       const y1g = Math.max(y0g, Math.floor(dataTop + 10 * rowH - stripPad));
-      const stripGeo = columnStripInkFractions(
+      const stripGeo = columnStripInkFractionsForEdges(
         data,
         width,
         height,
-        bubbleAreaLeft,
-        cellW,
+        columnEdges,
         cols,
         y0g,
         y1g,
@@ -1347,7 +1529,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     const rings: number[] = [];
     const inkFracs: number[] = [];
     for (let c = 0; c < cols; c++) {
-      const cx = bubbleAreaLeft + (c + 0.5) * cellW;
+      const cx = (columnEdges[c]! + columnEdges[c + 1]!) * 0.5;
       const fillDark = sampleDiskDarkness(
         data,
         width,
@@ -1432,8 +1614,13 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     const stripPickInfo = bestMedianStripPick(medianAdj);
     const minStripGap = CALIFACIL_OMR_SCAN.minStripMedianGap;
     const minAbove = CALIFACIL_OMR_SCAN.minStripAboveMedian;
+    const maxStripRaw = stripFracs.reduce((a, b) => Math.max(a, b), 0);
     let stripPrimaryPick: number | null = null;
-    if (stripPickInfo.aboveMed >= minAbove && stripPickInfo.gap >= minStripGap) {
+    if (
+      stripPickInfo.aboveMed >= minAbove &&
+      stripPickInfo.gap >= minStripGap &&
+      !(maxStripRaw < CALIFACIL_OMR_SCAN.maxStripFracBlankRow && stripPickInfo.gap < 0.042)
+    ) {
       stripPrimaryPick = stripPickInfo.bestIdx;
     }
 
@@ -1442,6 +1629,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
 
     if (stripPrimaryPick !== null) {
       pick = stripPrimaryPick;
+      clarityStripGapSum += stripPickInfo.gap;
       const twinsStrip = stripFracs.filter((f) => f >= twinFloor).length;
       ambiguous = twinsStrip >= 2 && stripPickInfo.gap < 0.055;
     } else {
@@ -1479,7 +1667,23 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       }
     }
   }
-  return { picks: out, resolvedCount, confidenceSum, rows: rowMetas };
+  let maxSameColumnCount = 0;
+  const colTally = new Map<number, number>();
+  for (const p of out) {
+    if (p !== null) colTally.set(p, (colTally.get(p) ?? 0) + 1);
+  }
+  colTally.forEach((v) => {
+    maxSameColumnCount = Math.max(maxSameColumnCount, v);
+  });
+
+  return {
+    picks: out,
+    resolvedCount,
+    confidenceSum,
+    rows: rowMetas,
+    clarityStripGapSum,
+    maxSameColumnCount,
+  };
 }
 
 function estimateBottomBandInk(canvas: HTMLCanvasElement): number {
@@ -1551,6 +1755,8 @@ export function scanCalifacilOmrSheet(
     resolvedCount: 0,
     confidenceSum: Number.NEGATIVE_INFINITY,
     rows: emptyRows,
+    clarityStripGapSum: 0,
+    maxSameColumnCount: 0,
   };
 
   const qnumSweep =
@@ -1573,13 +1779,7 @@ export function scanCalifacilOmrSheet(
             profileQ,
             colShift
           );
-          const avgConfidence =
-            detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
-          const bestAvgConfidence =
-            best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
-          const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
-          const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
-          if (score > bestScore) {
+          if (omrSweepCandidateScore(detail) > omrSweepCandidateScore(best)) {
             best = detail;
           }
         }
@@ -1603,6 +1803,7 @@ export function scanCalifacilOmrSheetWithMeta(
       picks: Array(10).fill(null),
       rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
       needsVisionAssist: false,
+      maxSameColumnCount: 0,
     };
   }
   let canvas = drawSourceToCanvas(source);
@@ -1611,6 +1812,7 @@ export function scanCalifacilOmrSheetWithMeta(
       picks: Array(10).fill(null),
       rows: Array.from({ length: 10 }, () => ({ pick: null, ambiguous: false, inkFractions: [] })),
       needsVisionAssist: false,
+      maxSameColumnCount: 0,
     };
   }
   if (!opts?.skipGuideCrop) {
@@ -1651,6 +1853,8 @@ export function scanCalifacilOmrSheetWithMeta(
     resolvedCount: 0,
     confidenceSum: Number.NEGATIVE_INFINITY,
     rows: emptyRows,
+    clarityStripGapSum: 0,
+    maxSameColumnCount: 0,
   };
 
   const qnumSweep =
@@ -1673,13 +1877,7 @@ export function scanCalifacilOmrSheetWithMeta(
             profileQ,
             colShift
           );
-          const avgConfidence =
-            detail.resolvedCount > 0 ? detail.confidenceSum / detail.resolvedCount : 0;
-          const bestAvgConfidence =
-            best.resolvedCount > 0 ? best.confidenceSum / best.resolvedCount : 0;
-          const score = detail.resolvedCount * 70 + detail.confidenceSum * 12 + avgConfidence * 90;
-          const bestScore = best.resolvedCount * 70 + best.confidenceSum * 12 + bestAvgConfidence * 90;
-          if (score > bestScore) {
+          if (omrSweepCandidateScore(detail) > omrSweepCandidateScore(best)) {
             best = detail;
           }
         }
@@ -1688,7 +1886,12 @@ export function scanCalifacilOmrSheetWithMeta(
   }
 
   const needsVisionAssist = best.rows.some((r) => r.ambiguous);
-  return { picks: best.picks, rows: best.rows, needsVisionAssist };
+  return {
+    picks: best.picks,
+    rows: best.rows,
+    needsVisionAssist,
+    maxSameColumnCount: best.maxSameColumnCount,
+  };
 }
 
 /**
@@ -1715,7 +1918,11 @@ export function autoOrientCalifacilSheet(
       minBestVsSecondGap: 0.02,
     });
     const bandInk = estimateBottomBandInk(rotated);
-    const score = bandInk * 2000 + detail.resolvedCount * 100 + detail.confidenceSum * 10;
+    const score =
+      bandInk * 2000 +
+      detail.resolvedCount * 100 +
+      detail.confidenceSum * 10 +
+      detail.clarityStripGapSum * 40;
     if (score > bestScore) {
       bestScore = score;
       bestCanvas = rotated;
@@ -1733,7 +1940,11 @@ export function autoOrientCalifacilSheet(
       minBestVsSecondGap: 0.02,
     });
     const bandInk = estimateBottomBandInk(tilted);
-    const score = bandInk * 2000 + detail.resolvedCount * 100 + detail.confidenceSum * 10;
+    const score =
+      bandInk * 2000 +
+      detail.resolvedCount * 100 +
+      detail.confidenceSum * 10 +
+      detail.clarityStripGapSum * 40;
     if (score > bestScore) {
       bestScore = score;
       bestCanvas = tilted;
