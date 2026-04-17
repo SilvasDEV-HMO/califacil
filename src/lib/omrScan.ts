@@ -29,18 +29,22 @@ export const CALIFACIL_OMR_SCAN = {
   /** Si el disco interior es tan oscuro, damos por válida una marca aunque centro≈anillo (tinta llena). */
   minSolidCenterDarkness: 0.19,
   /** Tras binarizar (Otsu por fila), fracción mínima de píxeles oscuros en disco para considerar marca. */
-  minBubbleInkFraction: 0.34,
+  minBubbleInkFraction: 0.4,
   /** Diferencia mínima entre la mayor y la segunda fracción de tinta en la fila. */
-  minInkFractionGap: 0.11,
+  minInkFractionGap: 0.15,
   /** Dos columnas por encima de esto (binario) ⇒ posible doble marca / ambigüedad. */
   ambiguousInkTwinFloor: 0.3,
   /**
    * Franja horizontal por columna (toda la celda A–D): ventaja mínima de la mejor columna
    * sobre la segunda tras restar la mediana por fila (anula sombras / viñeteado).
    */
-  minStripMedianGap: 0.022,
+  minStripMedianGap: 0.034,
   /** Mínimo exceso sobre la mediana por fila en la franja elegida para contar como marca. */
-  minStripAboveMedian: 0.018,
+  minStripAboveMedian: 0.028,
+  /** Fracción mínima de tinta (Otsu) en la celda ganadora de la franja; evita elegir columna con solo ruido. */
+  minStripWinnerRawFrac: 0.12,
+  /** Fracción mínima en el interior de casilla (path cuadrado) para aceptar lectura por interior. */
+  minInnerWinnerRawFrac: 0.26,
   /** Si la tinta máxima en la fila es muy baja, tratar como sin respuesta (evita falsas «A»). */
   maxStripFracBlankRow: 0.095,
 } as const;
@@ -1667,11 +1671,11 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     const rectGap =
       (innerRectDark[innerRectBest] ?? 0) - (innerRectDark[innerRectSecond] ?? 0);
     const rectMean = innerRectDark.reduce((a, b) => a + b, 0) / Math.max(1, cols);
-    const dynamicRectMin = Math.max(0.038, rectMean + 0.014);
+    const dynamicRectMin = Math.max(0.048, rectMean + 0.022);
     const rectRulePick: number | null =
       (innerRectDark[innerRectBest] ?? 0) >= dynamicRectMin &&
-      rectGap >= 0.022 &&
-      (innerRectDark[innerRectBest] ?? 0) / Math.max(0.001, (innerRectDark[innerRectSecond] ?? 0) + 0.001) >= 1.12
+      rectGap >= 0.036 &&
+      (innerRectDark[innerRectBest] ?? 0) / Math.max(0.001, (innerRectDark[innerRectSecond] ?? 0) + 0.001) >= 1.22
         ? innerRectBest
         : null;
 
@@ -1766,11 +1770,14 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     const minStripGap = CALIFACIL_OMR_SCAN.minStripMedianGap;
     const minAbove = CALIFACIL_OMR_SCAN.minStripAboveMedian;
     const maxStripRaw = stripFracs.reduce((a, b) => Math.max(a, b), 0);
+    const stripWinnerRaw = stripFracs[stripPickInfo.bestIdx] ?? 0;
+    const minStripWin = CALIFACIL_OMR_SCAN.minStripWinnerRawFrac;
     let stripPrimaryPick: number | null = null;
     if (
       stripPickInfo.aboveMed >= minAbove &&
       stripPickInfo.gap >= minStripGap &&
-      !(maxStripRaw < CALIFACIL_OMR_SCAN.maxStripFracBlankRow && stripPickInfo.gap < 0.042)
+      stripWinnerRaw >= minStripWin &&
+      !(maxStripRaw < CALIFACIL_OMR_SCAN.maxStripFracBlankRow && stripPickInfo.gap < 0.055)
     ) {
       stripPrimaryPick = stripPickInfo.bestIdx;
     }
@@ -1778,44 +1785,60 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     let pick: number | null = null;
     let ambiguous = false;
 
+    const innerWinnerRaw = innerFracs[innerPickInfo.bestIdx] ?? 0;
+    const minInnerWin = CALIFACIL_OMR_SCAN.minInnerWinnerRawFrac;
+
     if (stripPrimaryPick !== null) {
       pick = stripPrimaryPick;
       clarityStripGapSum += stripPickInfo.gap;
       const twinsStrip = stripFracs.filter((f) => f >= twinFloor).length;
-      ambiguous = twinsStrip >= 2 && stripPickInfo.gap < 0.055;
+      ambiguous = twinsStrip >= 2 && stripPickInfo.gap < 0.065;
     } else if (
-      innerPickInfo.aboveMed >= minAbove * 0.86 &&
-      innerPickInfo.gap >= minStripGap * 0.82 &&
-      !(maxStripRaw < CALIFACIL_OMR_SCAN.maxStripFracBlankRow && innerPickInfo.gap < 0.038)
+      innerPickInfo.aboveMed >= minAbove * 0.95 &&
+      innerPickInfo.gap >= minStripGap * 0.92 &&
+      innerWinnerRaw >= minInnerWin &&
+      !(maxStripRaw < CALIFACIL_OMR_SCAN.maxStripFracBlankRow && innerPickInfo.gap < 0.048)
     ) {
       /** Casillas cuadradas rellenas: el interior de la celda marca mejor que la franja completa. */
       pick = innerPickInfo.bestIdx;
       clarityStripGapSum += innerPickInfo.gap * 0.95;
       const twinsIn = innerFracs.filter((f) => f >= twinFloor * 0.95).length;
-      ambiguous = twinsIn >= 2 && innerPickInfo.gap < 0.048;
+      ambiguous = twinsIn >= 2 && innerPickInfo.gap < 0.058;
     } else if (
       rectRulePick !== null &&
       (inkPick === null || inkPick === rectRulePick || rulePick === rectRulePick)
     ) {
       pick = rectRulePick;
       const twinsR = innerFracs.filter((f) => f >= twinFloor * 0.92).length;
-      ambiguous = twinsR >= 2 && rectGap < 0.04;
+      ambiguous = twinsR >= 2 && rectGap < 0.048;
     } else {
       const twins = inkFracs.filter((f) => f >= twinFloor).length;
       if (rulePick !== null && inkPick !== null) {
         if (rulePick === inkPick) {
           pick = rulePick;
-          ambiguous = twins >= 2 && inkGap < 0.17;
+          ambiguous = twins >= 2 && inkGap < 0.19;
         } else {
           pick = null;
           ambiguous = true;
         }
-      } else if (rulePick !== null) {
-        pick = rulePick;
-        ambiguous = twins >= 2;
-      } else if (inkPick !== null) {
+      } else if (rulePick !== null && inkPick === null) {
+        /** Solo modelo anular: exigir señal fuerte para no inventar columna. */
+        const strongRule =
+          best >= dynamicMin * 1.22 &&
+          gap >= dynamicGap * 1.18 &&
+          ratio >= minRatio * 1.12 &&
+          (centerVsRing >= minCenterVsRingDelta * 1.15 || fillBest >= solidCenterMin * 1.05);
+        if (strongRule) {
+          pick = rulePick;
+          ambiguous = twins >= 2;
+        } else {
+          pick = null;
+          ambiguous = false;
+        }
+      } else if (inkPick !== null && rulePick === null) {
+        /** Solo tinta binaria: umbrales ya altos en CALIFACIL_OMR_SCAN. */
         pick = inkPick;
-        ambiguous = twins >= 2 || inkGap < minInkGap + 0.04;
+        ambiguous = twins >= 2 || inkGap < minInkGap + 0.05;
       } else {
         pick = null;
         ambiguous = maxInk > 0.22 && (twins >= 2 || inkGap < 0.09);
@@ -1832,8 +1855,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
           stripPickInfo.aboveMed + stripPickInfo.gap * 2.5 + maxStrip * 0.2;
       } else if (
         pick === innerPickInfo.bestIdx &&
-        innerPickInfo.aboveMed >= minAbove * 0.86 &&
-        innerPickInfo.gap >= minStripGap * 0.82
+        innerPickInfo.aboveMed >= minAbove * 0.95 &&
+        innerPickInfo.gap >= minStripGap * 0.92
       ) {
         const maxIn = innerFracs.reduce((a, b) => Math.max(a, b), 0);
         confidenceSum +=

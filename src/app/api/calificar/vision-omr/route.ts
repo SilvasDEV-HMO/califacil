@@ -105,7 +105,7 @@ La imagen muestra la parte inferior de una hoja impresa: un recuadro CaliFacil c
 
 TAREA:
 - Identifica qué casilla está rellenada (más oscura/tinta) en cada fila de pregunta.
-- Solo UNA respuesta por número. Si ninguna está clara o hay dos marcas, usa null para esa pregunta.
+- Solo UNA respuesta por número. Si ninguna está clara, la fila está en blanco, o hay dos marcas similares, usa null para esa pregunta. No adivines: ante la duda, null.
 - Responde ÚNICAMENTE con JSON: un objeto "byNumber" cuyas claves son STRINGS con el número de pregunta global (${numList}), y valores la letra elegida ("A","B",…) o null.
 
 Ejemplo de forma (sustituye valores reales): {"byNumber":{"3":"B","4":null}}
