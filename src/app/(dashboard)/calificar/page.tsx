@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LayoutDashboard, Loader2, AlertCircle, Zap } from 'lucide-react';
+import { Info, LayoutDashboard, Loader2, AlertCircle, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
@@ -38,6 +38,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { StudentCombobox } from '@/components/student-combobox';
 import {
@@ -113,6 +114,8 @@ export default function CalificarPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   /** Geometría de celdas del último escaneo (misma relación de aspecto que la vista previa). */
   const [reviewOmrGeometry, setReviewOmrGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
+  /** Confirmación explícita de que el usuario revisó lectura vs foto (no se guarda sin esto). */
+  const [reviewHumanAck, setReviewHumanAck] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
 
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -137,6 +140,7 @@ export default function CalificarPage() {
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const confirmedAnswersRef = useRef<Record<string, string>>({});
   const sheetIndexRef = useRef(0);
+  const prevPhaseRef = useRef<Phase>('elegir');
 
   const [reviewQualityHint, setReviewQualityHint] = useState<string | null>(null);
 
@@ -628,6 +632,13 @@ export default function CalificarPage() {
   }, [exam?.group_id]);
 
   useEffect(() => {
+    if (phase === 'revisar_hoja' && prevPhaseRef.current !== 'revisar_hoja') {
+      setReviewHumanAck(false);
+    }
+    prevPhaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
     if (phase !== 'capturar' && cameraOpen) {
       stopLiveCamera();
     }
@@ -676,6 +687,7 @@ export default function CalificarPage() {
       return null;
     });
     setReviewOmrGeometry(null);
+    setReviewHumanAck(false);
     setSelectedStudentId('');
   }, [stopLiveCamera, isMobile]);
 
@@ -708,6 +720,8 @@ export default function CalificarPage() {
       if (u) URL.revokeObjectURL(u);
       return null;
     });
+    setReviewOmrGeometry(null);
+    setReviewHumanAck(false);
   };
 
   const handleGalleryFile = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -1544,6 +1558,16 @@ export default function CalificarPage() {
                     <AlertDescription className="text-sm">{reviewQualityHint}</AlertDescription>
                   </Alert>
                 ) : null}
+                <Alert variant="default" className="border-sky-200 bg-sky-50 text-sky-950">
+                  <Info className="h-4 w-4" />
+                  <AlertTitle className="text-sm">Exactitud de la lectura automática</AlertTitle>
+                  <AlertDescription className="text-sm">
+                    Ninguna cámara ni algoritmo garantiza un 100% de acierto en todos los casos (luz, sombras,
+                    marca incompleta, etc.). La nota que se guardará es la que elijas aquí; revisa la foto y las
+                    casillas resaltadas antes de confirmar. Si necesitas máxima ayuda automática, configura la
+                    verificación por IA en el servidor (ver <code className="text-xs">.env.example</code>).
+                  </AlertDescription>
+                </Alert>
                 <p className="text-sm font-medium text-gray-800">
                   Confirma o corrige cada respuesta antes de guardar. Verde = opción leída; azul = resto de
                   casillas detectadas. Con buena luz y casillas bien rellenas la lectura suele coincidir.
@@ -1558,6 +1582,7 @@ export default function CalificarPage() {
                       <Select
                         value={val || undefined}
                         onValueChange={(v) => {
+                          setReviewHumanAck(false);
                           setDraftSelections((prev) => ({ ...prev, [q.id]: v }));
                         }}
                       >
@@ -1576,12 +1601,25 @@ export default function CalificarPage() {
                   );
                 })}
 
+                <div className="flex items-start gap-3 rounded-md border border-gray-200 bg-white p-3">
+                  <Checkbox
+                    id="review-human-ack"
+                    checked={reviewHumanAck}
+                    onCheckedChange={(c) => setReviewHumanAck(c === true)}
+                  />
+                  <Label htmlFor="review-human-ack" className="cursor-pointer text-sm font-normal leading-snug text-gray-800">
+                    He revisado la foto y cada opción: la calificación guardada será la que figure arriba, no la
+                    lectura automática por sí sola.
+                  </Label>
+                </div>
+
                 <div className="flex flex-col gap-2 pt-2 sm:flex-row">
                   <Button
                     variant="outline"
                     className="flex-1"
                     onClick={() => {
                       setPhase('capturar');
+                      setReviewHumanAck(false);
                       setReviewOmrGeometry(null);
                       setPreviewUrl((u) => {
                         if (u) URL.revokeObjectURL(u);
@@ -1595,6 +1633,7 @@ export default function CalificarPage() {
                   </Button>
                   <Button
                     className="flex-1 bg-orange-600 hover:bg-orange-700"
+                    disabled={!reviewHumanAck}
                     onClick={confirmCurrentSheet}
                   >
                     Guardar calificación

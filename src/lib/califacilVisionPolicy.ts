@@ -1,6 +1,17 @@
 /**
  * Política de cuándo llamar a `/api/calificar/vision-omr` (GPT-4o-mini).
  * Ajustar coste vs cobertura con variables de entorno públicas (solo flags, sin secretos).
+ *
+ * Requiere en el servidor: `OPENAI_API_KEY` (sin prefijo NEXT_PUBLIC).
+ * Sin clave, la API devuelve 503 y solo se usa el lector OMR local.
+ *
+ * Variables públicas (build-time; reiniciar dev server tras cambiar):
+ * - `NEXT_PUBLIC_CALIFACIL_VISION_ON_LIVE_COMMIT` — visión al confirmar desde cámara en vivo.
+ *   Por defecto activo si la variable no existe; desactivar con `false`.
+ * - `NEXT_PUBLIC_CALIFACIL_VISION_ON_FINAL` — segunda pasada IA al importar/capturar toda la hoja.
+ *   Por defecto desactivado; activar con `true` (más coste por foto).
+ *
+ * Ver [.env.example](.env.example) en la raíz del proyecto.
  */
 
 function envBool(name: string): boolean {
