@@ -60,6 +60,7 @@ import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { CALIFACIL_VISION_POLICY } from '@/lib/califacilVisionPolicy';
+import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import {
   playAutoCaptureClickSound,
   playScanCompleteChime,
@@ -78,6 +79,26 @@ const STABLE_PARTIAL_TICKS = 3;
 const STABLE_FULL_TICKS = 2;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
+
+/** Valores centinela para que Radix Select sea siempre controlado (evita uncontrolled→controlled). */
+const SELECT_NO_EXAM = '__califacil_no_exam__';
+const SELECT_NO_OPTION = '__califacil_no_option__';
+
+async function fetchVisionOmr(payload: {
+  examId: string;
+  imageBase64: string;
+  rows: { questionId: string; globalNumber: number; options: string[] }[];
+  omrColumnCount: number;
+  focusNumbers: number[];
+}) {
+  const headers = await dashboardAuthJsonHeaders();
+  return fetch('/api/calificar/vision-omr', {
+    method: 'POST',
+    headers: { ...headers },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+}
 
 /**
  * Permite que React y el navegador pinten el spinner antes de trabajo pesado en el hilo principal;
@@ -471,17 +492,12 @@ export default function CalificarPage() {
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
         try {
           const imageBase64 = califacilImageToJpegDataUrl(oriented);
-          const res = await fetch('/api/calificar/vision-omr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              examId,
-              imageBase64,
-              rows: rowsPayload,
-              omrColumnCount: omrCols,
-              focusNumbers,
-            }),
+          const res = await fetchVisionOmr({
+            examId,
+            imageBase64,
+            rows: rowsPayload,
+            omrColumnCount: omrCols,
+            focusNumbers,
           });
           const payload = (await res.json().catch(() => ({}))) as {
             selections?: Record<string, string>;
@@ -523,17 +539,12 @@ export default function CalificarPage() {
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
         try {
           const imageBase64 = califacilImageToJpegDataUrl(oriented);
-          const res = await fetch('/api/calificar/vision-omr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              examId,
-              imageBase64,
-              rows: rowsPayload,
-              omrColumnCount: omrCols,
-              focusNumbers,
-            }),
+          const res = await fetchVisionOmr({
+            examId,
+            imageBase64,
+            rows: rowsPayload,
+            omrColumnCount: omrCols,
+            focusNumbers,
           });
           const payload = (await res.json().catch(() => ({}))) as {
             selections?: Record<string, string>;
@@ -574,17 +585,12 @@ export default function CalificarPage() {
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
         try {
           const imageBase64 = califacilImageToJpegDataUrl(oriented);
-          const res = await fetch('/api/calificar/vision-omr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              examId,
-              imageBase64,
-              rows: rowsPayload,
-              omrColumnCount: omrCols,
-              focusNumbers,
-            }),
+          const res = await fetchVisionOmr({
+            examId,
+            imageBase64,
+            rows: rowsPayload,
+            omrColumnCount: omrCols,
+            focusNumbers,
           });
           const payload = (await res.json().catch(() => ({}))) as {
             selections?: Record<string, string>;
@@ -618,17 +624,12 @@ export default function CalificarPage() {
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
         try {
           const imageBase64 = califacilImageToJpegDataUrl(oriented);
-          const res = await fetch('/api/calificar/vision-omr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              examId,
-              imageBase64,
-              rows: rowsPayload,
-              omrColumnCount: omrCols,
-              focusNumbers,
-            }),
+          const res = await fetchVisionOmr({
+            examId,
+            imageBase64,
+            rows: rowsPayload,
+            omrColumnCount: omrCols,
+            focusNumbers,
           });
           const payload = (await res.json().catch(() => ({}))) as {
             selections?: Record<string, string>;
@@ -1286,7 +1287,7 @@ export default function CalificarPage() {
         const frame = document.createElement('canvas');
         frame.width = video.videoWidth;
         frame.height = video.videoHeight;
-        const ctx = frame.getContext('2d');
+        const ctx = frame.getContext('2d', { willReadFrequently: true });
         if (ctx) {
           ctx.drawImage(video, 0, 0, frame.width, frame.height);
           orientedForPreview = autoOrientCalifacilSheet(frame, omrCols) ?? frame;
@@ -1309,17 +1310,12 @@ export default function CalificarPage() {
         const focusNumbers = rowsPayload.map((r) => r.globalNumber);
         try {
           const imageBase64 = califacilImageToJpegDataUrl(orientedForPreview);
-          const res = await fetch('/api/calificar/vision-omr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              examId,
-              imageBase64,
-              rows: rowsPayload,
-              omrColumnCount: omrCols,
-              focusNumbers,
-            }),
+          const res = await fetchVisionOmr({
+            examId,
+            imageBase64,
+            rows: rowsPayload,
+            omrColumnCount: omrCols,
+            focusNumbers,
           });
           const payload = (await res.json().catch(() => ({}))) as {
             selections?: Record<string, string>;
@@ -1519,8 +1515,9 @@ export default function CalificarPage() {
           <div className="space-y-2">
             <Label>Examen</Label>
             <Select
-              value={examId || undefined}
+              value={examId ? examId : SELECT_NO_EXAM}
               onValueChange={(v) => {
+                if (v === SELECT_NO_EXAM) return;
                 setExamId(v);
                 resetFlow();
               }}
@@ -1530,6 +1527,7 @@ export default function CalificarPage() {
                 <SelectValue placeholder={examsLoading ? 'Cargando…' : 'Elige un examen'} />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={SELECT_NO_EXAM}>Elige un examen publicado</SelectItem>
                 {publishedExams.map((e) => (
                   <SelectItem key={e.id} value={e.id}>
                     {e.title}
@@ -1960,16 +1958,20 @@ export default function CalificarPage() {
                     <div key={q.id} className="flex flex-col gap-1">
                       <Label className="text-xs text-gray-600">Pregunta {globalNum}</Label>
                       <Select
-                        value={val || undefined}
+                        value={val ? val : SELECT_NO_OPTION}
                         onValueChange={(v) => {
                           setReviewHumanAck(false);
-                          setDraftSelections((prev) => ({ ...prev, [q.id]: v }));
+                          setDraftSelections((prev) => ({
+                            ...prev,
+                            [q.id]: v === SELECT_NO_OPTION ? '' : v,
+                          }));
                         }}
                       >
                         <SelectTrigger className="w-full max-w-md">
                           <SelectValue placeholder="Elegir opción leída" />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value={SELECT_NO_OPTION}>Elegir opción leída</SelectItem>
                           {opts.map((opt, oi) => (
                             <SelectItem key={opt} value={opt}>
                               {String.fromCharCode(65 + oi)}. {opt}

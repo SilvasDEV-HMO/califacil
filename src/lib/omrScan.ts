@@ -498,7 +498,7 @@ function drawSourceToCanvas(
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(source as CanvasImageSource, 0, 0, w, h);
   return canvas;
@@ -516,7 +516,7 @@ function rotateCanvas(canvas: HTMLCanvasElement, angleDeg: 0 | 90 | 180 | 270): 
     out.width = srcH;
     out.height = srcW;
   }
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return canvas;
   if (angleDeg === 90) {
     ctx.translate(out.width, 0);
@@ -542,7 +542,7 @@ function rotateCanvasByDegrees(canvas: HTMLCanvasElement, degrees: number): HTML
   const out = document.createElement('canvas');
   out.width = outW;
   out.height = outH;
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return canvas;
 
   ctx.translate(outW / 2, outH / 2);
@@ -682,26 +682,166 @@ function sampleBilinear(data: Uint8ClampedArray, width: number, height: number, 
   return out;
 }
 
-function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-  const { width, height } = canvas;
-  if (width < 120 || height < 120) return null;
+/** Proyectivo a partir de bordes del papel claro (hoja sobre fondo negro / mesa oscura). */
+function detectCalifacilQuadFromBrightPaper(
+  d: Uint8ClampedArray,
+  width: number,
+  height: number,
+  lumMin: number
+): [Point, Point, Point, Point] | null {
+  const rowBright = new Uint32Array(height);
+  const colBright = new Uint32Array(width);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (lum >= lumMin) {
+        rowBright[y]++;
+        colBright[x]++;
+      }
+    }
+  }
 
-  const id = ctx.getImageData(0, 0, width, height);
-  const d = id.data;
+  const rbMin = Math.max(10, Math.floor(width * 0.024));
+  const cbMin = Math.max(10, Math.floor(height * 0.024));
+  let top = -1;
+  let bottom = -1;
+  let left = -1;
+  let right = -1;
+  for (let y = 0; y < height; y++) {
+    if (rowBright[y] >= rbMin) {
+      top = y;
+      break;
+    }
+  }
+  for (let y = height - 1; y >= 0; y--) {
+    if (rowBright[y] >= rbMin) {
+      bottom = y;
+      break;
+    }
+  }
+  for (let x = 0; x < width; x++) {
+    if (colBright[x] >= cbMin) {
+      left = x;
+      break;
+    }
+  }
+  for (let x = width - 1; x >= 0; x--) {
+    if (colBright[x] >= cbMin) {
+      right = x;
+      break;
+    }
+  }
+  if (top < 0 || bottom < 0 || left < 0 || right < 0) return null;
+  if (bottom - top < height * 0.18 || right - left < width * 0.18) return null;
+
+  const y0 = Math.max(0, top - Math.floor(height * 0.03));
+  const y1 = Math.min(height - 1, bottom + Math.floor(height * 0.03));
+  const x0 = Math.max(0, left - Math.floor(width * 0.03));
+  const x1 = Math.min(width - 1, right + Math.floor(width * 0.03));
+
+  const midX = Math.floor(width / 2);
+  const midY = Math.floor(height / 2);
+
+  const leftPts: Point[] = [];
+  const rightPts: Point[] = [];
+  const topPts: Point[] = [];
+  const bottomPts: Point[] = [];
+
+  for (let y = y0; y <= y1; y += 2) {
+    let lx = -1;
+    for (let x = 0; x <= midX; x++) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (lum >= lumMin) {
+        lx = x;
+        break;
+      }
+    }
+    if (lx >= 0) leftPts.push({ x: lx, y });
+
+    let rx = -1;
+    for (let x = width - 1; x >= midX; x--) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (lum >= lumMin) {
+        rx = x;
+        break;
+      }
+    }
+    if (rx >= 0) rightPts.push({ x: rx, y });
+  }
+
+  for (let x = x0; x <= x1; x += 2) {
+    let ty = -1;
+    for (let y = 0; y <= midY; y++) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (lum >= lumMin) {
+        ty = y;
+        break;
+      }
+    }
+    if (ty >= 0) topPts.push({ x, y: ty });
+
+    let by = -1;
+    for (let y = height - 1; y >= midY; y--) {
+      const i = (y * width + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      if (lum >= lumMin) {
+        by = y;
+        break;
+      }
+    }
+    if (by >= 0) bottomPts.push({ x, y: by });
+  }
+
+  const l = fitLineXFromY(leftPts);
+  const r = fitLineXFromY(rightPts);
+  const t = fitLineYFromX(topPts);
+  const b = fitLineYFromX(bottomPts);
+  if (!l || !r || !t || !b) return null;
+
+  const tl = intersectLineXFromYAndYFromX(l, t);
+  const tr = intersectLineXFromYAndYFromX(r, t);
+  const br = intersectLineXFromYAndYFromX(r, b);
+  const bl = intersectLineXFromYAndYFromX(l, b);
+  if (!tl || !tr || !br || !bl) return null;
+
+  const quad: [Point, Point, Point, Point] = [tl, tr, br, bl];
+  const inside = quad.every(
+    (p) => p.x >= -width * 0.1 && p.x <= width * 1.1 && p.y >= -height * 0.1 && p.y <= height * 1.1
+  );
+  if (!inside) return null;
+  const area =
+    Math.abs(
+      tl.x * tr.y +
+        tr.x * br.y +
+        br.x * bl.y +
+        bl.x * tl.y -
+        (tr.x * tl.y + br.x * tr.y + bl.x * br.y + tl.x * bl.y)
+    ) * 0.5;
+  if (area < width * height * 0.06) return null;
+  return quad;
+}
+
+/** Proyectivo a partir de tinta/borde oscuro sobre papel claro (caso típico). */
+function detectCalifacilQuadFromDarkInk(
+  d: Uint8ClampedArray,
+  width: number,
+  height: number
+): [Point, Point, Point, Point] | null {
   const rowCounts = new Array<number>(height).fill(0);
   const colCounts = new Array<number>(width).fill(0);
 
   let darkSum = 0;
-  let n = 0;
+  const n = width * height;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
       const lum = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
       const darkness = 1 - lum;
       darkSum += darkness;
-      n++;
     }
   }
   const avgDark = darkSum / Math.max(1, n);
@@ -841,6 +981,45 @@ function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, P
   return quad;
 }
 
+function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const { width, height } = canvas;
+  if (width < 120 || height < 120) return null;
+
+  const id = ctx.getImageData(0, 0, width, height);
+  const d = id.data;
+
+  let darkSum = 0;
+  const nPix = width * height;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = (0.299 * d[i]! + 0.587 * d[i + 1]! + 0.114 * d[i + 2]!) / 255;
+    darkSum += 1 - lum;
+  }
+  const avgDark = darkSum / Math.max(1, nPix);
+
+  /** Escenas con mucho negro alrededor de la hoja: encajar bordes claros antes que tinta. */
+  const preferPaperFirst = avgDark >= 0.29;
+  if (preferPaperFirst) {
+    const qHi = detectCalifacilQuadFromBrightPaper(d, width, height, 0.61);
+    if (qHi) return qHi;
+    const qLo = detectCalifacilQuadFromBrightPaper(d, width, height, 0.52);
+    if (qLo) return qLo;
+  }
+
+  const ink = detectCalifacilQuadFromDarkInk(d, width, height);
+  if (ink) return ink;
+
+  if (!preferPaperFirst) {
+    const qHi = detectCalifacilQuadFromBrightPaper(d, width, height, 0.61);
+    if (qHi) return qHi;
+    const qLo = detectCalifacilQuadFromBrightPaper(d, width, height, 0.52);
+    if (qLo) return qLo;
+  }
+
+  return null;
+}
+
 function warpPerspectiveToRect(
   canvas: HTMLCanvasElement,
   quad: [Point, Point, Point, Point]
@@ -856,7 +1035,7 @@ function warpPerspectiveToRect(
   if (!h) return null;
   const [a, b, c, d, e, f, g, hh] = h;
 
-  const srcCtx = canvas.getContext('2d');
+  const srcCtx = canvas.getContext('2d', { willReadFrequently: true });
   if (!srcCtx) return null;
   const src = srcCtx.getImageData(0, 0, canvas.width, canvas.height);
   const srcData = src.data;
@@ -864,7 +1043,7 @@ function warpPerspectiveToRect(
   const out = document.createElement('canvas');
   out.width = outW;
   out.height = outH;
-  const outCtx = out.getContext('2d');
+  const outCtx = out.getContext('2d', { willReadFrequently: true });
   if (!outCtx) return null;
   const outId = outCtx.createImageData(outW, outH);
   const outData = outId.data;
@@ -925,7 +1104,7 @@ export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HT
   const out = document.createElement('canvas');
   out.width = rw;
   out.height = rh;
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(canvas, left, top, rw, rh, 0, 0, rw, rh);
   return out;
@@ -1055,7 +1234,7 @@ function grayBufferToRgbCanvas(gray: Uint8Array, w: number, h: number): HTMLCanv
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   const id = ctx.createImageData(w, h);
   const d = id.data;
@@ -1071,7 +1250,7 @@ function grayBufferToRgbCanvas(gray: Uint8Array, w: number, h: number): HTMLCanv
 }
 
 function getGrayBufferFromCanvas(canvas: HTMLCanvasElement): { gray: Uint8Array; w: number; h: number } | null {
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   const w = canvas.width;
   const h = canvas.height;
@@ -1123,7 +1302,7 @@ function applyAntiMoirLowPass(
   const small = document.createElement('canvas');
   small.width = sw;
   small.height = sh;
-  const sctx = small.getContext('2d');
+  const sctx = small.getContext('2d', { willReadFrequently: true });
   if (!sctx) return null;
   sctx.imageSmoothingEnabled = true;
   sctx.imageSmoothingQuality = 'high';
@@ -1131,7 +1310,7 @@ function applyAntiMoirLowPass(
   const out = document.createElement('canvas');
   out.width = w;
   out.height = h;
-  const octx = out.getContext('2d');
+  const octx = out.getContext('2d', { willReadFrequently: true });
   if (!octx) return null;
   octx.imageSmoothingEnabled = true;
   octx.imageSmoothingQuality = 'high';
@@ -1487,7 +1666,7 @@ export function hasCalifacilPrintedTableGrid(
   columns: number
 ): boolean {
   void columns;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return false;
   const { width, height } = canvas;
   if (width < 80 || height < 80) return false;
@@ -1580,7 +1759,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const out: (number | null)[] = Array(10).fill(null);
   const rowMetas: OmrScanRowDetail[] = [];
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) {
     for (let i = 0; i < 10; i++) {
       rowMetas.push({ pick: null, ambiguous: false, inkFractions: [] });
@@ -2023,7 +2202,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
 }
 
 function estimateBottomBandInk(canvas: HTMLCanvasElement): number {
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return 0;
   const w = canvas.width;
   const h = canvas.height;
@@ -2298,7 +2477,7 @@ export function autoOrientCalifacilSheet(
   // Inclinación típica al fotografiar con el móvil puede superar fácilmente ±12°;
   // si no barrimos bastante, la tabla queda torcida y la rejilla OMR “baja en escalera”.
   let bestDeltaDeg = 0;
-  for (let delta = -28; delta <= 28; delta += 2) {
+  for (let delta = -38; delta <= 38; delta += 2) {
     if (delta === 0) continue;
     const tilted = rotateCanvasByDegrees(cardinalBest, delta);
     const score = scoreTilted(tilted);
@@ -2313,7 +2492,7 @@ export function autoOrientCalifacilSheet(
   for (let fine = -2; fine <= 2; fine++) {
     if (fine === 0) continue;
     const total = bestDeltaDeg + fine;
-    if (total < -30 || total > 30) continue;
+    if (total < -42 || total > 42) continue;
     const tilted = rotateCanvasByDegrees(cardinalBest, total);
     const score = scoreTilted(tilted);
     if (score > bestScore) {
@@ -2340,7 +2519,7 @@ export function califacilImageToJpegDataUrl(
   const c = document.createElement('canvas');
   c.width = source.naturalWidth || source.width;
   c.height = source.naturalHeight || source.height;
-  const ctx = c.getContext('2d');
+  const ctx = c.getContext('2d', { willReadFrequently: true });
   if (!ctx) return '';
   ctx.drawImage(source, 0, 0);
   return c.toDataURL('image/jpeg', quality);
