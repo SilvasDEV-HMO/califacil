@@ -59,10 +59,32 @@ export function CalifacilOmrReviewOverlay({
         const rowCells = geometry.cells[row];
         if (!rowCells) return null;
         const pick = picks[row];
+        const expectedPick = expectedPicks?.[row];
+        const hasExpected =
+          typeof expectedPick === 'number' &&
+          expectedPick >= 0 &&
+          expectedPick < rowCells.length;
+
         return (
           <g key={row}>
             {rowCells.map((cell, col) => {
-              const isChosen = pick !== null && pick === col;
+              const isPicked = pick !== null && pick === col;
+              let stroke = 'rgba(59,130,246,0.35)';
+              let strokeW = 0.004;
+
+              if (isPicked) {
+                if (hasExpected) {
+                  stroke =
+                    pick === expectedPick
+                      ? 'rgba(22,163,74,0.95)'
+                      : 'rgba(220,38,38,0.95)';
+                  strokeW = 0.009;
+                } else {
+                  stroke = 'rgba(22,163,74,0.95)';
+                  strokeW = 0.008;
+                }
+              }
+
               return (
                 <rect
                   key={col}
@@ -71,8 +93,8 @@ export function CalifacilOmrReviewOverlay({
                   width={cell.w}
                   height={cell.h}
                   fill="none"
-                  stroke={isChosen ? 'rgba(22,163,74,0.95)' : 'rgba(59,130,246,0.35)'}
-                  strokeWidth={isChosen ? 0.008 : 0.004}
+                  stroke={stroke}
+                  strokeWidth={strokeW}
                 />
               );
             })}

@@ -931,12 +931,29 @@ export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HT
   return out;
 }
 
-/** Escala, recorta al marco guía y devuelve imagen lista para orientar/escanear. */
-export function prepareCalifacilScanInput(source: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement | null {
+/** Opciones para preparar imagen antes de orientar / escanear CaliFacil */
+export type PrepareCalifacilScanInputOptions = {
+  /**
+   * Si es true (predeterminado), recorta al mismo encuadre que el marco naranja en cámara en vivo.
+   * Pon `false` para fotos de página completa o archivo subido: el recorte artificial puede quitar el borde
+   * del recuadro negro y empeorar la corrección de perspectiva frente al encuadre real de la cámara.
+   */
+  useGuideCrop?: boolean;
+};
+
+/** Escala, opcionalmente recorta al marco guía y devuelve imagen lista para orientar/escanear. */
+export function prepareCalifacilScanInput(
+  source: HTMLImageElement | HTMLCanvasElement,
+  opts?: PrepareCalifacilScanInputOptions
+): HTMLCanvasElement | null {
   const base = drawSourceToCanvas(source, 1400);
   if (!base) return null;
+  if (opts?.useGuideCrop === false) return base;
   return cropCanvasToCalifacilGuideOverlay(base) ?? base;
 }
+
+/** Opciones para {@link autoOrientCalifacilSheet}. */
+export type AutoOrientCalifacilSheetOptions = PrepareCalifacilScanInputOptions;
 
 function normalizeMinMaxInPlaceGray(gray: Uint8Array): void {
   let min = 255;
@@ -2206,10 +2223,11 @@ export function scanCalifacilOmrSheetWithMeta(
  */
 export function autoOrientCalifacilSheet(
   source: HTMLImageElement | HTMLCanvasElement,
-  columns: number
+  columns: number,
+  opts?: AutoOrientCalifacilSheetOptions
 ): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
-  const base = prepareCalifacilScanInput(source);
+  const base = prepareCalifacilScanInput(source, opts);
   if (!base) return null;
 
   const candidates: Array<0 | 90 | 180 | 270> = [0, 90, 180, 270];

@@ -212,6 +212,23 @@ export default function CalificarPage() {
     [currentChunk, examVirtualKeyByQuestionId]
   );
 
+  /** Comparación borrador vs clave automática solo en la hoja actual (p. ej. 4/10 · 40%). */
+  const chunkKeyComparison = useMemo(() => {
+    let correct = 0;
+    const total = currentChunk.length;
+    for (let i = 0; i < currentChunk.length; i++) {
+      const q = currentChunk[i];
+      const draftText = draftSelections[q.id]?.trim() ?? '';
+      const expectedText = examVirtualKeyByQuestionId[q.id]?.trim() ?? '';
+      if (!expectedText) continue;
+      const pi = resolveOptionIndexFromValue(q.options ?? [], draftText);
+      const ei = resolveOptionIndexFromValue(q.options ?? [], expectedText);
+      if (pi !== null && ei !== null && pi === ei) correct++;
+    }
+    const pct = total > 0 ? calculatePercentage(correct, total) : 0;
+    return { correct, total, pct };
+  }, [currentChunk, draftSelections, examVirtualKeyByQuestionId]);
+
   const sortedStudents = useMemo(
     () => [...students].sort((a, b) => a.name.localeCompare(b.name, 'es')),
     [students]
@@ -410,7 +427,9 @@ export default function CalificarPage() {
         toast.error('No hay preguntas para escanear en esta hoja.');
         return { success: false };
       }
-      const oriented = autoOrientCalifacilSheet(source, omrCols) ?? source;
+      /** Archivo subido ≠ vista de cámara: sin recorte “marco naranja” para alinear mejor página completa. */
+      const oriented =
+        autoOrientCalifacilSheet(source, omrCols, { useGuideCrop: false }) ?? source;
       const examCanvas =
         oriented instanceof HTMLCanvasElement
           ? oriented
@@ -1876,6 +1895,26 @@ export default function CalificarPage() {
                     ) : null}
                   </div>
                 </div>
+                {canGradeStudents && currentChunk.length > 0 ? (
+                  <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/95 px-3 py-2 text-center">
+                    <div className="text-sm font-semibold text-emerald-950">
+                      <span className="tabular-nums">{chunkKeyComparison.correct}</span>
+                      <span className="text-emerald-800"> / </span>
+                      <span className="tabular-nums">{chunkKeyComparison.total}</span>
+                      <span className="mx-1.5 text-emerald-700">·</span>
+                      <span className={`tabular-nums ${getGradeColor(chunkKeyComparison.pct)}`}>
+                        {chunkKeyComparison.pct}%
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] leading-snug text-emerald-900/85">
+                      Coincidencias con la clave del examen en esta hoja. En la foto:{' '}
+                      <span className="font-medium text-green-700">verde</span> = acierto,{' '}
+                      <span className="font-medium text-red-600">rojo</span> = opción leída incorrecta,{' '}
+                      <span className="font-medium text-orange-700">naranja</span> = respuesta correcta esperada,
+                      azul = casillas vacías detectadas.
+                    </p>
+                  </div>
+                ) : null}
                 {canGradeStudents ? (
                   <div className="rounded-md border bg-white px-3 py-2">
                     <div className="mb-1 flex items-center justify-between text-xs text-gray-600">
@@ -1916,8 +1955,9 @@ export default function CalificarPage() {
                   </AlertDescription>
                 </Alert>
                 <p className="text-sm font-medium text-gray-800">
-                  Confirma o corrige cada respuesta antes de guardar. Verde = opción leída; azul = resto de
-                  casillas detectadas. Con buena luz y casillas bien rellenas la lectura suele coincidir.
+                  Confirma o corrige cada respuesta antes de guardar. Con clave completa: verde = acierto vs
+                  clave, rojo = lectura distinta de la correcta, naranja = opción correcta esperada, azul =
+                  casillas vacías en la imagen.
                 </p>
                 {currentChunk.map((q, idx) => {
                   const globalNum = sheetIndex * 10 + idx + 1;
