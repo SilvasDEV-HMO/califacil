@@ -813,64 +813,6 @@ export default function CalificarPage() {
     }
   };
 
-  const startSheetCapture = useCallback(() => {
-    const canStart =
-      Boolean(examId) &&
-      Boolean(exam) &&
-      !examLoading &&
-      supportsCalifacil &&
-      questions.length > 0 &&
-      questions.length <= maxQuestions &&
-      virtualKey.issues.length === 0 &&
-      canGradeStudents &&
-      sortedStudents.some((s) => s.id === selectedStudentId);
-    if (!canStart) {
-      toast.error(
-        !canGradeStudents
-          ? 'No se puede calificar: este examen no tiene clave automática válida en todos sus reactivos.'
-          : 'Selecciona un alumno válido para iniciar la captura.'
-      );
-      return;
-    }
-    resumeScanAudioContext();
-    stopLiveCamera();
-    flushSync(() => {
-      setPhase('capturar');
-      setSheetIndex(0);
-      setConfirmedByQuestionId({});
-      setDraftSelections({});
-      setLiveDraftSelections({});
-      setLiveResolvedCount(0);
-      setLiveStatus(
-        isMobile
-          ? 'Abre la cámara para detectar respuestas en vivo.'
-          : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
-      );
-      setPreviewUrl((u) => {
-        if (u) URL.revokeObjectURL(u);
-        return null;
-      });
-      setReviewOmrGeometry(null);
-      setReviewHumanAck(false);
-    });
-    if (isMobile) {
-      void startLiveCameraRef.current?.({ skipPhaseGuard: true });
-    }
-  }, [
-    exam,
-    examId,
-    examLoading,
-    isMobile,
-    maxQuestions,
-    canGradeStudents,
-    questions.length,
-    selectedStudentId,
-    sortedStudents,
-    stopLiveCamera,
-    supportsCalifacil,
-    virtualKey.issues.length,
-  ]);
-
   const handleGalleryFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -1618,15 +1560,17 @@ export default function CalificarPage() {
                         <p className="mb-2 text-xs font-medium text-gray-700">
                           Hoja {chunkIdx + 1} ({chunk.length} reactivos)
                         </p>
-                        <div className="overflow-x-auto">
-                          <table className="min-w-[20rem] table-fixed border-collapse text-xs">
+                        <div className="w-full">
+                          <table className="w-full table-fixed border-collapse text-[10px] sm:text-xs">
                             <thead>
                               <tr>
-                                <th className="w-12 border border-gray-300 bg-gray-100 px-2 py-1 text-right">N.º</th>
+                                <th className="w-8 border border-gray-300 bg-gray-100 px-1 py-1 text-right sm:w-12 sm:px-2">
+                                  N.º
+                                </th>
                                 {Array.from({ length: omrCols }, (_, c) => (
                                   <th
                                     key={`head-${chunkIdx}-${c}`}
-                                    className="border border-gray-300 bg-gray-100 px-2 py-1 text-center"
+                                    className="border border-gray-300 bg-gray-100 px-1 py-1 text-center sm:px-2"
                                   >
                                     {String.fromCharCode(65 + c)}
                                   </th>
@@ -1640,13 +1584,16 @@ export default function CalificarPage() {
                                 const qNum = chunkIdx * 10 + rowIdx + 1;
                                 return (
                                   <tr key={q.id}>
-                                    <td className="border border-gray-300 bg-gray-50 px-2 py-1 text-right font-semibold">
+                                    <td className="border border-gray-300 bg-gray-50 px-1 py-1 text-right font-semibold sm:px-2">
                                       {qNum}
                                     </td>
                                     {Array.from({ length: omrCols }, (_, c) => (
-                                      <td key={`${q.id}-${c}`} className="border border-gray-300 px-2 py-1 text-center">
+                                      <td
+                                        key={`${q.id}-${c}`}
+                                        className="border border-gray-300 px-1 py-1 text-center sm:px-2"
+                                      >
                                         <span
-                                          className={`inline-block h-4 w-4 rounded-[2px] border ${
+                                          className={`inline-block h-3 w-3 rounded-[2px] border sm:h-4 sm:w-4 ${
                                             c === expectedIndex
                                               ? 'border-orange-600 bg-orange-500'
                                               : 'border-gray-500 bg-white'
@@ -1690,14 +1637,6 @@ export default function CalificarPage() {
                 </p>
               </div>
 
-              <Button
-                type="button"
-                className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
-                disabled={phase === 'guardando' || !canGradeStudents || !selectedStudentId}
-                onClick={startSheetCapture}
-              >
-                {isMobile ? 'Escanear con la cámara' : 'Elegir imagen y calificar'}
-              </Button>
             </>
           )}
 
