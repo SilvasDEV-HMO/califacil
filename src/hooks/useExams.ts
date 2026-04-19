@@ -101,7 +101,11 @@ export function useExam(examId: string | undefined) {
   const [error, setError] = useState<string | null>(null);
 
   const fetchExam = useCallback(async () => {
-    if (!examId) return;
+    if (!examId) {
+      setExam(null);
+      setLoading(false);
+      return;
+    }
     
     try {
       setLoading(true);

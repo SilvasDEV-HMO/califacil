@@ -54,6 +54,7 @@ import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { CALIFACIL_VISION_POLICY } from '@/lib/califacilVisionPolicy';
 import {
+  playAutoCaptureClickSound,
   playScanCompleteChime,
   resumeScanAudioContext,
   startScanningHum,
@@ -67,6 +68,8 @@ type GradeMode = 'student' | 'master_key';
 const MIN_AUTO_READ_RATIO = 0.9;
 /** Fotogramas consecutivos con lectura estable antes de fijar borrador (consenso en vivo). */
 const STABLE_PARTIAL_TICKS = 3;
+/** Fotogramas consecutivos con hoja completa para disparar captura automática. */
+const STABLE_FULL_TICKS = 2;
 /** Si más filas ambiguas que esto, aviso explícito en revisión. */
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
 
@@ -86,16 +89,6 @@ function draftSelectionsToColumnPicks(
   return out;
 }
 
-/** Letra de inciso (A–E) a partir del texto de opción elegido; vacío si no hay lectura. */
-function optionAnswerToLetter(q: Question, answerText: string): string {
-  const t = answerText.trim();
-  if (!t) return '';
-  const opts = q.options ?? [];
-  const idx = opts.findIndex((o) => o.trim() === t);
-  if (idx < 0) return '';
-  return String.fromCharCode(65 + idx);
-}
-
 async function blobToImage(blob: Blob): Promise<HTMLImageElement> {
   const url = URL.createObjectURL(blob);
   try {
@@ -113,6 +106,10 @@ async function blobToImage(blob: Blob): Promise<HTMLImageElement> {
 
 function canvasToDataUrl(canvas: HTMLCanvasElement, quality = 0.9): string {
   return canvas.toDataURL('image/jpeg', quality);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export default function CalificarPage() {
@@ -152,11 +149,16 @@ export default function CalificarPage() {
   const liveTickRef = useRef<number | null>(null);
   const liveBusyRef = useRef(false);
   const stablePartialTicksRef = useRef(0);
+  const stableFullTicksRef = useRef(0);
+  const autoFinalizeInProgressRef = useRef(false);
   /** Respuestas ya capturadas en vivo por id de pregunta; no se sobrescriben hasta «Escanear otra vez». */
   const liveLockedAnswersRef = useRef<Record<string, string>>({});
   /** Evita repetir el sonido de «hoja completa» en cada fotograma. */
   const liveCompleteSoundPlayedRef = useRef(false);
   const submitAllRef = useRef<(merged: Record<string, string>) => Promise<void>>(async () => {});
+  const autoCaptureAndCompareRef = useRef<
+    (merged: Record<string, string>, sourceForKey?: HTMLCanvasElement | HTMLImageElement) => Promise<void>
+  >(async () => {});
   const scanBusyRef = useRef(false);
   const startingCameraRef = useRef(false);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -168,6 +170,8 @@ export default function CalificarPage() {
   const [keyImageUploading, setKeyImageUploading] = useState(false);
   const [masterBlurOverlayUrl, setMasterBlurOverlayUrl] = useState<string | null>(null);
   const [overlayOpacity, setOverlayOpacity] = useState(55);
+  const [autoSnapshotUrl, setAutoSnapshotUrl] = useState<string | null>(null);
+  const [showAutoSnapshot, setShowAutoSnapshot] = useState(false);
 
   const [autoGradeDialogOpen, setAutoGradeDialogOpen] = useState(false);
   const [autoGradeStats, setAutoGradeStats] = useState<{
@@ -242,8 +246,52 @@ export default function CalificarPage() {
     }
   }, []);
 
+  const clearAutoSnapshot = useCallback(() => {
+    setShowAutoSnapshot(false);
+    setAutoSnapshotUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }, []);
+
+  const showAutoCaptureSnapshot = useCallback(
+    async (source: HTMLCanvasElement | HTMLImageElement) => {
+      const canvas = document.createElement('canvas');
+      const w =
+        source instanceof HTMLCanvasElement
+          ? source.width
+          : Math.max(1, Math.round(source.naturalWidth || source.width));
+      const h =
+        source instanceof HTMLCanvasElement
+          ? source.height
+          : Math.max(1, Math.round(source.naturalHeight || source.height));
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(source, 0, 0, w, h);
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9)
+      );
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      setAutoSnapshotUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+      setShowAutoSnapshot(true);
+      playAutoCaptureClickSound();
+      setLiveStatus('Captura automática realizada');
+      await sleep(500);
+      setShowAutoSnapshot(false);
+    },
+    []
+  );
+
   const resetLiveReadings = useCallback(() => {
     stablePartialTicksRef.current = 0;
+    stableFullTicksRef.current = 0;
+    autoFinalizeInProgressRef.current = false;
     liveLockedAnswersRef.current = {};
     liveCompleteSoundPlayedRef.current = false;
     stopScanningHum();
@@ -254,7 +302,8 @@ export default function CalificarPage() {
         ? 'Cámara activa. Encuadra solo la banda CaliFacil dentro del marco.'
         : 'Elige una imagen del recuadro CaliFacil para leer las respuestas.'
     );
-  }, [isMobile]);
+    clearAutoSnapshot();
+  }, [clearAutoSnapshot, isMobile]);
 
   const stopLiveCamera = useCallback(() => {
     stopScanningHum();
@@ -271,10 +320,13 @@ export default function CalificarPage() {
       videoRef.current.srcObject = null;
     }
     stablePartialTicksRef.current = 0;
+    stableFullTicksRef.current = 0;
+    autoFinalizeInProgressRef.current = false;
     setFlashSupported(false);
     setFlashOn(false);
     setCameraOpen(false);
-  }, [setTorchEnabled]);
+    clearAutoSnapshot();
+  }, [clearAutoSnapshot, setTorchEnabled]);
 
   const attachStreamToVideo = useCallback(async () => {
     const video = videoRef.current;
@@ -828,12 +880,26 @@ export default function CalificarPage() {
   ]);
 
   const uploadMasterKeyImage = useCallback(
-    async (sheetIdx: number, sourceUrl: string): Promise<boolean> => {
+    async (
+      sheetIdx: number,
+      source: string | HTMLCanvasElement | HTMLImageElement
+    ): Promise<boolean> => {
       if (!examId) return false;
       try {
         setKeyImageUploading(true);
-        const blob = await fetch(sourceUrl).then((r) => r.blob());
-        const img = await blobToImage(blob);
+        let img: HTMLImageElement;
+        if (typeof source === 'string') {
+          const blob = await fetch(source).then((r) => r.blob());
+          img = await blobToImage(blob);
+        } else if (source instanceof HTMLCanvasElement) {
+          img = await blobToImage(
+            await new Promise<Blob>((resolve, reject) => {
+              source.toBlob((b) => (b ? resolve(b) : reject(new Error('No se pudo serializar la imagen'))), 'image/jpeg', 0.92);
+            })
+          );
+        } else {
+          img = source;
+        }
         const w = Math.max(1, Math.round(img.naturalWidth || img.width));
         const h = Math.max(1, Math.round(img.naturalHeight || img.height));
 
@@ -1005,6 +1071,7 @@ export default function CalificarPage() {
           if (!isCalifacilExamSheetLikely(oriented, omrCols)) {
             stopScanningHum();
             stablePartialTicksRef.current = 0;
+            stableFullTicksRef.current = 0;
             const locksNoExam = liveLockedAnswersRef.current;
             const mergedNoExam: Record<string, string> = {};
             let resolvedNoExam = 0;
@@ -1065,7 +1132,7 @@ export default function CalificarPage() {
           const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
           if (mergedResolved >= chunk.length && chunk.length > 0) {
             setLiveStatus(
-              'Detección completa. Puedes mover la cámara; las lecturas se mantienen hasta «Escanear otra vez».'
+              'Detección completa. Capturando automáticamente...'
             );
           } else if (mergedResolved >= minResolved) {
             setLiveStatus(
@@ -1082,6 +1149,11 @@ export default function CalificarPage() {
           } else {
             stablePartialTicksRef.current = 0;
           }
+          if (mergedResolved >= chunk.length && chunk.length > 0) {
+            stableFullTicksRef.current += 1;
+          } else {
+            stableFullTicksRef.current = 0;
+          }
 
           if (stablePartialTicksRef.current >= STABLE_PARTIAL_TICKS && chunk.length > 0) {
             stablePartialTicksRef.current = 0;
@@ -1093,6 +1165,20 @@ export default function CalificarPage() {
               }
               return next;
             });
+          }
+
+          if (
+            stableFullTicksRef.current >= STABLE_FULL_TICKS &&
+            chunk.length > 0 &&
+            !scanBusyRef.current &&
+            !autoFinalizeInProgressRef.current
+          ) {
+            stableFullTicksRef.current = 0;
+            await showAutoCaptureSnapshot(oriented);
+            await autoCaptureAndCompareRef.current(
+              mergedLive,
+              gradeMode === 'master_key' ? oriented : undefined
+            );
           }
         } finally {
           liveBusyRef.current = false;
@@ -1116,7 +1202,9 @@ export default function CalificarPage() {
     mapRawToDraft,
     omrCols,
     phase,
+    gradeMode,
     resetLiveReadings,
+    showAutoCaptureSnapshot,
     setTorchEnabled,
     sheets,
     supportsCalifacil,
@@ -1129,7 +1217,10 @@ export default function CalificarPage() {
     void startLiveCamera();
   }, [isMobile, examId, exam, supportsCalifacil, cameraOpen, phase, scanBusy, startLiveCamera]);
 
-  const confirmCurrentSheet = async () => {
+  const confirmCurrentSheet = async (
+    autoSource?: HTMLCanvasElement | HTMLImageElement,
+    providedDraft?: Record<string, string>
+  ) => {
     if (!examId || !exam) {
       toast.error('Selecciona un examen antes de confirmar.');
       return;
@@ -1139,8 +1230,9 @@ export default function CalificarPage() {
       toast.error('No hay preguntas para esta hoja.');
       return;
     }
+    const effectiveDraft = providedDraft ?? draftSelections;
     for (const q of chunk) {
-      const v = draftSelections[q.id]?.trim() ?? '';
+      const v = effectiveDraft[q.id]?.trim() ?? '';
       if (!v) {
         toast.error(`Falta la respuesta de la pregunta ${questions.findIndex((x) => x.id === q.id) + 1}`);
         return;
@@ -1148,17 +1240,18 @@ export default function CalificarPage() {
     }
 
     if (gradeMode === 'master_key') {
-      if (!previewUrl) {
+      const sourceForUpload = autoSource ?? previewUrl;
+      if (!sourceForUpload) {
         toast.error('No hay foto de hoja para guardar como clave. Vuelve a escanear.');
         return;
       }
-      const ok = await uploadMasterKeyImage(sheetIndex, previewUrl);
+      const ok = await uploadMasterKeyImage(sheetIndex, sourceForUpload);
       if (!ok) return;
     }
 
     const mergedNow: Record<string, string> = { ...confirmedByQuestionId };
     for (const q of chunk) {
-      mergedNow[q.id] = draftSelections[q.id]!;
+      mergedNow[q.id] = effectiveDraft[q.id]!;
     }
     setConfirmedByQuestionId(mergedNow);
 
@@ -1182,6 +1275,22 @@ export default function CalificarPage() {
     }
 
     await submitAll(mergedNow);
+  };
+
+  const autoCaptureAndCompare = async (
+    mergedDraft: Record<string, string>,
+    sourceForKey?: HTMLCanvasElement | HTMLImageElement
+  ) => {
+    if (autoFinalizeInProgressRef.current) return;
+    autoFinalizeInProgressRef.current = true;
+    try {
+      setDraftSelections(mergedDraft);
+      setLiveDraftSelections(mergedDraft);
+      setLiveStatus('Hoja detectada y capturada automáticamente. Procesando...');
+      await confirmCurrentSheet(sourceForKey, mergedDraft);
+    } finally {
+      autoFinalizeInProgressRef.current = false;
+    }
   };
 
   const submitAll = async (merged: Record<string, string>) => {
@@ -1458,6 +1567,7 @@ export default function CalificarPage() {
   }, [isMobile, stopLiveCamera]);
 
   submitAllRef.current = submitAll;
+  autoCaptureAndCompareRef.current = autoCaptureAndCompare;
 
   const scanAgainInLive = () => {
     const chunk = sheets[sheetIndex] ?? [];
@@ -1759,6 +1869,19 @@ export default function CalificarPage() {
                             muted
                             className="aspect-[4/3] min-h-[12rem] w-full bg-black object-cover"
                           />
+                          {showAutoSnapshot && autoSnapshotUrl ? (
+                            <>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={autoSnapshotUrl}
+                                alt="Snapshot automático de captura"
+                                className="absolute inset-0 z-[2] h-full w-full object-cover"
+                              />
+                              <div className="absolute left-1/2 top-3 z-[3] -translate-x-1/2 rounded-full bg-green-600/95 px-3 py-1 text-xs font-semibold text-white shadow">
+                                Captura automática realizada
+                              </div>
+                            </>
+                          ) : null}
                           <div className="pointer-events-none absolute inset-0 bg-black/20" />
                           <div
                             className="pointer-events-none absolute left-1/2 top-[62%] w-[86%] -translate-x-1/2 -translate-y-1/2 rounded-lg border-[2.5px] border-orange-400/95 shadow-[0_0_0_9999px_rgba(0,0,0,0.2)]"
@@ -1798,20 +1921,6 @@ export default function CalificarPage() {
                           teléfono; con al menos {minResolvedForCurrentChunk} lecturas se copian al borrador
                           inferior. «Escanear otra vez» borra esta hoja y vuelve a leer desde cero.
                         </p>
-                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-                          {currentChunk.map((q, idx) => {
-                            const letter = optionAnswerToLetter(
-                              q,
-                              draftSelections[q.id] || liveDraftSelections[q.id] || ''
-                            );
-                            return (
-                              <div key={q.id} className="rounded-md border bg-white px-2 py-1 text-xs">
-                                <span className="font-medium">P{sheetIndex * 10 + idx + 1}</span>:{' '}
-                                <span className="font-semibold">{letter || '—'}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
                         <div className="flex flex-col gap-2">
                           <div className="flex gap-2">
                             <Button

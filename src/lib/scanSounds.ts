@@ -104,3 +104,36 @@ export function playScanCompleteChime(): void {
   beep(523.25, 90, 0.1, t);
   beep(659.25, 110, 0.11, t + 0.12);
 }
+
+/**
+ * Clic corto tipo obturador — va con el snapshot de “Captura automática realizada”.
+ * Ruido blanco filtrado para que no choque con el chime de hoja completa.
+ */
+export function playAutoCaptureClickSound(): void {
+  const ctx = getCtx();
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const duration = 0.045;
+  const sampleRate = ctx.sampleRate;
+  const n = Math.max(256, Math.floor(sampleRate * duration));
+  const buffer = ctx.createBuffer(1, n, sampleRate);
+  const ch = buffer.getChannelData(0);
+  const decay = (sampleRate * 0.007) ** 2;
+  for (let i = 0; i < n; i++) {
+    ch[i] = (Math.random() * 2 - 1) * Math.exp(-(i * i) / decay);
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(2200, t);
+  filter.Q.setValueAtTime(0.9, t);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.11, t);
+  g.gain.exponentialRampToValueAtTime(0.0008, t + duration);
+  src.connect(filter);
+  filter.connect(g);
+  g.connect(ctx.destination);
+  src.start(t);
+  src.stop(t + duration + 0.02);
+}
