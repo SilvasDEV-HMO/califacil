@@ -60,6 +60,7 @@ import {
 } from '@/lib/scanSounds';
 
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando';
+type GradeMode = 'student' | 'master_key';
 
 /** Umbral mínimo de reactivos leídos para fijar borrador y habilitar guardado en cámara en vivo. */
 const MIN_AUTO_READ_RATIO = 0.9;
@@ -103,6 +104,7 @@ export default function CalificarPage() {
   const [examId, setExamId] = useState<string>('');
   const { exam, loading: examLoading } = useExam(examId || undefined);
 
+  const [gradeMode, setGradeMode] = useState<GradeMode>('student');
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [students, setStudents] = useState<Student[]>([]);
   const [phase, setPhase] = useState<Phase>('elegir');
@@ -161,10 +163,23 @@ export default function CalificarPage() {
   const omrCols = califacilOmrColumnCount(questions);
   const supportsCalifacil = exam ? examSupportsCalifacilOmr(questions) : false;
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
-  const virtualKeyByQuestionId = useMemo(
-    () => new Map(virtualKey.rows.map((row) => [row.questionId, row])),
+  const virtualKeyAnswerByQuestionId = useMemo(
+    () => Object.fromEntries(virtualKey.rows.map((row) => [row.questionId, row.correctOption])),
     [virtualKey.rows]
   );
+  const teacherSheetKeyByQuestionId = useMemo<Record<string, string>>(() => {
+    const raw = exam?.answer_key_by_question;
+    if (!raw || typeof raw !== 'object') return {};
+    const out: Record<string, string> = {};
+    for (const [qid, v] of Object.entries(raw)) {
+      if (typeof v === 'string' && v.trim()) out[qid] = v.trim();
+    }
+    return out;
+  }, [exam?.answer_key_by_question]);
+  const usingTeacherSheetKey = exam?.answer_key_source === 'teacher_sheet';
+  const activeAnswerKeyByQuestionId = usingTeacherSheetKey
+    ? teacherSheetKeyByQuestionId
+    : virtualKeyAnswerByQuestionId;
   const sheets = useMemo(() => chunkQuestions(questions, 10), [questions]);
   const totalSheets = sheets.length;
   const currentChunk = sheets[sheetIndex] ?? [];
@@ -186,6 +201,11 @@ export default function CalificarPage() {
 
   const selectedStudentName =
     sortedStudents.find((s) => s.id === selectedStudentId)?.name ?? '';
+  const answeredByTeacherSheetCount = questions.filter(
+    (q) => Boolean(teacherSheetKeyByQuestionId[q.id]?.trim())
+  ).length;
+  const teacherSheetKeyComplete = questions.length > 0 && answeredByTeacherSheetCount === questions.length;
+  const canGradeStudents = usingTeacherSheetKey && teacherSheetKeyComplete;
 
   const setTorchEnabled = useCallback(async (enabled: boolean) => {
     const track = streamRef.current?.getVideoTracks?.()[0];
@@ -692,6 +712,11 @@ export default function CalificarPage() {
   }, [stopLiveCamera, isMobile]);
 
   const handleStudentChange = (studentId: string) => {
+    if (gradeMode !== 'student') return;
+    if (!canGradeStudents) {
+      toast.error('Primero captura y guarda la hoja clave del maestro para habilitar la calificación de alumnos.');
+      return;
+    }
     setSelectedStudentId(studentId);
     if (!studentId) return;
     const canAutoStart =
@@ -723,6 +748,60 @@ export default function CalificarPage() {
     setReviewOmrGeometry(null);
     setReviewHumanAck(false);
   };
+
+  const startSheetCapture = useCallback(() => {
+    const canStart =
+      Boolean(examId) &&
+      Boolean(exam) &&
+      !examLoading &&
+      supportsCalifacil &&
+      questions.length > 0 &&
+      questions.length <= maxQuestions &&
+      virtualKey.issues.length === 0 &&
+      (gradeMode === 'master_key' || (canGradeStudents && sortedStudents.some((s) => s.id === selectedStudentId)));
+    if (!canStart) {
+      toast.error(
+        gradeMode === 'master_key'
+          ? 'Elige un examen válido para capturar la hoja clave.'
+          : !canGradeStudents
+            ? 'Primero captura y guarda la hoja clave del maestro.'
+            : 'Selecciona un alumno válido para iniciar la captura.'
+      );
+      return;
+    }
+    stopLiveCamera();
+    setPhase('capturar');
+    setSheetIndex(0);
+    setConfirmedByQuestionId({});
+    setDraftSelections({});
+    setLiveDraftSelections({});
+    setLiveResolvedCount(0);
+    setLiveStatus(
+      isMobile
+        ? 'Abre la cámara para detectar respuestas en vivo.'
+        : 'En ordenador solo se importa imagen: elige una foto del recuadro CaliFacil.'
+    );
+    setPreviewUrl((u) => {
+      if (u) URL.revokeObjectURL(u);
+      return null;
+    });
+    setReviewOmrGeometry(null);
+    setReviewHumanAck(false);
+  }, [
+    exam,
+    examId,
+    examLoading,
+    gradeMode,
+    isMobile,
+    maxQuestions,
+    canGradeStudents,
+    questions.length,
+    selectedStudentId,
+    sortedStudents,
+    stopLiveCamera,
+    supportsCalifacil,
+    virtualKey.issues.length,
+  ]);
 
   const handleGalleryFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -962,55 +1041,74 @@ export default function CalificarPage() {
       }
     }
 
-    if (!selectedStudentId || !sortedStudents.some((s) => s.id === selectedStudentId)) {
+    if (gradeMode === 'student' && (!selectedStudentId || !sortedStudents.some((s) => s.id === selectedStudentId))) {
       toast.error('Alumno no válido. Vuelve a seleccionar en la primera pantalla.');
+      return;
+    }
+    if (gradeMode === 'student' && !canGradeStudents) {
+      toast.error('Calificación bloqueada: primero captura y guarda la hoja clave del maestro.');
       return;
     }
 
     setPhase('guardando');
 
     try {
-      const studentId = selectedStudentId;
+      if (gradeMode === 'master_key') {
+        const teacherKeyPayload = questions.reduce<Record<string, string>>((acc, q) => {
+          const answerText = (merged[q.id] ?? '').trim();
+          if (answerText) acc[q.id] = answerText;
+          return acc;
+        }, {});
+        const { error: keyError } = await supabase
+          .from('exams')
+          .update({
+            answer_key_source: 'teacher_sheet',
+            answer_key_by_question: teacherKeyPayload,
+          })
+          .eq('id', examId);
+        if (keyError) throw keyError;
+        toast.success('Hoja clave guardada. Las próximas calificaciones se compararán contra esta clave.');
+      } else {
+        const studentId = selectedStudentId;
+        const effectiveKey = activeAnswerKeyByQuestionId;
+        const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
+        const mcTotal = mcQuestions.length;
 
-      let correctCount = 0;
-      const rows = questions.map((question: Question) => {
-        const answerText = (merged[question.id] ?? '').trim();
-        const key = virtualKeyByQuestionId.get(question.id);
-        const answerIdx = key ? key.options.findIndex((opt) => opt === answerText) : -1;
-        const isCorrect =
-          question.type === 'multiple_choice'
-            ? key
-              ? answerIdx === key.correctIndex
-              : false
-            : null;
-        if (isCorrect) correctCount++;
+        let correctCount = 0;
+        const rows = questions.map((question: Question) => {
+          const answerText = (merged[question.id] ?? '').trim();
+          const expected = (effectiveKey[question.id] ?? '').trim();
+          const isCorrect =
+            question.type === 'multiple_choice' ? Boolean(expected) && answerText === expected : null;
+          if (isCorrect) correctCount++;
 
-        return {
-          exam_id: examId,
-          student_id: studentId,
-          question_id: question.id,
-          answer_text: answerText,
-          is_correct: isCorrect,
-          score: isCorrect ? 1 : 0,
-        };
-      });
+          return {
+            exam_id: examId,
+            student_id: studentId,
+            question_id: question.id,
+            answer_text: answerText,
+            is_correct: isCorrect,
+            score: isCorrect ? 1 : 0,
+          };
+        });
 
-      const { error: answersError } = await supabase.from('answers').upsert(rows, {
-        onConflict: 'exam_id,student_id,question_id',
-      });
-      if (answersError) throw answersError;
+        const { error: answersError } = await supabase.from('answers').upsert(rows, {
+          onConflict: 'exam_id,student_id,question_id',
+        });
+        if (answersError) throw answersError;
 
-      const mcTotal = virtualKey.rows.length;
-      const pct = calculatePercentage(correctCount, mcTotal);
-      const wrong = Math.max(0, mcTotal - correctCount);
-      setAutoGradeStats({
-        pct,
-        correct: correctCount,
-        wrong,
-        total: mcTotal,
-      });
-      setAutoGradeDialogOpen(true);
-      toast.success('Calificación guardada.');
+        const pct = calculatePercentage(correctCount, mcTotal);
+        const wrong = Math.max(0, mcTotal - correctCount);
+        setAutoGradeStats({
+          pct,
+          correct: correctCount,
+          wrong,
+          total: mcTotal,
+        });
+        setAutoGradeDialogOpen(true);
+        toast.success('Calificación guardada.');
+      }
+
       stopLiveCamera();
       setPhase('elegir');
       setSheetIndex(0);
@@ -1029,8 +1127,14 @@ export default function CalificarPage() {
         err && typeof err === 'object' && 'message' in err
           ? String((err as { message: string }).message)
           : '';
+      const isMissingKeyColumn =
+        msg.includes('answer_key_source') || msg.includes('answer_key_by_question');
       toast.error('No se pudo guardar', {
-        description: msg ? toSpanishAuthMessage(msg) : 'Revisa tu conexión y permisos.',
+        description: isMissingKeyColumn
+          ? 'Falta actualizar la base de datos para hoja clave del maestro. Ejecuta la migración más reciente y vuelve a intentar.'
+          : msg
+            ? toSpanishAuthMessage(msg)
+            : 'Revisa tu conexión y permisos.',
       });
       setPhase('revisar_hoja');
     }
@@ -1276,10 +1380,9 @@ export default function CalificarPage() {
 
       <Card>
         <CardHeader className="space-y-1 pb-2 sm:pb-3">
-          <CardTitle className="text-base sm:text-lg">Examen y alumno</CardTitle>
+          <CardTitle className="text-base sm:text-lg">Examen y modo de calificación</CardTitle>
           <CardDescription className="text-xs sm:text-sm">
-            El examen debe estar publicado, impreso con la zona CaliFacil y ser solo opción múltiple
-            (2–5 opciones).
+            Captura una hoja clave del maestro y luego califica alumnos por comparación con esa clave.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 sm:space-y-4">
@@ -1336,26 +1439,95 @@ export default function CalificarPage() {
           )}
 
           <div className="space-y-2">
-            <Label htmlFor="calif-alumno">Alumno</Label>
-            <StudentCombobox
-              id="calif-alumno"
-              students={sortedStudents}
-              value={selectedStudentId}
-              onValueChange={handleStudentChange}
-              disabled={phase === 'guardando'}
-              placeholder="Busca y elige al alumno"
-              searchPlaceholder="Escribe para buscar…"
-              emptyText="Ningún alumno coincide."
-              noStudentsText={
-                exam && !exam.group_id
-                  ? 'Este examen no tiene grupo asignado. Asigna un grupo al examen y registra alumnos en Grupos.'
-                  : undefined
-              }
-            />
-            <p className="text-xs text-gray-500">
-              Solo puedes calificar a alumnos que estén en la lista del grupo del examen.
-            </p>
+            <Label>Modo</Label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Button
+                type="button"
+                variant={gradeMode === 'master_key' ? 'default' : 'outline'}
+                className={gradeMode === 'master_key' ? 'bg-orange-600 hover:bg-orange-700' : ''}
+                disabled={phase === 'guardando'}
+                onClick={() => {
+                  setGradeMode('master_key');
+                  setSelectedStudentId('');
+                  resetFlow();
+                }}
+              >
+                Capturar hoja clave
+              </Button>
+              <Button
+                type="button"
+                variant={gradeMode === 'student' ? 'default' : 'outline'}
+                className={gradeMode === 'student' ? 'bg-orange-600 hover:bg-orange-700' : ''}
+                disabled={phase === 'guardando'}
+                onClick={() => {
+                  if (!canGradeStudents) {
+                    toast.error('Primero captura y guarda la hoja clave del maestro.');
+                    setGradeMode('master_key');
+                    return;
+                  }
+                  setGradeMode('student');
+                }}
+              >
+                Calificar alumno
+              </Button>
+            </div>
           </div>
+
+          {exam && supportsCalifacil && (
+            <div
+              className={`rounded-lg border p-3 text-sm ${
+                usingTeacherSheetKey && teacherSheetKeyComplete
+                  ? 'border-green-200 bg-green-50 text-green-900'
+                  : 'border-amber-200 bg-amber-50 text-amber-900'
+              }`}
+            >
+              {usingTeacherSheetKey && teacherSheetKeyComplete ? (
+                <>Clave activa: hoja del maestro ({answeredByTeacherSheetCount}/{questions.length} reactivos).</>
+              ) : (
+                <>
+                  Aún no hay hoja clave del maestro completa. La calificación de alumnos está bloqueada hasta
+                  capturarla y guardarla.
+                </>
+              )}
+            </div>
+          )}
+
+          {gradeMode === 'student' && (
+            <div className="space-y-2">
+              <Label htmlFor="calif-alumno">Alumno</Label>
+              <StudentCombobox
+                id="calif-alumno"
+                students={sortedStudents}
+                value={selectedStudentId}
+                onValueChange={handleStudentChange}
+                disabled={phase === 'guardando' || !canGradeStudents}
+                placeholder="Busca y elige al alumno"
+                searchPlaceholder="Escribe para buscar…"
+                emptyText="Ningún alumno coincide."
+                noStudentsText={
+                  exam && !exam.group_id
+                    ? 'Este examen no tiene grupo asignado. Asigna un grupo al examen y registra alumnos en Grupos.'
+                    : undefined
+                }
+              />
+              <p className="text-xs text-gray-500">
+                {canGradeStudents
+                  ? 'Solo puedes calificar a alumnos que estén en la lista del grupo del examen.'
+                  : 'Bloqueado: captura primero la hoja clave del maestro para habilitar esta sección.'}
+              </p>
+            </div>
+          )}
+
+          {gradeMode === 'master_key' && exam && supportsCalifacil && (
+            <Button
+              type="button"
+              className="w-full bg-orange-600 hover:bg-orange-700 sm:w-auto"
+              disabled={phase === 'guardando'}
+              onClick={startSheetCapture}
+            >
+              Capturar hoja clave del maestro
+            </Button>
+          )}
 
         </CardContent>
       </Card>
@@ -1364,7 +1536,7 @@ export default function CalificarPage() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">
-              Hoja {sheetIndex + 1} de {totalSheets}
+              {gradeMode === 'master_key' ? 'Hoja clave' : 'Hoja de alumno'} {sheetIndex + 1} de {totalSheets}
             </CardTitle>
             <CardDescription>
               Preguntas {sheetIndex * 10 + 1}–{sheetIndex * 10 + currentChunk.length} ·{' '}
@@ -1485,10 +1657,19 @@ export default function CalificarPage() {
                             type="button"
                             variant="secondary"
                             className="w-full"
-                            onClick={switchToAnotherStudentScan}
+                            onClick={
+                              gradeMode === 'master_key'
+                                ? () => {
+                                    resetFlow();
+                                    setPhase('elegir');
+                                  }
+                                : switchToAnotherStudentScan
+                            }
                             disabled={scanBusy}
                           >
-                            Escanear examen de otro alumno
+                            {gradeMode === 'master_key'
+                              ? 'Volver a configuración'
+                              : 'Escanear examen de otro alumno'}
                           </Button>
                         </div>
                       </div>
@@ -1636,7 +1817,7 @@ export default function CalificarPage() {
                     disabled={!reviewHumanAck}
                     onClick={confirmCurrentSheet}
                   >
-                    Guardar calificación
+                    {gradeMode === 'master_key' ? 'Guardar hoja clave' : 'Guardar calificación'}
                   </Button>
                 </div>
               </div>

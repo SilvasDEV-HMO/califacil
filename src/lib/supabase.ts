@@ -59,6 +59,8 @@ export type Database = {
           title: string;
           description: string | null;
           qr_code: string | null;
+          answer_key_source: 'exam' | 'teacher_sheet';
+          answer_key_by_question: Record<string, string> | null;
           status: 'draft' | 'published' | 'closed';
           created_at: string;
         };
@@ -69,6 +71,8 @@ export type Database = {
           title: string;
           description?: string | null;
           qr_code?: string | null;
+          answer_key_source?: 'exam' | 'teacher_sheet';
+          answer_key_by_question?: Record<string, string> | null;
           status?: 'draft' | 'published' | 'closed';
           created_at?: string;
         };
@@ -79,6 +83,8 @@ export type Database = {
           title?: string;
           description?: string | null;
           qr_code?: string | null;
+          answer_key_source?: 'exam' | 'teacher_sheet';
+          answer_key_by_question?: Record<string, string> | null;
           status?: 'draft' | 'published' | 'closed';
           created_at?: string;
         };
