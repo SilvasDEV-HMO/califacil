@@ -8,6 +8,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogCancel,
+} from '@/components/ui/alert-dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
   Users, 
@@ -201,6 +210,10 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
   const [newStudentName, setNewStudentName] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [studentPendingDelete, setStudentPendingDelete] = useState<{ id: string; name: string } | null>(
+    null
+  );
+  const [isDeletingStudent, setIsDeletingStudent] = useState(false);
 
   const handleAddStudent = async () => {
     if (!newStudentName.trim()) {
@@ -258,8 +271,24 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
     s.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const handleConfirmDeleteStudent = async () => {
+    if (!studentPendingDelete) return;
+    setIsDeletingStudent(true);
+    const ok = await deleteStudent(studentPendingDelete.id);
+    setIsDeletingStudent(false);
+    setStudentPendingDelete(null);
+    if (ok) {
+      toast.success('Estudiante eliminado');
+    } else {
+      toast.error('No se pudo eliminar el estudiante', {
+        description: toSpanishAuthMessage(error || ''),
+      });
+    }
+  };
+
   return (
-    <Card>
+    <>
+      <Card>
       <CardHeader>
         <CardTitle>Estudiantes - {groupName}</CardTitle>
         <CardDescription>
@@ -364,7 +393,9 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
                   variant="ghost"
                   size="sm"
                   className="shrink-0 text-red-500 hover:bg-red-50 hover:text-red-700"
-                  onClick={() => deleteStudent(student.id)}
+                  type="button"
+                  aria-label={`Eliminar a ${student.name}`}
+                  onClick={() => setStudentPendingDelete({ id: student.id, name: student.name })}
                 >
                   <Trash2 className="w-4 h-4" />
                 </Button>
@@ -374,5 +405,49 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
         )}
       </CardContent>
     </Card>
+
+      <AlertDialog
+        open={!!studentPendingDelete}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingStudent) setStudentPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent className="gap-5 rounded-xl border border-gray-200 bg-white p-6 shadow-lg sm:max-w-md">
+          <AlertDialogHeader className="gap-2 text-left">
+            <AlertDialogTitle className="text-lg font-semibold text-gray-900">
+              ¿Eliminar estudiante?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-sm leading-relaxed text-gray-600">
+              ¿Estás seguro de que deseas eliminar a{' '}
+              <span className="font-medium text-gray-900">
+                {studentPendingDelete?.name}
+              </span>
+              ? Esta acción no se puede deshacer.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:gap-2">
+            <AlertDialogCancel
+              type="button"
+              className="mt-0 rounded-lg border-gray-200 bg-white hover:bg-gray-50"
+              disabled={isDeletingStudent}
+            >
+              Cancelar
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              className="rounded-lg bg-red-600 text-white hover:bg-red-700"
+              disabled={isDeletingStudent}
+              onClick={handleConfirmDeleteStudent}
+            >
+              {isDeletingStudent ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                'Eliminar'
+              )}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

@@ -9,9 +9,8 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { 
-  ArrowLeft, 
-  Download, 
-  FileSpreadsheet, 
+  ArrowLeft,
+  FileSpreadsheet,
   FileText,
   Loader2,
   Users,
@@ -72,6 +71,36 @@ type StudentQuestionBreakdown = {
   correctAnswer: string;
   isCorrect: boolean | null;
 };
+
+function buildStudentQuestionBreakdownRows(result: StudentResult, questions: Question[]): StudentQuestionBreakdown[] {
+  return questions.map((q, idx) => {
+    const answer = result.answers.find((a) => a.question_id === q.id);
+    const studentAnswer = answer?.answer_text ?? '';
+    if (q.type === 'multiple_choice') {
+      const correctAnswer = q.correct_answer ?? '';
+      return {
+        questionId: q.id,
+        questionNumber: idx + 1,
+        questionText: q.text,
+        studentAnswer,
+        correctAnswer,
+        isCorrect: isMultipleChoiceAnswerCorrect(q.options, studentAnswer, correctAnswer),
+      };
+    }
+    return {
+      questionId: q.id,
+      questionNumber: idx + 1,
+      questionText: q.text,
+      studentAnswer,
+      correctAnswer: q.correct_answer ?? '',
+      isCorrect: answer?.is_correct ?? null,
+    };
+  });
+}
+
+function sanitizeExportFilenameBase(title: string): string {
+  return title.replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80) || 'examen';
+}
 
 export default function ExamResultsPage() {
   const params = useParams();
@@ -227,52 +256,253 @@ export default function ExamResultsPage() {
   }, [selectedStudentBreakdownId]);
 
   const exportToExcel = () => {
+    if (!exam) return;
     import('xlsx').then((XLSX) => {
-      const data = studentResults.map(result => ({
-        'Estudiante': result.studentName,
-        'Puntaje': result.totalScore,
-        'Máximo': result.maxScore,
-        'Porcentaje': `${result.percentage}%`,
-        'Calificación': getGradeLabel(result.percentage),
-        'Fecha': formatDate(result.submittedAt),
-      }));
-
-      const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Resultados');
-      XLSX.writeFile(wb, `resultados_${exam?.title || 'examen'}.xlsx`);
-      toast.success('Resultados exportados a Excel');
+      const base = sanitizeExportFilenameBase(exam.title);
+
+      const estudiantesSheet = XLSX.utils.json_to_sheet(
+        studentResults.map((result) => ({
+          Estudiante: result.studentName,
+          Puntaje: result.totalScore,
+          Máximo: result.maxScore,
+          Porcentaje: `${result.percentage}%`,
+          Calificación: getGradeLabel(result.percentage),
+          Fecha: formatDate(result.submittedAt),
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, estudiantesSheet, 'Estudiantes');
+
+      const distribSheet = XLSX.utils.json_to_sheet(
+        gradeDistribution.map((d) => ({
+          'Rango %': d.range,
+          Etiqueta: d.label,
+          Estudiantes: d.count,
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, distribSheet, 'Distribución');
+
+      const reactivosSheet = XLSX.utils.json_to_sheet(
+        questionAnalysis.map((a, i) => ({
+          '#': i + 1,
+          Pregunta: a.question.text,
+          Correctas: a.correctAnswers,
+          Incorrectas: a.incorrectAnswers,
+          'En blanco': a.blankAnswers,
+          'Total respuestas': a.totalAnswers,
+          '% aciertos': a.percentageCorrect,
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, reactivosSheet, 'Reactivos');
+
+      const detalleRows: Record<string, string | number>[] = [];
+      for (const result of studentResults) {
+        for (const row of buildStudentQuestionBreakdownRows(result, exam.questions)) {
+          detalleRows.push({
+            Estudiante: result.studentName,
+            '#': row.questionNumber,
+            Enunciado: row.questionText,
+            'Respuesta alumno': row.studentAnswer || 'Sin respuesta',
+            'Respuesta correcta': row.correctAnswer || '—',
+            Estado:
+              row.isCorrect === true
+                ? 'Correcta'
+                : row.isCorrect === false
+                  ? 'Incorrecta'
+                  : 'No eval.',
+          });
+        }
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalleRows), 'Detalle por pregunta');
+
+      const distrRows: Record<string, string | number>[] = [];
+      questionAnalysis.forEach((a, qi) => {
+        for (const oc of a.optionCounts) {
+          const pct = a.totalAnswers ? Math.round((oc.count / a.totalAnswers) * 100) : 0;
+          distrRows.push({
+            Reactivo: qi + 1,
+            Pregunta: a.question.text,
+            Opción: oc.label,
+            Cantidad: oc.count,
+            '% del total': pct,
+            'Es correcta': oc.isCorrectOption ? 'Sí' : 'No',
+          });
+        }
+      });
+      if (distrRows.length > 0) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(distrRows), 'Distractores');
+      }
+
+      XLSX.writeFile(wb, `resultados_${base}.xlsx`);
+      toast.success('Resultados exportados a Excel (todas las secciones)');
     });
   };
 
   const exportToPDF = () => {
+    if (!exam) return;
     import('jspdf').then(({ jsPDF }) => {
-      import('jspdf-autotable').then((autoTable) => {
+      import('jspdf-autotable').then(() => {
         const doc = new jsPDF();
-        
+        const margin = 14;
+        const base = sanitizeExportFilenameBase(exam.title);
+
         doc.setFontSize(18);
-        doc.text(`Resultados: ${exam?.title || 'Examen'}`, 14, 20);
-        
-        doc.setFontSize(12);
-        doc.text(`Total de estudiantes: ${studentResults.length}`, 14, 30);
-        doc.text(`Promedio general: ${(studentResults.reduce((sum, r) => sum + r.percentage, 0) / studentResults.length || 0).toFixed(1)}%`, 14, 38);
+        doc.text(`Resultados: ${exam.title}`, margin, 20);
 
-        const data = studentResults.map(result => [
-          result.studentName,
-          `${result.totalScore}/${result.maxScore}`,
-          `${result.percentage}%`,
-          getGradeLabel(result.percentage),
-          formatDate(result.submittedAt),
-        ]);
+        doc.setFontSize(10);
+        const approved = studentResults.filter((r) => r.percentage >= 60).length;
+        const failed = studentResults.filter((r) => r.percentage < 60).length;
+        const avg =
+          studentResults.length > 0
+            ? (
+                studentResults.reduce((sum, r) => sum + r.percentage, 0) / studentResults.length
+              ).toFixed(1)
+            : '0';
 
+        doc.text(
+          `Estudiantes: ${studentResults.length}  ·  Promedio: ${avg}%  ·  Aprobados: ${approved}  ·  Reprobados: ${failed}`,
+          margin,
+          30
+        );
+
+        let nextY = 44;
+
+        const section = (title: string) => {
+          nextY += 8;
+          if (nextY > 270) {
+            doc.addPage();
+            nextY = 20;
+          }
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.text(title, margin, nextY);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9);
+          nextY += 5;
+        };
+
+        section('Estudiantes — resultados globales');
         (doc as any).autoTable({
-          head: [['Estudiante', 'Puntaje', 'Porcentaje', 'Calificación', 'Fecha']],
-          body: data,
-          startY: 45,
+          head: [['Estudiante', 'Puntaje', '%', 'Calificación', 'Fecha']],
+          body: studentResults.map((result) => [
+            result.studentName,
+            `${result.totalScore}/${result.maxScore}`,
+            `${result.percentage}%`,
+            getGradeLabel(result.percentage),
+            formatDate(result.submittedAt),
+          ]),
+          startY: nextY,
+          margin: { left: margin, right: margin },
+          styles: { fontSize: 8, cellPadding: 2 },
+        });
+        nextY = (doc as any).lastAutoTable.finalY + 10;
+
+        section('Distribución de calificaciones');
+        (doc as any).autoTable({
+          head: [['Rango %', 'Etiqueta', 'Estudiantes']],
+          body: gradeDistribution.map((d) => [d.range, d.label, String(d.count)]),
+          startY: nextY,
+          margin: { left: margin, right: margin },
+          styles: { fontSize: 8, cellPadding: 2 },
+        });
+        nextY = (doc as any).lastAutoTable.finalY + 10;
+
+        section('Reactivos (análisis por pregunta)');
+        (doc as any).autoTable({
+          head: [['#', 'Resumen pregunta', 'OK', 'Mal', 'Blanco', 'N', '% aciertos']],
+          body: questionAnalysis.map((a, i) => {
+            const shortQ =
+              a.question.text.length > 90 ? `${a.question.text.slice(0, 90)}…` : a.question.text;
+            return [
+              String(i + 1),
+              shortQ,
+              String(a.correctAnswers),
+              String(a.incorrectAnswers),
+              String(a.blankAnswers),
+              String(a.totalAnswers),
+              `${a.percentageCorrect}%`,
+            ];
+          }),
+          startY: nextY,
+          margin: { left: margin, right: margin },
+          styles: { fontSize: 7, cellPadding: 1.5 },
+          columnStyles: {
+            0: { cellWidth: 10 },
+            1: { cellWidth: 72 },
+          },
+        });
+        nextY = (doc as any).lastAutoTable.finalY + 10;
+
+        const hasDistractors = questionAnalysis.some((a) => a.optionCounts.length > 0);
+        if (hasDistractors) {
+          section('Distractores (opción múltiple)');
+          const distrBody: string[][] = [];
+          questionAnalysis.forEach((a, qi) => {
+            for (const oc of a.optionCounts) {
+              const pct = a.totalAnswers ? Math.round((oc.count / a.totalAnswers) * 100) : 0;
+              const label =
+                oc.label.length > 55 ? `${oc.label.slice(0, 55)}…` : oc.label;
+              distrBody.push([
+                String(qi + 1),
+                label,
+                String(oc.count),
+                `${pct}%`,
+                oc.isCorrectOption ? 'Sí' : 'No',
+              ]);
+            }
+          });
+          (doc as any).autoTable({
+            head: [['Reactivo', 'Opción elegida', 'Cant.', '% total', '¿Correcta?']],
+            body: distrBody,
+            startY: nextY,
+            margin: { left: margin, right: margin },
+            styles: { fontSize: 7, cellPadding: 1.5 },
+          });
+          nextY = (doc as any).lastAutoTable.finalY + 10;
+        }
+
+        section('Detalle por estudiante y pregunta');
+        const detalleBody: string[][] = [];
+        for (const result of studentResults) {
+          for (const row of buildStudentQuestionBreakdownRows(result, exam.questions)) {
+            const estado =
+              row.isCorrect === true
+                ? 'Correcta'
+                : row.isCorrect === false
+                  ? 'Incorrecta'
+                  : 'No eval.';
+            const enun =
+              row.questionText.length > 60 ? `${row.questionText.slice(0, 60)}…` : row.questionText;
+            const sa = row.studentAnswer || '—';
+            const ca = row.correctAnswer || '—';
+            detalleBody.push([
+              result.studentName,
+              String(row.questionNumber),
+              enun,
+              sa.length > 40 ? `${sa.slice(0, 40)}…` : sa,
+              ca.length > 40 ? `${ca.slice(0, 40)}…` : ca,
+              estado,
+            ]);
+          }
+        }
+        (doc as any).autoTable({
+          head: [['Estudiante', '#', 'Pregunta (extracto)', 'Resp. alumno', 'Correcta', 'Estado']],
+          body: detalleBody,
+          startY: nextY,
+          margin: { left: margin, right: margin },
+          styles: { fontSize: 6, cellPadding: 1 },
+          columnStyles: {
+            0: { cellWidth: 28 },
+            1: { cellWidth: 8 },
+            2: { cellWidth: 38 },
+            3: { cellWidth: 22 },
+            4: { cellWidth: 22 },
+            5: { cellWidth: 18 },
+          },
         });
 
-        doc.save(`resultados_${exam?.title || 'examen'}.pdf`);
-        toast.success('Resultados exportados a PDF');
+        doc.save(`resultados_${base}.pdf`);
+        toast.success('Resultados exportados a PDF (todas las secciones)');
       });
     });
   };
@@ -301,29 +531,7 @@ export default function ExamResultsPage() {
     studentResults.find((r) => r.studentId === selectedStudentBreakdownId) ?? null;
 
   const breakdownRows: StudentQuestionBreakdown[] = selectedStudentForBreakdown
-    ? exam.questions.map((q, idx) => {
-        const answer = selectedStudentForBreakdown.answers.find((a) => a.question_id === q.id);
-        const studentAnswer = answer?.answer_text ?? '';
-        if (q.type === 'multiple_choice') {
-          const correctAnswer = q.correct_answer ?? '';
-          return {
-            questionId: q.id,
-            questionNumber: idx + 1,
-            questionText: q.text,
-            studentAnswer,
-            correctAnswer,
-            isCorrect: isMultipleChoiceAnswerCorrect(q.options, studentAnswer, correctAnswer),
-          };
-        }
-        return {
-          questionId: q.id,
-          questionNumber: idx + 1,
-          questionText: q.text,
-          studentAnswer,
-          correctAnswer: q.correct_answer ?? '',
-          isCorrect: answer?.is_correct ?? null,
-        };
-      })
+    ? buildStudentQuestionBreakdownRows(selectedStudentForBreakdown, exam.questions)
     : [];
 
   const toggleExpandedQuestion = (questionId: string) => {

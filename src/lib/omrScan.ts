@@ -112,6 +112,11 @@ export type OmrScanMetaResult = {
   maxSameColumnCount: number;
   /** Geometría de celdas del barrido ganador (coordenadas normalizadas 0–1). */
   geometry: CalifacilOmrScanGeometry | null;
+  /**
+   * Mismos píxeles que la lectura y que `geometry` (misma anchura/alto que `geometry.imageWidth/Height`).
+   * Si no es null, la vista previa debe mostrar esta imagen para que la cuadrícula SVG coincida.
+   */
+  reviewSourceCanvas: HTMLCanvasElement | null;
 };
 
 /** Rectángulo normalizado 0–1 respecto al canvas escaneado (misma relación de aspecto que la foto de revisión). */
@@ -2096,6 +2101,7 @@ export function scanCalifacilOmrSheetWithMeta(
       needsVisionAssist: false,
       maxSameColumnCount: 0,
       geometry: null,
+      reviewSourceCanvas: null,
     };
   }
   let canvas = drawSourceToCanvas(source);
@@ -2106,6 +2112,7 @@ export function scanCalifacilOmrSheetWithMeta(
       needsVisionAssist: false,
       maxSameColumnCount: 0,
       geometry: null,
+      reviewSourceCanvas: null,
     };
   }
   if (!opts?.skipGuideCrop) {
@@ -2150,6 +2157,8 @@ export function scanCalifacilOmrSheetWithMeta(
     maxSameColumnCount: 0,
     geometry: null,
   };
+  /** Canvas de la variante que produjo `best`; debe ser la misma imagen que la vista previa con overlay. */
+  let bestReviewCanvas: HTMLCanvasElement | null = null;
 
   const qnumSweep =
     opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
@@ -2173,6 +2182,7 @@ export function scanCalifacilOmrSheetWithMeta(
           );
           if (omrSweepCandidateScore(detail) > omrSweepCandidateScore(best)) {
             best = detail;
+            bestReviewCanvas = c;
           }
         }
       }
@@ -2186,6 +2196,7 @@ export function scanCalifacilOmrSheetWithMeta(
     needsVisionAssist,
     maxSameColumnCount: best.maxSameColumnCount,
     geometry: best.geometry,
+    reviewSourceCanvas: bestReviewCanvas,
   };
 }
 
@@ -2225,24 +2236,48 @@ export function autoOrientCalifacilSheet(
     }
   }
 
-  // Ajuste fino para fotos ligeramente inclinadas.
-  // Se aplica sobre el ángulo cardinal elegido para mejorar "derechita".
-  for (let delta = -12; delta <= 12; delta += 2) {
-    if (delta === 0) continue;
-    const tilted = rotateCanvasByDegrees(bestCanvas, delta);
+  /** Base ya en 0/90/180/270; todo giro fino se aplica sobre esta copia (no encadenado). */
+  const cardinalBest = bestCanvas;
+
+  const scoreTilted = (tilted: HTMLCanvasElement) => {
     const detail = scanCalifacilOmrCanvasDetailed(tilted, columns, {
       minMarkDarkness: 0.04,
       minBestVsSecondGap: 0.02,
     });
     const bandInk = estimateBottomBandInk(tilted);
-    const score =
+    return (
       bandInk * 2000 +
       detail.resolvedCount * 100 +
       detail.confidenceSum * 10 +
-      detail.clarityStripGapSum * 40;
+      detail.clarityStripGapSum * 40
+    );
+  };
+
+  // Inclinación típica al fotografiar con el móvil puede superar fácilmente ±12°;
+  // si no barrimos bastante, la tabla queda torcida y la rejilla OMR “baja en escalera”.
+  let bestDeltaDeg = 0;
+  for (let delta = -28; delta <= 28; delta += 2) {
+    if (delta === 0) continue;
+    const tilted = rotateCanvasByDegrees(cardinalBest, delta);
+    const score = scoreTilted(tilted);
     if (score > bestScore) {
       bestScore = score;
       bestCanvas = tilted;
+      bestDeltaDeg = delta;
+    }
+  }
+
+  // Refinamiento 1°: el paso de 2° puede quedar a un grado del ángulo óptimo.
+  for (let fine = -2; fine <= 2; fine++) {
+    if (fine === 0) continue;
+    const total = bestDeltaDeg + fine;
+    if (total < -30 || total > 30) continue;
+    const tilted = rotateCanvasByDegrees(cardinalBest, total);
+    const score = scoreTilted(tilted);
+    if (score > bestScore) {
+      bestScore = score;
+      bestCanvas = tilted;
+      bestDeltaDeg = total;
     }
   }
 

@@ -25,6 +25,7 @@ import {
   scanCalifacilOmrSheet,
   scanCalifacilOmrSheetWithMeta,
   type CalifacilOmrScanGeometry,
+  type OmrScanMetaResult,
 } from '@/lib/omrScan';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
 import {
@@ -682,7 +683,7 @@ export default function CalificarPage() {
           setReviewQualityHint(null);
         }
 
-        await setPreviewFromSource(oriented, fallbackFile);
+        await setPreviewFromSource(meta.reviewSourceCanvas ?? oriented, fallbackFile);
         setReviewOmrGeometry(meta.geometry);
         setPhase('revisar_hoja');
         setLiveStatus(
@@ -1311,18 +1312,19 @@ export default function CalificarPage() {
         }
       }
 
+      let omrReviewMeta: OmrScanMetaResult | null = null;
       if (orientedForPreview) {
-        const mg = scanCalifacilOmrSheetWithMeta(orientedForPreview, omrCols, { skipGuideCrop: true });
-        setReviewOmrGeometry(mg.geometry);
+        omrReviewMeta = scanCalifacilOmrSheetWithMeta(orientedForPreview, omrCols, { skipGuideCrop: true });
+        setReviewOmrGeometry(omrReviewMeta.geometry);
       } else {
         setReviewOmrGeometry(null);
       }
 
       setDraftSelections(mergedChunk);
 
-      if (orientedForPreview) {
-        await setPreviewFromSource(orientedForPreview);
-      } else {
+      if (orientedForPreview && omrReviewMeta) {
+        await setPreviewFromSource(omrReviewMeta.reviewSourceCanvas ?? orientedForPreview);
+      } else if (!orientedForPreview) {
         setPreviewUrl((u) => {
           if (u) URL.revokeObjectURL(u);
           return null;
