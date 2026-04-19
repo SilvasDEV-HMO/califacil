@@ -2474,10 +2474,10 @@ export function autoOrientCalifacilSheet(
     );
   };
 
-  // Inclinación típica al fotografiar con el móvil puede superar fácilmente ±12°;
-  // si no barrimos bastante, la tabla queda torcida y la rejilla OMR “baja en escalera”.
+  // Inclinaciones fuertes (p. ej. ~45°): el barrido anterior ±38° dejaba la hoja torcida y la rejilla desfasada.
+  // Paso grueso 3° hasta ±60° y luego afinación de 1° (con paso 3° el óptimo puede quedar a ±1.5° del mejor).
   let bestDeltaDeg = 0;
-  for (let delta = -38; delta <= 38; delta += 2) {
+  for (let delta = -60; delta <= 60; delta += 3) {
     if (delta === 0) continue;
     const tilted = rotateCanvasByDegrees(cardinalBest, delta);
     const score = scoreTilted(tilted);
@@ -2488,11 +2488,10 @@ export function autoOrientCalifacilSheet(
     }
   }
 
-  // Refinamiento 1°: el paso de 2° puede quedar a un grado del ángulo óptimo.
-  for (let fine = -2; fine <= 2; fine++) {
+  for (let fine = -5; fine <= 5; fine++) {
     if (fine === 0) continue;
     const total = bestDeltaDeg + fine;
-    if (total < -42 || total > 42) continue;
+    if (total < -65 || total > 65) continue;
     const tilted = rotateCanvasByDegrees(cardinalBest, total);
     const score = scoreTilted(tilted);
     if (score > bestScore) {
@@ -2502,9 +2501,23 @@ export function autoOrientCalifacilSheet(
     }
   }
 
+  let deskewed = applyPerspectiveCorrection(bestCanvas);
+
+  /** Tras el warp, a veces queda 2–8° de sesgo residual; un barrido corto encaja la rejilla con la tabla. */
+  let bestPostScore = scoreTilted(deskewed);
+  for (let post = -10; post <= 10; post += 2) {
+    if (post === 0) continue;
+    const t = rotateCanvasByDegrees(deskewed, post);
+    const sc = scoreTilted(t);
+    if (sc > bestPostScore) {
+      bestPostScore = sc;
+      deskewed = t;
+    }
+  }
+
   // Evita variable no usada cuando el compilador endurece reglas.
   void bestCardinal;
-  return applyPerspectiveCorrection(bestCanvas);
+  return deskewed;
 }
 
 /** JPEG en data URL para enviar a la API de visión (desde imagen o canvas). */
