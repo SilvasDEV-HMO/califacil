@@ -1596,6 +1596,66 @@ function inferColumnEdgesFromVerticalLines(
 }
 
 /**
+ * Fallback para hoja completa: infiere columnas buscando una ventana de (cols+1) líneas
+ * verticales casi equiespaciadas en toda la anchura de la imagen.
+ */
+function inferColumnEdgesGlobalFromVerticalLines(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cols: number,
+  dataTop: number,
+  rowH: number
+): number[] | null {
+  const y0 = Math.max(1, Math.floor(dataTop + 1.2 * rowH));
+  const y1 = Math.min(height - 1, Math.ceil(dataTop + 8.8 * rowH));
+  const xLo = 1;
+  const xHi = Math.max(2, width - 2);
+  if (y1 <= y0 + 6 || xHi <= xLo + 24) return null;
+
+  const proj = buildVerticalEdgeProjection(data, width, height, xLo, xHi, y0, y1);
+  boxSmoothInRangeX(proj, xLo, xHi, 2);
+
+  const minDist = Math.max(5, width * 0.04);
+  const peaks = findVerticalLinePeaks(proj, xLo, xHi, minDist, 0.094);
+  const need = cols + 1;
+  if (peaks.length < need) return null;
+
+  peaks.sort((a, b) => a - b);
+  let best: number[] | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let s = 0; s <= peaks.length - need; s++) {
+    const w = peaks.slice(s, s + need);
+    const gaps: number[] = [];
+    for (let i = 0; i < need - 1; i++) gaps.push(w[i + 1]! - w[i]!);
+    const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    if (mean < width * 0.08 || mean > width * 0.28) continue;
+    const var_ = gaps.reduce((acc, g) => acc + (g - mean) * (g - mean), 0) / gaps.length;
+    const cv = mean > 1e-6 ? Math.sqrt(var_) / mean : 1;
+    if (cv > 0.34) continue;
+
+    const left = w[0]!;
+    const right = w[need - 1]!;
+    if (left < width * 0.03 || left > width * 0.5) continue;
+    if (right < width * 0.45 || right > width * 0.99) continue;
+
+    const center = (left + right) * 0.5;
+    const centerPenalty = Math.abs(center - width * 0.56) / Math.max(1, width);
+    const strength = w.reduce((acc, x) => acc + proj[x]!, 0);
+    const score =
+      strength * 1.8 -
+      var_ * 2.2 -
+      centerPenalty * 260 -
+      Math.abs(mean - width * 0.17) * 0.24;
+    if (score > bestScore) {
+      bestScore = score;
+      best = w;
+    }
+  }
+  return best;
+}
+
+/**
  * Elige 11 líneas horizontales coherentes con el espaciado esperado (~altura de fila).
  * Devuelve y ordenadas de arriba abajo o null.
  */
@@ -1822,7 +1882,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     dataHeight
   );
 
-  const inferredColEdges = inferColumnEdgesFromVerticalLines(
+  const inferredColEdgesLocal = inferColumnEdgesFromVerticalLines(
     data,
     width,
     height,
@@ -1832,6 +1892,11 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     dataTop,
     rowH
   );
+  const inferredColEdgesGlobal =
+    profile.bottomBandRatio < 0.95
+      ? inferColumnEdgesGlobalFromVerticalLines(data, width, height, cols, dataTop, rowH)
+      : null;
+  const inferredColEdges = inferredColEdgesLocal ?? inferredColEdgesGlobal;
   const uniformColEdges: number[] = [];
   for (let c = 0; c <= cols; c++) {
     uniformColEdges.push(
@@ -1841,6 +1906,10 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     );
   }
   const columnEdges = inferredColEdges ?? uniformColEdges;
+  const bubbleAreaRight = Math.max(
+    bubbleAreaLeft + 8,
+    Math.min(width - 1, Math.round(columnEdges[columnEdges.length - 1] ?? width - 1))
+  );
   const hasDetectedRowLines = Boolean(lineYs && lineYs.length === 11);
   const hasDetectedColumnEdges = Boolean(inferredColEdges && inferredColEdges.length === cols + 1);
   const minCellW = Math.min(
@@ -1892,7 +1961,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       width,
       height,
       bubbleAreaLeft,
-      width - 1,
+      bubbleAreaRight,
       yRowTop,
       yRowBot,
       2
