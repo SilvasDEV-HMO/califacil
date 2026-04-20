@@ -139,6 +139,10 @@ type ScanDetailedResult = {
   clarityStripGapSum: number;
   /** Máximo de filas con la misma columna elegida (penaliza desalineación que da todo igual). */
   maxSameColumnCount: number;
+  /** Se detectaron 11 líneas horizontales de la tabla (más fiable que interpolar filas uniformes). */
+  hasDetectedRowLines: boolean;
+  /** Se detectaron bordes verticales de columnas desde líneas impresas. */
+  hasDetectedColumnEdges: boolean;
   geometry: CalifacilOmrScanGeometry | null;
 };
 
@@ -152,7 +156,9 @@ function omrSweepCandidateScore(d: ScanDetailedResult): number {
     d.confidenceSum * 11 +
     avgConf * 72 +
     d.clarityStripGapSum * 125 -
-    samePenalty
+    samePenalty +
+    (d.hasDetectedRowLines ? 185 : -240) +
+    (d.hasDetectedColumnEdges ? 90 : -70)
   );
 }
 
@@ -1361,6 +1367,13 @@ function buildOmrScanCanvasVariants(
   return out;
 }
 
+function isLikelyFullSheetPhoto(canvas: HTMLCanvasElement): boolean {
+  const w = Math.max(1, canvas.width);
+  const h = Math.max(1, canvas.height);
+  // Hoja completa en vertical suele ser claramente más alta que ancha.
+  return h / w >= 1.2;
+}
+
 /**
  * Proyección de borde horizontal: promedio de |I(y,x) − I(y−1,x)| en la franja de burbujas.
  * Los trazos negros de la tabla producen picos en y.
@@ -1771,6 +1784,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
       rows: rowMetas,
       clarityStripGapSum: 0,
       maxSameColumnCount: 0,
+      hasDetectedRowLines: false,
+      hasDetectedColumnEdges: false,
       geometry: null,
     };
   }
@@ -1819,6 +1834,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     );
   }
   const columnEdges = inferredColEdges ?? uniformColEdges;
+  const hasDetectedRowLines = Boolean(lineYs && lineYs.length === 11);
+  const hasDetectedColumnEdges = Boolean(inferredColEdges && inferredColEdges.length === cols + 1);
   const minCellW = Math.min(
     ...Array.from({ length: cols }, (_, c) => Math.max(1, columnEdges[c + 1]! - columnEdges[c]!))
   );
@@ -2197,6 +2214,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     rows: rowMetas,
     clarityStripGapSum,
     maxSameColumnCount,
+    hasDetectedRowLines,
+    hasDetectedColumnEdges,
     geometry,
   };
 }
@@ -2272,8 +2291,11 @@ export function scanCalifacilOmrSheet(
     rows: emptyRows,
     clarityStripGapSum: 0,
     maxSameColumnCount: 0,
+    hasDetectedRowLines: false,
+    hasDetectedColumnEdges: false,
     geometry: null,
   };
+  let bestSweepScore = Number.NEGATIVE_INFINITY;
 
   const qnumSweep =
     opts?.qnumSweep === 'live' ? QNUM_WIDTH_SWEEP_LIVE : QNUM_WIDTH_SWEEP;
@@ -2281,10 +2303,20 @@ export function scanCalifacilOmrSheet(
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
 
   for (const { canvas: c, preferFullSheetFirst } of variants) {
-    const profiles = preferFullSheetFirst
-      ? [fullSheetProfile, ...croppedBoxProfiles]
-      : [...croppedBoxProfiles, fullSheetProfile];
-    for (const profile of profiles) {
+    const likelyFullSheet = isLikelyFullSheetPhoto(c);
+    const orderedProfiles =
+      preferFullSheetFirst || likelyFullSheet
+        ? [fullSheetProfile, ...croppedBoxProfiles]
+        : [...croppedBoxProfiles, fullSheetProfile];
+    for (const profile of orderedProfiles) {
+      const profilePrior =
+        likelyFullSheet && profile.bottomBandRatio >= 0.99
+          ? -260
+          : !likelyFullSheet && profile.bottomBandRatio < 0.95
+            ? -95
+            : profile.bottomBandRatio < 0.95
+              ? 18
+              : 0;
       for (const qnw of qnumSweep) {
         for (const colShift of colSweep) {
           const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
@@ -2295,8 +2327,10 @@ export function scanCalifacilOmrSheet(
             profileQ,
             colShift
           );
-          if (omrSweepCandidateScore(detail) > omrSweepCandidateScore(best)) {
+          const detailScore = omrSweepCandidateScore(detail) + profilePrior;
+          if (detailScore > bestSweepScore) {
             best = detail;
+            bestSweepScore = detailScore;
           }
         }
       }
@@ -2375,8 +2409,11 @@ export function scanCalifacilOmrSheetWithMeta(
     rows: emptyRows,
     clarityStripGapSum: 0,
     maxSameColumnCount: 0,
+    hasDetectedRowLines: false,
+    hasDetectedColumnEdges: false,
     geometry: null,
   };
+  let bestSweepScore = Number.NEGATIVE_INFINITY;
   /** Canvas de la variante que produjo `best`; debe ser la misma imagen que la vista previa con overlay. */
   let bestReviewCanvas: HTMLCanvasElement | null = null;
 
@@ -2386,10 +2423,20 @@ export function scanCalifacilOmrSheetWithMeta(
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
 
   for (const { canvas: c, preferFullSheetFirst } of variants) {
-    const profiles = preferFullSheetFirst
-      ? [fullSheetProfile, ...croppedBoxProfiles]
-      : [...croppedBoxProfiles, fullSheetProfile];
-    for (const profile of profiles) {
+    const likelyFullSheet = isLikelyFullSheetPhoto(c);
+    const orderedProfiles =
+      preferFullSheetFirst || likelyFullSheet
+        ? [fullSheetProfile, ...croppedBoxProfiles]
+        : [...croppedBoxProfiles, fullSheetProfile];
+    for (const profile of orderedProfiles) {
+      const profilePrior =
+        likelyFullSheet && profile.bottomBandRatio >= 0.99
+          ? -260
+          : !likelyFullSheet && profile.bottomBandRatio < 0.95
+            ? -95
+            : profile.bottomBandRatio < 0.95
+              ? 18
+              : 0;
       for (const qnw of qnumSweep) {
         for (const colShift of colSweep) {
           const profileQ: OmrGeometryProfile = { ...profile, qnumWidthRatio: qnw };
@@ -2400,9 +2447,11 @@ export function scanCalifacilOmrSheetWithMeta(
             profileQ,
             colShift
           );
-          if (omrSweepCandidateScore(detail) > omrSweepCandidateScore(best)) {
+          const detailScore = omrSweepCandidateScore(detail) + profilePrior;
+          if (detailScore > bestSweepScore) {
             best = detail;
             bestReviewCanvas = c;
+            bestSweepScore = detailScore;
           }
         }
       }
