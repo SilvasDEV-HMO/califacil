@@ -53,6 +53,11 @@ export function CalifacilOmrReviewOverlay({
           if (!rowCells) return null;
           const expectedPick = expectedPicks?.[row] ?? null;
           if (expectedPick === null || expectedPick < 0 || expectedPick >= rowCells.length) return null;
+          const pick = picks[row] ?? null;
+          // Mostrar la esperada solo cuando hay discrepancia (o sin lectura):
+          // si ya coincide, el verde basta y el naranja añade ruido visual.
+          const shouldPaintExpected = pick === null || pick !== expectedPick;
+          if (!shouldPaintExpected) return null;
           const cell = rowCells[expectedPick];
           return (
             <rect
