@@ -96,6 +96,8 @@ export type CalifacilScanOptions = {
    * sin corrección de perspectiva ni variantes derivadas.
    */
   preserveInputCanvas?: boolean;
+  /** Anclaje por plantilla fija para la hoja escaneada de formato constante. */
+  fixedTemplateAnchor?: boolean;
 };
 
 type ScanThresholds = {
@@ -177,6 +179,15 @@ function omrSweepCandidateScore(d: ScanDetailedResult): number {
 type OmrGeometryProfile = {
   bottomBandRatio: number;
   titleStripRatioOfBand: number;
+  qnumWidthRatio: number;
+};
+
+type OmrFixedTemplate = {
+  tableLeftRatio: number;
+  tableTopRatio: number;
+  tableWidthRatio: number;
+  tableHeightRatio: number;
+  titleStripRatioOfTable: number;
   qnumWidthRatio: number;
 };
 
@@ -1411,6 +1422,30 @@ function isLikelyFullSheetPhoto(canvas: HTMLCanvasElement): boolean {
   return h / w >= 1.2;
 }
 
+function buildFullSheetFixedTemplateCandidates(): OmrFixedTemplate[] {
+  const base: OmrFixedTemplate = {
+    tableLeftRatio: 0.115,
+    tableTopRatio: 0.705,
+    tableWidthRatio: 0.77,
+    tableHeightRatio: 0.225,
+    titleStripRatioOfTable: 0.2,
+    qnumWidthRatio: 0.092,
+  };
+  const dx = [0, -0.012, 0.012];
+  const dy = [0, -0.01, 0.01];
+  const out: OmrFixedTemplate[] = [];
+  for (const ox of dx) {
+    for (const oy of dy) {
+      out.push({
+        ...base,
+        tableLeftRatio: Math.max(0.04, Math.min(0.24, base.tableLeftRatio + ox)),
+        tableTopRatio: Math.max(0.64, Math.min(0.8, base.tableTopRatio + oy)),
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Proyección de borde horizontal: promedio de |I(y,x) − I(y−1,x)| en la franja de burbujas.
  * Los trazos negros de la tabla producen picos en y.
@@ -1864,7 +1899,8 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   columns: number,
   thresholds: ScanThresholds,
   profile: OmrGeometryProfile,
-  columnShiftPx = 0
+  columnShiftPx = 0,
+  fixedTemplate?: OmrFixedTemplate
 ): ScanDetailedResult {
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const out: (number | null)[] = Array(10).fill(null);
@@ -1889,18 +1925,29 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
   const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const { data, width, height } = id;
 
-  const bandH = height * profile.bottomBandRatio;
-  const bandTop = height - bandH;
-  const dataTop = bandTop + bandH * profile.titleStripRatioOfBand;
-  const dataHeight = bandH * (1 - profile.titleStripRatioOfBand);
+  const tableLeft = fixedTemplate ? width * fixedTemplate.tableLeftRatio : 0;
+  const tableTop = fixedTemplate ? height * fixedTemplate.tableTopRatio : 0;
+  const tableW = fixedTemplate ? width * fixedTemplate.tableWidthRatio : 0;
+  const tableH = fixedTemplate ? height * fixedTemplate.tableHeightRatio : 0;
+  const bandH = fixedTemplate ? tableH : height * profile.bottomBandRatio;
+  const bandTop = fixedTemplate ? tableTop : height - bandH;
+  const dataTop = fixedTemplate
+    ? bandTop + bandH * fixedTemplate.titleStripRatioOfTable
+    : bandTop + bandH * profile.titleStripRatioOfBand;
+  const dataHeight = fixedTemplate
+    ? bandH * (1 - fixedTemplate.titleStripRatioOfTable)
+    : bandH * (1 - profile.titleStripRatioOfBand);
   const rowH = dataHeight / 10;
 
-  const qNumW = width * profile.qnumWidthRatio;
+  const qNumW = fixedTemplate ? tableW * fixedTemplate.qnumWidthRatio : width * profile.qnumWidthRatio;
+  const maxRight = fixedTemplate ? Math.min(width - 2, tableLeft + tableW - 3) : width * 0.45;
   const bubbleAreaLeft = Math.max(
     2,
-    Math.min(width * 0.45, Math.round(qNumW + columnShiftPx))
+    Math.min(maxRight, Math.round((fixedTemplate ? tableLeft : 0) + qNumW + columnShiftPx))
   );
-  const bubbleAreaW = width - bubbleAreaLeft;
+  const bubbleAreaW = fixedTemplate
+    ? Math.max(18, tableLeft + tableW - bubbleAreaLeft)
+    : width - bubbleAreaLeft;
   const cellW = bubbleAreaW / cols;
 
   const lineYs = refineOmrRowBoundariesFromTableLines(
@@ -1923,10 +1970,15 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     rowH
   );
   const inferredColEdgesGlobal =
-    profile.bottomBandRatio < 0.95
+    !fixedTemplate && profile.bottomBandRatio < 0.95
       ? inferColumnEdgesGlobalFromVerticalLines(data, width, height, cols, dataTop, rowH)
       : null;
-  const inferredColEdges = inferredColEdgesLocal ?? inferredColEdgesGlobal;
+  let inferredColEdges = inferredColEdgesLocal ?? inferredColEdgesGlobal;
+  if (inferredColEdges && profile.bottomBandRatio < 0.95) {
+    const span = inferredColEdges[inferredColEdges.length - 1]! - inferredColEdges[0]!;
+    // En hoja completa, un span demasiado corto suele ser un falso positivo sobre el texto.
+    if (span < width * 0.56) inferredColEdges = null;
+  }
   const uniformColEdges: number[] = [];
   for (let c = 0; c <= cols; c++) {
     uniformColEdges.push(
@@ -2411,22 +2463,45 @@ export function scanCalifacilOmrSheet(
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
   const geometryMode = opts?.geometryMode ?? 'auto';
   const fullSheetSweepProfiles: OmrGeometryProfile[] = [
-    { bottomBandRatio: 0.28, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 0.32, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 0.36, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
-    { bottomBandRatio: 0.4, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     fullSheetProfile,
   ];
-  const fullSheetQnumSweep = [0.07, 0.085, 0.1, 0.115, 0.13, 0.15, 0.17, 0.19, 0.22] as const;
-  const fullSheetColSweep = [-180, -140, -100, -70, -45, -25, 0, 25, 45, 70, 100, 140, 180] as const;
+  const fullSheetQnumSweep = [0.085, 0.1, 0.115, 0.13, 0.15] as const;
+  const fullSheetColSweep = [-80, -50, -25, 0, 25, 50, 80] as const;
   const selectedVariants =
     opts?.preserveInputCanvas
       ? variants
       : geometryMode === 'fullSheet'
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
+  const fixedTemplates =
+    geometryMode === 'fullSheet' && opts?.fixedTemplateAnchor
+      ? buildFullSheetFixedTemplateCandidates()
+      : [];
+  const fixedTemplateShifts = [-16, -8, 0, 8, 16] as const;
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
+    if (fixedTemplates.length > 0) {
+      for (const fixedTemplate of fixedTemplates) {
+        for (const colShift of fixedTemplateShifts) {
+          const detail = scanCalifacilOmrCanvasDetailedWithProfile(
+            c,
+            columns,
+            thresholds,
+            fullSheetProfile,
+            colShift,
+            fixedTemplate
+          );
+          const fixedBonus = detail.hasDetectedRowLines ? 260 : 40;
+          const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
+          if (detailScore > bestSweepScore) {
+            best = detail;
+            bestSweepScore = detailScore;
+          }
+        }
+      }
+    }
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
       geometryMode === 'fullSheet'
@@ -2555,22 +2630,46 @@ export function scanCalifacilOmrSheetWithMeta(
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
   const geometryMode = opts?.geometryMode ?? 'auto';
   const fullSheetSweepProfiles: OmrGeometryProfile[] = [
-    { bottomBandRatio: 0.28, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 0.32, titleStripRatioOfBand: 0.18, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     { bottomBandRatio: 0.36, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
-    { bottomBandRatio: 0.4, titleStripRatioOfBand: 0.19, qnumWidthRatio: CALIFACIL_OMR_SCAN.qnumWidthRatio },
     fullSheetProfile,
   ];
-  const fullSheetQnumSweep = [0.07, 0.085, 0.1, 0.115, 0.13, 0.15, 0.17, 0.19, 0.22] as const;
-  const fullSheetColSweep = [-180, -140, -100, -70, -45, -25, 0, 25, 45, 70, 100, 140, 180] as const;
+  const fullSheetQnumSweep = [0.085, 0.1, 0.115, 0.13, 0.15] as const;
+  const fullSheetColSweep = [-80, -50, -25, 0, 25, 50, 80] as const;
   const selectedVariants =
     opts?.preserveInputCanvas
       ? variants
       : geometryMode === 'fullSheet'
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
+  const fixedTemplates =
+    geometryMode === 'fullSheet' && opts?.fixedTemplateAnchor
+      ? buildFullSheetFixedTemplateCandidates()
+      : [];
+  const fixedTemplateShifts = [-16, -8, 0, 8, 16] as const;
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
+    if (fixedTemplates.length > 0) {
+      for (const fixedTemplate of fixedTemplates) {
+        for (const colShift of fixedTemplateShifts) {
+          const detail = scanCalifacilOmrCanvasDetailedWithProfile(
+            c,
+            columns,
+            thresholds,
+            fullSheetProfile,
+            colShift,
+            fixedTemplate
+          );
+          const fixedBonus = detail.hasDetectedRowLines ? 260 : 40;
+          const detailScore = omrSweepCandidateScore(detail) + fixedBonus;
+          if (detailScore > bestSweepScore) {
+            best = detail;
+            bestReviewCanvas = c;
+            bestSweepScore = detailScore;
+          }
+        }
+      }
+    }
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
       geometryMode === 'fullSheet'

@@ -135,6 +135,7 @@ function sleep(ms: number): Promise<void> {
 export default function CalificarPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
+  const useLiveCameraUi = true;
   const { user } = useAuth();
   const { exams, loading: examsLoading } = useExams(user?.id);
 
@@ -496,6 +497,7 @@ export default function CalificarPage() {
         skipGuideCrop: true,
         geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'croppedBox' : 'auto',
         preserveInputCanvas: preserveCapturedFrame,
+        fixedTemplateAnchor: Boolean(fallbackFile),
       });
       const raw = [...meta.picks];
 
@@ -841,7 +843,7 @@ export default function CalificarPage() {
     setLiveStatus(
       isMobile
         ? 'Abre la cámara para detectar respuestas en vivo.'
-        : 'En ordenador importa una imagen por hoja: página completa o solo el pie CaliFacil.'
+        : 'Abre la cámara para detectar respuestas en vivo con la webcam.'
     );
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
@@ -881,7 +883,7 @@ export default function CalificarPage() {
       setLiveStatus(
         isMobile
           ? 'Abre la cámara para detectar respuestas en vivo.'
-          : 'En ordenador importa una imagen por hoja: página completa o solo el pie CaliFacil.'
+          : 'Abre la cámara para detectar respuestas en vivo con la webcam.'
       );
       setPreviewUrl((u) => {
         if (u) URL.revokeObjectURL(u);
@@ -938,7 +940,6 @@ export default function CalificarPage() {
         return;
       }
       const attempts: MediaStreamConstraints[] = [
-        { video: { facingMode: { exact: 'environment' } }, audio: false },
         { video: { facingMode: { ideal: 'environment' } }, audio: false },
         { video: { facingMode: 'user' }, audio: false },
         { video: true, audio: false },
@@ -966,9 +967,8 @@ export default function CalificarPage() {
           : null;
       const supportsTorch = Boolean(capabilities?.torch);
       setFlashSupported(supportsTorch);
-      if (supportsTorch) {
-        await setTorchEnabled(true);
-      }
+      // Inicia siempre con flash apagado para abrir la cámara más rápido.
+      setFlashOn(false);
 
       liveTickRef.current = window.setInterval(async () => {
         if (liveBusyRef.current) return;
@@ -1091,15 +1091,12 @@ export default function CalificarPage() {
             });
           }
 
-          if (
-            stableFullTicksRef.current >= STABLE_FULL_TICKS &&
-            chunk.length > 0 &&
-            !scanBusyRef.current &&
-            !autoFinalizeInProgressRef.current
-          ) {
+          if (stableFullTicksRef.current >= STABLE_FULL_TICKS && chunk.length > 0) {
             stableFullTicksRef.current = 0;
             await showAutoCaptureSnapshot(oriented);
-            await autoCaptureAndCompareRef.current(mergedLive);
+            setLiveStatus(
+              'Hoja completa detectada. Toca «Revisar y confirmar» para validar respuestas antes de guardar.'
+            );
           }
         } finally {
           liveBusyRef.current = false;
@@ -1133,11 +1130,11 @@ export default function CalificarPage() {
   startLiveCameraRef.current = startLiveCamera;
 
   useEffect(() => {
-    if (!isMobile) return;
+    if (!useLiveCameraUi) return;
     if (!examId || !exam || !supportsCalifacil) return;
     if (phase !== 'capturar' || cameraOpen || scanBusy) return;
     void startLiveCamera();
-  }, [isMobile, examId, exam, supportsCalifacil, cameraOpen, phase, scanBusy, startLiveCamera]);
+  }, [useLiveCameraUi, examId, exam, supportsCalifacil, cameraOpen, phase, scanBusy, startLiveCamera]);
 
   const confirmCurrentSheet = async (providedDraft?: Record<string, string>) => {
     if (!examId || !exam) {
@@ -1449,7 +1446,7 @@ export default function CalificarPage() {
     setLiveStatus(
       isMobile
         ? 'Abre la cámara para detectar respuestas en vivo.'
-        : 'En ordenador importa una imagen por hoja: página completa o solo el pie CaliFacil.'
+        : 'Abre la cámara para detectar respuestas en vivo con la webcam.'
     );
     toast.message('Elige otro alumno para escanear su examen.');
   }, [isMobile, stopLiveCamera]);
@@ -1545,7 +1542,7 @@ export default function CalificarPage() {
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
             ? 'Fotografía el pie CaliFacil de cada hoja impresa (10 preguntas por hoja, hasta 3 hojas).'
-            : 'En ordenador sube por hoja una foto (JPG/PNG): puede ser la página completa con enunciados y tabla al pie, o solo el recuadro CaliFacil. Se detectan las marcas y al guardar se califica contra la clave del examen. La cámara en vivo solo está en el móvil.'}
+            : 'En ordenador usa la webcam para capturar el recuadro CaliFacil. También puedes subir una imagen JPG/PNG como alternativa.'}
         </p>
       </div>
 
@@ -1761,7 +1758,14 @@ export default function CalificarPage() {
           <CardContent className="space-y-4">
             {phase === 'capturar' && (
               <div className="space-y-3">
-                {isMobile ? (
+                <input
+                  ref={galleryInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  onChange={handleGalleryFile}
+                />
+                {useLiveCameraUi ? (
                   <>
                     {!cameraOpen ? (
                       <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-900">
@@ -1861,19 +1865,23 @@ export default function CalificarPage() {
                           >
                             Escanear examen de otro alumno
                           </Button>
+                          {!isMobile ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => galleryInputRef.current?.click()}
+                              disabled={scanBusy}
+                            >
+                              O subir imagen desde la computadora
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     )}
                   </>
                 ) : (
                   <div className="space-y-3">
-                    <input
-                      ref={galleryInputRef}
-                      type="file"
-                      accept="image/*"
-                      className="sr-only"
-                      onChange={handleGalleryFile}
-                    />
                     <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-6 text-center">
                       <p className="text-sm text-gray-700">
                         En ordenador sube una foto de la <strong>hoja impresa completa</strong> (como la que genera
@@ -2066,7 +2074,7 @@ export default function CalificarPage() {
                       resetLiveReadings();
                     }}
                   >
-                    {isMobile ? 'Escanear otra vez' : 'Importar otra imagen'}
+                    {useLiveCameraUi ? 'Escanear otra vez' : 'Importar otra imagen'}
                   </Button>
                   <Button
                     className="flex-1 bg-orange-600 hover:bg-orange-700"
