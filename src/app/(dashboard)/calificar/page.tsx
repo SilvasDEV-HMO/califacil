@@ -450,7 +450,10 @@ export default function CalificarPage() {
       }
       /** Archivo subido ≠ vista de cámara: sin recorte “marco naranja” para alinear mejor página completa. */
       const oriented =
-        autoOrientCalifacilSheet(source, omrCols, { useGuideCrop: false }) ?? source;
+        autoOrientCalifacilSheet(source, omrCols, {
+          useGuideCrop: false,
+          allowTiltSweep: !fallbackFile,
+        }) ?? source;
       const examCanvas =
         oriented instanceof HTMLCanvasElement
           ? oriented

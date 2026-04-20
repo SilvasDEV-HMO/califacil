@@ -1145,7 +1145,13 @@ export function prepareCalifacilScanInput(
 }
 
 /** Opciones para {@link autoOrientCalifacilSheet}. */
-export type AutoOrientCalifacilSheetOptions = PrepareCalifacilScanInputOptions;
+export type AutoOrientCalifacilSheetOptions = PrepareCalifacilScanInputOptions & {
+  /**
+   * Si false, evita barridos de inclinación fina (útil para escaneos de escritorio ya rectos).
+   * Por defecto true.
+   */
+  allowTiltSweep?: boolean;
+};
 
 function normalizeMinMaxInPlaceGray(gray: Uint8Array): void {
   let min = 255;
@@ -2378,8 +2384,12 @@ export function scanCalifacilOmrSheet(
   const colSweep =
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
   const geometryMode = opts?.geometryMode ?? 'auto';
+  const selectedVariants =
+    geometryMode === 'fullSheet'
+      ? [{ canvas: corrected, preferFullSheetFirst: true }]
+      : variants;
 
-  for (const { canvas: c, preferFullSheetFirst } of variants) {
+  for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
       geometryMode === 'fullSheet'
@@ -2503,8 +2513,12 @@ export function scanCalifacilOmrSheetWithMeta(
   const colSweep =
     opts?.columnShiftSweep === 'live' ? COLUMN_SHIFT_PX_LIVE : COLUMN_SHIFT_PX_SWEEP;
   const geometryMode = opts?.geometryMode ?? 'auto';
+  const selectedVariants =
+    geometryMode === 'fullSheet'
+      ? [{ canvas: corrected, preferFullSheetFirst: true }]
+      : variants;
 
-  for (const { canvas: c, preferFullSheetFirst } of variants) {
+  for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
       geometryMode === 'fullSheet'
@@ -2609,30 +2623,32 @@ export function autoOrientCalifacilSheet(
     );
   };
 
-  // Inclinaciones fuertes (p. ej. ~45°): el barrido anterior ±38° dejaba la hoja torcida y la rejilla desfasada.
-  // Paso grueso 3° hasta ±60° y luego afinación de 1° (con paso 3° el óptimo puede quedar a ±1.5° del mejor).
-  let bestDeltaDeg = 0;
-  for (let delta = -60; delta <= 60; delta += 3) {
-    if (delta === 0) continue;
-    const tilted = rotateCanvasByDegrees(cardinalBest, delta);
-    const score = scoreTilted(tilted);
-    if (score > bestScore) {
-      bestScore = score;
-      bestCanvas = tilted;
-      bestDeltaDeg = delta;
+  if (opts?.allowTiltSweep !== false) {
+    // Inclinaciones fuertes (p. ej. ~45°): el barrido anterior ±38° dejaba la hoja torcida y la rejilla desfasada.
+    // Paso grueso 3° hasta ±60° y luego afinación de 1° (con paso 3° el óptimo puede quedar a ±1.5° del mejor).
+    let bestDeltaDeg = 0;
+    for (let delta = -60; delta <= 60; delta += 3) {
+      if (delta === 0) continue;
+      const tilted = rotateCanvasByDegrees(cardinalBest, delta);
+      const score = scoreTilted(tilted);
+      if (score > bestScore) {
+        bestScore = score;
+        bestCanvas = tilted;
+        bestDeltaDeg = delta;
+      }
     }
-  }
 
-  for (let fine = -5; fine <= 5; fine++) {
-    if (fine === 0) continue;
-    const total = bestDeltaDeg + fine;
-    if (total < -65 || total > 65) continue;
-    const tilted = rotateCanvasByDegrees(cardinalBest, total);
-    const score = scoreTilted(tilted);
-    if (score > bestScore) {
-      bestScore = score;
-      bestCanvas = tilted;
-      bestDeltaDeg = total;
+    for (let fine = -5; fine <= 5; fine++) {
+      if (fine === 0) continue;
+      const total = bestDeltaDeg + fine;
+      if (total < -65 || total > 65) continue;
+      const tilted = rotateCanvasByDegrees(cardinalBest, total);
+      const score = scoreTilted(tilted);
+      if (score > bestScore) {
+        bestScore = score;
+        bestCanvas = tilted;
+        bestDeltaDeg = total;
+      }
     }
   }
 
