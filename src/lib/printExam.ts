@@ -84,6 +84,17 @@ function questionBlock(
     </div>`;
 }
 
+function questionPlaceholderBlock(index: number): string {
+  const n = index + 1;
+  return `
+    <div class="question question--placeholder">
+      <p class="q-num"><strong>${n}.</strong> ________________________________</p>
+      <div class="open-lines">
+        <div class="write-line"></div>
+      </div>
+    </div>`;
+}
+
 export function chunkQuestions<T>(items: T[], size: number): T[][] {
   if (items.length === 0) return [[]];
   const out: T[][] = [];
@@ -175,6 +186,11 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     .print-page {
       max-width: 7in;
       margin: 0 auto;
+      min-height: calc(279.4mm - 11mm);
+      display: flex;
+      flex-direction: column;
+      page-break-inside: avoid;
+      break-inside: avoid-page;
     }
     .print-page--break {
       page-break-after: always;
@@ -234,8 +250,9 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       min-height: 16pt;
       margin-top: 6pt;
     }
-    .questions-block { margin-top: 0; }
-    .question { margin-bottom: 2.5pt; page-break-inside: avoid; }
+    .questions-block { margin-top: 0; flex: 1; }
+    .question { margin-bottom: 2.5pt; page-break-inside: avoid; break-inside: avoid-page; }
+    .question--placeholder .q-num { color: #777; }
     .q-num { margin: 0 0 1pt; text-align: justify; font-size: 8.5pt; line-height: 1.1; }
     .opt {
       display: flex;
@@ -267,10 +284,12 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     }
     .empty-note { font-size: 9pt; color: #666; font-style: italic; }
     .califacil-omr {
-      margin-top: 12pt;
+      margin-top: auto;
+      padding-top: 4pt;
       padding: 5pt 6pt 6pt;
       border: 2pt solid #000;
       page-break-inside: avoid;
+      break-inside: avoid-page;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
@@ -385,9 +404,13 @@ export function buildPrintExamHtml(
       const isLast = pageIdx === chunks.length - 1;
       const startIdx = pageIdx * 10;
       const rangeStart = startIdx + 1;
-      const rangeEnd = startIdx + chunkQs.length;
-      const questionsInPage = chunkQs
-        .map((q, i) => questionBlock(q, startIdx + i, includeAnswerKey))
+      const rangeEnd = startIdx + 10;
+      const questionsInPage = Array.from({ length: 10 }, (_, i) => {
+        const q = chunkQs[i];
+        return q
+          ? questionBlock(q, startIdx + i, includeAnswerKey)
+          : questionPlaceholderBlock(startIdx + i);
+      })
         .join('');
       const breakClass = !isLast ? ' print-page--break' : '';
 

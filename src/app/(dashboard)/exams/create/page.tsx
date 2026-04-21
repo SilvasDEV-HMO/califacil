@@ -28,8 +28,7 @@ import { toast } from 'sonner';
 import { GeneratedQuestion } from '@/types';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
-
-const NO_GROUP_VALUE = '__none__';
+import { supabase } from '@/lib/supabase';
 
 const steps = [
   { id: 1, title: 'Información General', icon: FileText },
@@ -53,7 +52,7 @@ export default function CreateExamPage() {
   // Step 1: General Info
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [selectedGroupId, setSelectedGroupId] = useState(NO_GROUP_VALUE);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   
   // Step 2: AI Configuration
   const [topics, setTopics] = useState('');
@@ -62,7 +61,6 @@ export default function CreateExamPage() {
     'easy' | 'medium' | 'hard' | 'extreme'
   >('medium');
   const [includeMultipleChoice, setIncludeMultipleChoice] = useState(true);
-  const [includeOpenAnswer, setIncludeOpenAnswer] = useState(true);
   
   // Step 3: Generated Questions
   const [generatedQuestions, setGeneratedQuestions] = useState<GeneratedQuestion[]>([]);
@@ -85,7 +83,7 @@ export default function CreateExamPage() {
           count: questionCount,
           difficulty: difficultyLevel,
           includeMultipleChoice,
-          includeOpenAnswer,
+          includeOpenAnswer: false,
         }),
       });
 
@@ -130,7 +128,7 @@ export default function CreateExamPage() {
       const exam = await createExam({
         title: title.trim(),
         description: description.trim() || null,
-        group_id: selectedGroupId === NO_GROUP_VALUE ? null : selectedGroupId,
+        group_id: selectedGroupIds[0] ?? null,
         status: 'draft',
       });
 
@@ -138,6 +136,20 @@ export default function CreateExamPage() {
         throw new Error(
           'No se pudo crear el examen. En Supabase, ejecuta las migraciones del proyecto (supabase/migrations), especialmente 20250323100000_core_schema.sql.'
         );
+      }
+
+      if (selectedGroupIds.length > 0) {
+        const { error: groupAssignError } = await supabase.from('exam_group_assignments').insert(
+          selectedGroupIds.map((groupId) => ({
+            exam_id: exam.id,
+            group_id: groupId,
+          }))
+        );
+
+        if (groupAssignError) {
+          await deleteExam(exam.id);
+          throw new Error('No se pudieron asignar los grupos al examen');
+        }
       }
 
       // Add questions
@@ -268,20 +280,34 @@ export default function CreateExamPage() {
               </div>
               
               <div className="space-y-2">
-                <Label htmlFor="group">Grupo (opcional)</Label>
-                <Select value={selectedGroupId} onValueChange={setSelectedGroupId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecciona un grupo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NO_GROUP_VALUE}>Sin grupo</SelectItem>
-                    {groups.map((group) => (
-                      <SelectItem key={group.id} value={group.id}>
-                        {group.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Grupos (opcional, puedes elegir varios)</Label>
+                <div className="space-y-2 rounded-md border p-3">
+                  {groups.length === 0 ? (
+                    <p className="text-sm text-gray-500">Aun no tienes grupos creados.</p>
+                  ) : (
+                    groups.map((group) => {
+                      const checked = selectedGroupIds.includes(group.id);
+                      return (
+                        <label key={group.id} className="flex items-center gap-2 text-sm">
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(value) => {
+                              const enabled = value === true;
+                              setSelectedGroupIds((prev) =>
+                                enabled
+                                  ? prev.includes(group.id)
+                                    ? prev
+                                    : [...prev, group.id]
+                                  : prev.filter((id) => id !== group.id)
+                              );
+                            }}
+                          />
+                          <span>{group.name}</span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
               </div>
 
               <div className="flex justify-end">
@@ -376,16 +402,6 @@ export default function CreateExamPage() {
                       Opción múltiple
                     </Label>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="openAnswer"
-                      checked={includeOpenAnswer}
-                      onCheckedChange={(checked) => setIncludeOpenAnswer(checked as boolean)}
-                    />
-                    <Label htmlFor="openAnswer" className="font-normal">
-                      Respuesta abierta
-                    </Label>
-                  </div>
                 </div>
               </div>
 
@@ -396,7 +412,7 @@ export default function CreateExamPage() {
                 </Button>
                 <Button 
                   onClick={handleGenerateQuestions}
-                  disabled={generating || (!includeMultipleChoice && !includeOpenAnswer)}
+                  disabled={generating || !includeMultipleChoice}
                   className="bg-orange-600 hover:bg-orange-700"
                 >
                   {generating ? (

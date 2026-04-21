@@ -21,6 +21,11 @@ type StudentRow = {
   group_id: string;
 };
 
+type ExamGroupAssignmentRow = {
+  exam_id: string;
+  group_id: string;
+};
+
 type ExamGroupAverage = {
   groupId: string;
   groupName: string;
@@ -90,6 +95,20 @@ export default function PromediosPage() {
           studentsById = new Map((studentsData || []).map((s) => [s.id, s as StudentRow]));
         }
 
+        const { data: assignmentData, error: assignmentError } = await supabase
+          .from('exam_group_assignments')
+          .select('exam_id,group_id')
+          .in('exam_id', examIds);
+        if (assignmentError) throw assignmentError;
+        const assignments = (assignmentData || []) as ExamGroupAssignmentRow[];
+        const assignedGroupIdsByExam = new Map<string, Set<string>>();
+        for (const row of assignments) {
+          if (!assignedGroupIdsByExam.has(row.exam_id)) {
+            assignedGroupIdsByExam.set(row.exam_id, new Set<string>());
+          }
+          assignedGroupIdsByExam.get(row.exam_id)!.add(row.group_id);
+        }
+
         const next: ExamAverageSummary[] = exams.map((exam) => {
           const maxScore = Math.max(1, questionCountByExam.get(exam.id) ?? 0);
           const byStudent = new Map<string, number>();
@@ -117,7 +136,14 @@ export default function PromediosPage() {
             });
           }
 
-          if (exam.group_id && !groupCollector.has(exam.group_id)) {
+          const assignedGroupIds = assignedGroupIdsByExam.get(exam.id);
+          if (assignedGroupIds && assignedGroupIds.size > 0) {
+            for (const groupId of assignedGroupIds) {
+              if (!groupCollector.has(groupId)) {
+                groupCollector.set(groupId, { total: 0, count: 0 });
+              }
+            }
+          } else if (exam.group_id && !groupCollector.has(exam.group_id)) {
             groupCollector.set(exam.group_id, { total: 0, count: 0 });
           }
 

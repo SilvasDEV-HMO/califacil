@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
+import { useAuth } from '@/hooks/useAuth';
+import { useGroups } from '@/hooks/useGroups';
 import { useExam } from '@/hooks/useExams';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   ArrowLeft,
@@ -30,6 +33,7 @@ import QRCode from 'qrcode';
 import { Question } from '@/types';
 import { printExamDocument } from '@/lib/printExam';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
+import { supabase } from '@/lib/supabase';
 
 type QuestionDraft = {
   text: string;
@@ -104,11 +108,16 @@ function draftFromQuestion(question: Question): QuestionDraft {
 export default function ExamDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { user } = useAuth();
+  const { groups } = useGroups(user?.id);
   const examId = params.examId as string;
   const { exam, loading, updateQuestion, deleteQuestion, addQuestions } = useExam(examId);
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
   const [generatingQR, setGeneratingQR] = useState(false);
   const [addingQuestion, setAddingQuestion] = useState(false);
+  const [assignedGroupIds, setAssignedGroupIds] = useState<string[]>([]);
+  const [loadingAssignedGroups, setLoadingAssignedGroups] = useState(false);
+  const [savingAssignedGroups, setSavingAssignedGroups] = useState(false);
   const [newQuestion, setNewQuestion] = useState<QuestionDraft>({
     text: '',
     type: 'multiple_choice',
@@ -117,6 +126,70 @@ export default function ExamDetailPage() {
     illustration: '',
   });
   const newQuestionOptions = normalizeOptions(newQuestion.optionsText);
+
+  useEffect(() => {
+    if (!exam?.id) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingAssignedGroups(true);
+      const { data, error } = await supabase
+        .from('exam_group_assignments')
+        .select('group_id')
+        .eq('exam_id', exam.id);
+
+      if (cancelled) return;
+
+      if (error) {
+        setAssignedGroupIds(exam.group_id ? [exam.group_id] : []);
+      } else {
+        const ids = (data || []).map((row) => row.group_id as string);
+        setAssignedGroupIds(ids.length > 0 ? ids : exam.group_id ? [exam.group_id] : []);
+      }
+      setLoadingAssignedGroups(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [exam?.id, exam?.group_id]);
+
+  const handleSaveAssignedGroups = async () => {
+    if (!exam) return;
+    setSavingAssignedGroups(true);
+    try {
+      const { error: deleteError } = await supabase
+        .from('exam_group_assignments')
+        .delete()
+        .eq('exam_id', exam.id);
+      if (deleteError) throw deleteError;
+
+      if (assignedGroupIds.length > 0) {
+        const { error: insertError } = await supabase.from('exam_group_assignments').insert(
+          assignedGroupIds.map((groupId) => ({
+            exam_id: exam.id,
+            group_id: groupId,
+          }))
+        );
+        if (insertError) throw insertError;
+      }
+
+      const patchRes = await fetch(`/api/exams/${exam.id}`, {
+        method: 'PATCH',
+        headers: await dashboardAuthJsonHeaders(),
+        body: JSON.stringify({ group_id: assignedGroupIds[0] ?? null }),
+      });
+      if (!patchRes.ok) {
+        throw new Error('No se pudo actualizar el grupo principal del examen');
+      }
+
+      toast.success('Grupos actualizados');
+      window.location.reload();
+    } catch {
+      toast.error('No se pudieron actualizar los grupos');
+    } finally {
+      setSavingAssignedGroups(false);
+    }
+  };
 
   const generateQRCode = useCallback(async () => {
     if (!exam) return;
@@ -322,6 +395,65 @@ export default function ExamDetailPage() {
       </div>
 
       <Tabs defaultValue="questions" className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Grupos asignados</CardTitle>
+            <CardDescription>
+              Este examen estará disponible para alumnos de los grupos seleccionados.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {loadingAssignedGroups ? (
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Cargando grupos...
+              </div>
+            ) : groups.length === 0 ? (
+              <p className="text-sm text-gray-500">No tienes grupos creados.</p>
+            ) : (
+              groups.map((group) => {
+                const checked = assignedGroupIds.includes(group.id);
+                return (
+                  <label key={group.id} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(value) => {
+                        const enabled = value === true;
+                        setAssignedGroupIds((prev) =>
+                          enabled
+                            ? prev.includes(group.id)
+                              ? prev
+                              : [...prev, group.id]
+                            : prev.filter((id) => id !== group.id)
+                        );
+                      }}
+                    />
+                    <span>{group.name}</span>
+                  </label>
+                );
+              })
+            )}
+
+            <div className="pt-2">
+              <Button
+                type="button"
+                onClick={() => void handleSaveAssignedGroups()}
+                disabled={savingAssignedGroups || loadingAssignedGroups}
+                className="bg-orange-600 hover:bg-orange-700"
+              >
+                {savingAssignedGroups ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Guardando...
+                  </>
+                ) : (
+                  'Guardar grupos'
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         <TabsList>
           <TabsTrigger value="questions">
             <FileText className="mr-2 h-4 w-4" />

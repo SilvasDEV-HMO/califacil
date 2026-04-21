@@ -131,6 +131,7 @@ export default function StudentExamPage() {
   const [exam, setExam] = useState<Exam | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [allowedGroupIds, setAllowedGroupIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [hasStarted, setHasStarted] = useState(false);
@@ -210,15 +211,29 @@ export default function StudentExamPage() {
       if (questionsError) throw questionsError;
       setQuestions(questionsData || []);
 
-      if (examData.group_id) {
+      const { data: assignmentData } = await supabase
+        .from('exam_group_assignments')
+        .select('group_id')
+        .eq('exam_id', examId);
+
+      const assignedGroupIds = (assignmentData || [])
+        .map((row) => row.group_id as string)
+        .filter(Boolean);
+      const fallbackGroupId = examData.group_id ? [examData.group_id] : [];
+      const examGroupIds = assignedGroupIds.length > 0 ? assignedGroupIds : fallbackGroupId;
+      setAllowedGroupIds(examGroupIds);
+
+      if (examGroupIds.length > 0) {
         const { data: studentsData, error: studentsError } = await supabase
           .from('students')
           .select('*')
-          .eq('group_id', examData.group_id);
+          .in('group_id', examGroupIds);
 
         if (!studentsError) {
           setStudents(studentsData || []);
         }
+      } else {
+        setStudents([]);
       }
     } catch {
       toast.error('Error al cargar el examen');
@@ -239,7 +254,7 @@ export default function StudentExamPage() {
   }, [selectedStudentId, examId]);
 
   useEffect(() => {
-    if (!exam?.group_id || !selectedStudentId) {
+    if (!selectedStudentId) {
       setPreStartBlock(null);
       return;
     }
@@ -298,7 +313,7 @@ export default function StudentExamPage() {
     return () => {
       cancelled = true;
     };
-  }, [exam?.group_id, examId, selectedStudentId]);
+  }, [exam?.id, examId, selectedStudentId]);
 
   useEffect(() => {
     if (!hasStarted || submitted || forfeitReason) return;
@@ -700,7 +715,7 @@ export default function StudentExamPage() {
                     searchPlaceholder="Escribe para buscar tu nombre…"
                     emptyText="Ningún nombre coincide. Revisa la ortografía o pide ayuda a tu maestro."
                     noStudentsText={
-                      !exam.group_id
+                      allowedGroupIds.length === 0
                         ? 'Este examen no está asignado a un grupo con lista de alumnos. El maestro debe asignar un grupo en la configuración del examen y registrar alumnos en Grupos.'
                         : undefined
                     }

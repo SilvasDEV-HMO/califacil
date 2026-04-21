@@ -175,6 +175,7 @@ export default function CalificarPage() {
 
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [students, setStudents] = useState<Student[]>([]);
+  const [allowedGroupIds, setAllowedGroupIds] = useState<string[]>([]);
   const [phase, setPhase] = useState<Phase>('elegir');
   const [sheetIndex, setSheetIndex] = useState(0);
   /** Respuestas confirmadas por id de pregunta (todas las hojas) */
@@ -810,22 +811,43 @@ export default function CalificarPage() {
   );
 
   useEffect(() => {
-    if (!exam?.group_id) {
+    if (!exam?.id) {
+      setAllowedGroupIds([]);
       setStudents([]);
       return;
     }
     let cancelled = false;
     (async () => {
+      const { data: assignmentData } = await supabase
+        .from('exam_group_assignments')
+        .select('group_id')
+        .eq('exam_id', exam.id);
+
+      const assignedGroupIds = (assignmentData || [])
+        .map((row) => row.group_id as string)
+        .filter(Boolean);
+      const fallbackGroupId = exam.group_id ? [exam.group_id] : [];
+      const examGroupIds = assignedGroupIds.length > 0 ? assignedGroupIds : fallbackGroupId;
+
+      if (!cancelled) {
+        setAllowedGroupIds(examGroupIds);
+      }
+
+      if (examGroupIds.length === 0) {
+        if (!cancelled) setStudents([]);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('students')
         .select('*')
-        .eq('group_id', exam.group_id!);
+        .in('group_id', examGroupIds);
       if (!cancelled && !error) setStudents(data || []);
     })();
     return () => {
       cancelled = true;
     };
-  }, [exam?.group_id]);
+  }, [exam?.id, exam?.group_id]);
 
   useEffect(() => {
     if (phase === 'revisar_hoja' && prevPhaseRef.current !== 'revisar_hoja') {
@@ -1204,12 +1226,12 @@ export default function CalificarPage() {
     cameraOpen,
     exam,
     examId,
+    isMobile,
     mapRawToDraft,
     omrCols,
     phase,
     resetLiveReadings,
     showAutoCaptureSnapshot,
-    setTorchEnabled,
     sheets,
     supportsCalifacil,
   ]);
@@ -1810,7 +1832,7 @@ export default function CalificarPage() {
                   searchPlaceholder="Escribe para buscar…"
                   emptyText="Ningún alumno coincide."
                   noStudentsText={
-                    exam && !exam.group_id
+                    exam && allowedGroupIds.length === 0
                       ? 'Este examen no tiene grupo asignado. Asigna un grupo al examen y registra alumnos en Grupos.'
                       : undefined
                   }
