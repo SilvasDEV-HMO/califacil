@@ -2051,40 +2051,6 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     : width - bubbleAreaLeft;
   const cellW = bubbleAreaW / cols;
 
-  // En modo plantilla fija evitamos refinamiento por líneas para no desplazar la malla.
-  const lineYs = fixedTemplate
-    ? null
-    : refineOmrRowBoundariesFromTableLines(
-        data,
-        width,
-        height,
-        bubbleAreaLeft,
-        dataTop,
-        dataHeight
-      );
-
-  const inferredColEdgesLocal = fixedTemplate
-    ? null
-    : inferColumnEdgesFromVerticalLines(
-        data,
-        width,
-        height,
-        bubbleAreaLeft,
-        bubbleAreaW,
-        cols,
-        dataTop,
-        rowH
-      );
-  const inferredColEdgesGlobal =
-    !fixedTemplate && profile.bottomBandRatio < 0.95
-      ? inferColumnEdgesGlobalFromVerticalLines(data, width, height, cols, dataTop, rowH)
-      : null;
-  let inferredColEdges = inferredColEdgesLocal ?? inferredColEdgesGlobal;
-  if (inferredColEdges && !fixedTemplate && profile.bottomBandRatio < 0.95) {
-    const span = inferredColEdges[inferredColEdges.length - 1]! - inferredColEdges[0]!;
-    // En hoja completa, un span demasiado corto suele ser un falso positivo sobre el texto.
-    if (span < width * 0.56) inferredColEdges = null;
-  }
   const uniformColEdges: number[] = [];
   for (let c = 0; c <= cols; c++) {
     uniformColEdges.push(
@@ -2092,6 +2058,72 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
         ? Math.min(width - 1, Math.round(bubbleAreaLeft + bubbleAreaW))
         : Math.round(bubbleAreaLeft + (c * bubbleAreaW) / cols)
     );
+  }
+  // Refinamiento de filas por líneas horizontales impresas.
+  // En modo plantilla fija se acepta solo si se mantiene cercano al template para evitar saltos.
+  let lineYs = refineOmrRowBoundariesFromTableLines(
+    data,
+    width,
+    height,
+    bubbleAreaLeft,
+    dataTop,
+    dataHeight
+  );
+  if (lineYs && fixedTemplate) {
+    let rowAligned = true;
+    for (let i = 0; i < 11; i++) {
+      const expected = dataTop + i * rowH;
+      const maxDev = rowH * 0.82;
+      if (Math.abs(lineYs[i]! - expected) > maxDev) {
+        rowAligned = false;
+        break;
+      }
+    }
+    if (!rowAligned) {
+      lineYs = null;
+    } else {
+      // Mezcla leve para conservar el anclaje del template pero adaptarse al escaneo real.
+      lineYs = lineYs.map((y, i) => {
+        const expected = dataTop + i * rowH;
+        const blended = y * 0.7 + expected * 0.3;
+        return Math.round(blended);
+      });
+    }
+  }
+
+  const inferredColEdgesLocal = inferColumnEdgesFromVerticalLines(
+    data,
+    width,
+    height,
+    bubbleAreaLeft,
+    bubbleAreaW,
+    cols,
+    dataTop,
+    rowH
+  );
+  const inferredColEdgesGlobal =
+    !fixedTemplate && profile.bottomBandRatio < 0.95
+      ? inferColumnEdgesGlobalFromVerticalLines(data, width, height, cols, dataTop, rowH)
+      : null;
+  let inferredColEdges = inferredColEdgesLocal ?? inferredColEdgesGlobal;
+  if (inferredColEdges && fixedTemplate) {
+    const span = inferredColEdges[inferredColEdges.length - 1]! - inferredColEdges[0]!;
+    let maxEdgeDev = 0;
+    for (let i = 0; i <= cols; i++) {
+      maxEdgeDev = Math.max(maxEdgeDev, Math.abs(inferredColEdges[i]! - uniformColEdges[i]!));
+    }
+    // En template fijo, aceptar solo detecciones cercanas al layout esperado.
+    if (span < bubbleAreaW * 0.62 || span > bubbleAreaW * 1.38 || maxEdgeDev > cellW * 0.62) {
+      inferredColEdges = null;
+    } else {
+      inferredColEdges = inferredColEdges.map((x, i) =>
+        Math.round(x * 0.72 + uniformColEdges[i]! * 0.28)
+      );
+    }
+  } else if (inferredColEdges && !fixedTemplate && profile.bottomBandRatio < 0.95) {
+    const span = inferredColEdges[inferredColEdges.length - 1]! - inferredColEdges[0]!;
+    // En hoja completa, un span demasiado corto suele ser un falso positivo sobre el texto.
+    if (span < width * 0.56) inferredColEdges = null;
   }
   const columnEdges = inferredColEdges ?? uniformColEdges;
   const bubbleAreaRight = Math.max(
