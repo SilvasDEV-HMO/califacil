@@ -138,7 +138,7 @@ export default function PromediosPage() {
 
           const assignedGroupIds = assignedGroupIdsByExam.get(exam.id);
           if (assignedGroupIds && assignedGroupIds.size > 0) {
-            for (const groupId of assignedGroupIds) {
+            for (const groupId of Array.from(assignedGroupIds)) {
               if (!groupCollector.has(groupId)) {
                 groupCollector.set(groupId, { total: 0, count: 0 });
               }
