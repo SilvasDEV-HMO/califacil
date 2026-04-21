@@ -1423,32 +1423,32 @@ function isLikelyFullSheetPhoto(canvas: HTMLCanvasElement): boolean {
 }
 
 function buildFullSheetFixedTemplateCandidates(): OmrFixedTemplate[] {
-  // Plantillas calibradas para escaneo vertical de hoja completa (con márgenes blancos).
-  // Se prueban pocas variantes para mantener fluidez, pero permitiendo corregir pequeños desplazamientos.
+  // Plantillas calibradas con escaneo real del formato Sonora/CaliFacil enviado por el usuario.
+  // Recuadro detectado aprox: left 0.172, top 0.609, width 0.684, height 0.249.
   return [
     {
-      tableLeftRatio: 0.158,
-      tableTopRatio: 0.702,
-      tableWidthRatio: 0.724,
-      tableHeightRatio: 0.196,
-      titleStripRatioOfTable: 0.2,
-      qnumWidthRatio: 0.102,
+      tableLeftRatio: 0.166,
+      tableTopRatio: 0.602,
+      tableWidthRatio: 0.692,
+      tableHeightRatio: 0.252,
+      titleStripRatioOfTable: 0.17,
+      qnumWidthRatio: 0.105,
     },
     {
-      tableLeftRatio: 0.162,
-      tableTopRatio: 0.712,
-      tableWidthRatio: 0.72,
-      tableHeightRatio: 0.19,
-      titleStripRatioOfTable: 0.2,
+      tableLeftRatio: 0.172,
+      tableTopRatio: 0.609,
+      tableWidthRatio: 0.684,
+      tableHeightRatio: 0.249,
+      titleStripRatioOfTable: 0.17,
       qnumWidthRatio: 0.104,
     },
     {
-      tableLeftRatio: 0.166,
-      tableTopRatio: 0.722,
-      tableWidthRatio: 0.716,
-      tableHeightRatio: 0.186,
-      titleStripRatioOfTable: 0.2,
-      qnumWidthRatio: 0.106,
+      tableLeftRatio: 0.178,
+      tableTopRatio: 0.616,
+      tableWidthRatio: 0.676,
+      tableHeightRatio: 0.246,
+      titleStripRatioOfTable: 0.17,
+      qnumWidthRatio: 0.103,
     },
   ];
 }
@@ -2492,7 +2492,7 @@ export function scanCalifacilOmrSheet(
     strictFixedTemplateMode
       ? buildFullSheetFixedTemplateCandidates()
       : [];
-  const fixedTemplateShifts = strictFixedTemplateMode ? ([-8, 0, 8] as const) : ([-16, -8, 0, 8, 16] as const);
+  const fixedTemplateShifts = strictFixedTemplateMode ? ([-6, 0, 6] as const) : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
     if (fixedTemplates.length > 0) {
@@ -2514,7 +2514,7 @@ export function scanCalifacilOmrSheet(
           }
         }
       }
-      // En modo plantilla fija priorizamos estas soluciones, pero permitimos fallback dinámico si sale mejor.
+      if (strictFixedTemplateMode) continue;
     }
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =
