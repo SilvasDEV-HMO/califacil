@@ -191,6 +191,100 @@ type OmrFixedTemplate = {
   qnumWidthRatio: number;
 };
 
+function compactPeakPositions(values: number[], minGap: number): number[] {
+  if (values.length === 0) return [];
+  const sorted = [...values].sort((a, b) => a - b);
+  const out: number[] = [sorted[0]!];
+  for (let i = 1; i < sorted.length; i++) {
+    const v = sorted[i]!;
+    const last = out[out.length - 1]!;
+    if (v - last <= minGap) {
+      out[out.length - 1] = Math.round((last + v) * 0.5);
+    } else {
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+/**
+ * Detecta el recuadro real de la tabla CaliFacil en hoja completa escaneada
+ * y lo convierte a plantilla fija para alinear overlay y lectura OMR.
+ */
+function detectFullSheetFixedTemplate(canvas: HTMLCanvasElement): OmrFixedTemplate | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const { width, height } = canvas;
+  if (width < 300 || height < 450) return null;
+  const img = ctx.getImageData(0, 0, width, height).data;
+  const rowCounts = new Array<number>(height).fill(0);
+
+  const yStart = Math.floor(height * 0.5);
+  const darkThr = 122;
+  for (let y = yStart; y < height; y++) {
+    let c = 0;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const g = pixelGray255(img, i);
+      if (g < darkThr) c++;
+    }
+    rowCounts[y] = c;
+  }
+
+  const rowMin = Math.floor(width * 0.16);
+  const rowPeaksRaw: number[] = [];
+  for (let y = yStart; y < height; y++) {
+    if (rowCounts[y] >= rowMin) rowPeaksRaw.push(y);
+  }
+  const rowPeaks = compactPeakPositions(rowPeaksRaw, 3);
+  if (rowPeaks.length < 8) return null;
+
+  const topY = Math.max(yStart, rowPeaks[0]! - 2);
+  const bottomY = Math.min(height - 1, rowPeaks[rowPeaks.length - 1]! + 2);
+  const tableH = bottomY - topY;
+  if (tableH < height * 0.12 || tableH > height * 0.4) return null;
+
+  const colCounts = new Array<number>(width).fill(0);
+  for (let x = 0; x < width; x++) {
+    let c = 0;
+    for (let y = topY; y <= bottomY; y++) {
+      const i = (y * width + x) * 4;
+      const g = pixelGray255(img, i);
+      if (g < darkThr) c++;
+    }
+    colCounts[x] = c;
+  }
+  const colMin = Math.floor(tableH * 0.2);
+  const colPeaksRaw: number[] = [];
+  for (let x = 0; x < width; x++) {
+    if (colCounts[x] >= colMin) colPeaksRaw.push(x);
+  }
+  const colPeaks = compactPeakPositions(colPeaksRaw, 4);
+  if (colPeaks.length < 6) return null;
+
+  const leftX = Math.max(0, colPeaks[0]! - 2);
+  const rightX = Math.min(width - 1, colPeaks[colPeaks.length - 1]! + 2);
+  const tableW = rightX - leftX;
+  if (tableW < width * 0.45 || tableW > width * 0.9) return null;
+
+  const innerRowPeaks = rowPeaks.filter((y) => y >= topY + 8);
+  const headerBottom = innerRowPeaks.length > 0 ? innerRowPeaks[0]! : topY + tableH * 0.17;
+  const titleStrip = Math.max(0.1, Math.min(0.26, (headerBottom - topY) / Math.max(1, tableH)));
+
+  const innerCols = colPeaks.filter((x) => x > leftX + 8);
+  const qnumDivider = innerCols.length > 0 ? innerCols[0]! : leftX + tableW * 0.1;
+  const qnumRatio = Math.max(0.07, Math.min(0.16, (qnumDivider - leftX) / Math.max(1, tableW)));
+
+  return {
+    tableLeftRatio: leftX / width,
+    tableTopRatio: topY / height,
+    tableWidthRatio: tableW / width,
+    tableHeightRatio: tableH / height,
+    titleStripRatioOfTable: titleStrip,
+    qnumWidthRatio: qnumRatio,
+  };
+}
+
 type Point = { x: number; y: number };
 
 type LineXFromY = { m: number; b: number }; // x = m*y + b
@@ -2488,13 +2582,16 @@ export function scanCalifacilOmrSheet(
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
   const strictFixedTemplateMode = geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
-  const fixedTemplates =
-    strictFixedTemplateMode
-      ? buildFullSheetFixedTemplateCandidates()
-      : [];
   const fixedTemplateShifts = strictFixedTemplateMode ? ([-6, 0, 6] as const) : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
+    const detectedTemplate = strictFixedTemplateMode ? detectFullSheetFixedTemplate(c) : null;
+    const fixedTemplates = strictFixedTemplateMode
+      ? [
+          ...(detectedTemplate ? [detectedTemplate] : []),
+          ...buildFullSheetFixedTemplateCandidates(),
+        ]
+      : [];
     if (fixedTemplates.length > 0) {
       for (const fixedTemplate of fixedTemplates) {
         for (const colShift of fixedTemplateShifts) {
@@ -2657,13 +2754,16 @@ export function scanCalifacilOmrSheetWithMeta(
       ? [{ canvas: corrected, preferFullSheetFirst: true }]
       : variants;
   const strictFixedTemplateMode = geometryMode === 'fullSheet' && Boolean(opts?.fixedTemplateAnchor);
-  const fixedTemplates =
-    strictFixedTemplateMode
-      ? buildFullSheetFixedTemplateCandidates()
-      : [];
-  const fixedTemplateShifts = strictFixedTemplateMode ? ([0] as const) : ([-16, -8, 0, 8, 16] as const);
+  const fixedTemplateShifts = strictFixedTemplateMode ? ([-6, 0, 6] as const) : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
+    const detectedTemplate = strictFixedTemplateMode ? detectFullSheetFixedTemplate(c) : null;
+    const fixedTemplates = strictFixedTemplateMode
+      ? [
+          ...(detectedTemplate ? [detectedTemplate] : []),
+          ...buildFullSheetFixedTemplateCandidates(),
+        ]
+      : [];
     if (fixedTemplates.length > 0) {
       for (const fixedTemplate of fixedTemplates) {
         for (const colShift of fixedTemplateShifts) {
