@@ -28,7 +28,6 @@ import { toast } from 'sonner';
 import { GeneratedQuestion } from '@/types';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
-import { supabase } from '@/lib/supabase';
 
 const steps = [
   { id: 1, title: 'Información General', icon: FileText },
@@ -138,18 +137,20 @@ export default function CreateExamPage() {
         );
       }
 
-      if (selectedGroupIds.length > 0) {
-        const { error: groupAssignError } = await supabase.from('exam_group_assignments').insert(
-          selectedGroupIds.map((groupId) => ({
-            exam_id: exam.id,
-            group_id: groupId,
-          }))
-        );
-
-        if (groupAssignError) {
-          await deleteExam(exam.id);
-          throw new Error('No se pudieron asignar los grupos al examen');
-        }
+      const groupAssignRes = await fetch(`/api/exams/${exam.id}`, {
+        method: 'PATCH',
+        headers: await dashboardAuthJsonHeaders(),
+        body: JSON.stringify({ group_ids: selectedGroupIds }),
+      });
+      const groupAssignBody = (await groupAssignRes.json().catch(() => ({}))) as {
+        message?: string;
+        error?: string;
+        hint?: string;
+      };
+      if (!groupAssignRes.ok) {
+        await deleteExam(exam.id);
+        const detail = [groupAssignBody.message, groupAssignBody.hint].filter(Boolean).join(' — ');
+        throw new Error(detail || groupAssignBody.error || 'No se pudieron asignar los grupos al examen');
       }
 
       // Add questions

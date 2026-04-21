@@ -34,6 +34,7 @@ import { Question } from '@/types';
 import { printExamDocument } from '@/lib/printExam';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { supabase } from '@/lib/supabase';
+import { toSpanishAuthMessage } from '@/lib/authErrors';
 
 type QuestionDraft = {
   text: string;
@@ -157,35 +158,23 @@ export default function ExamDetailPage() {
     if (!exam) return;
     setSavingAssignedGroups(true);
     try {
-      const { error: deleteError } = await supabase
-        .from('exam_group_assignments')
-        .delete()
-        .eq('exam_id', exam.id);
-      if (deleteError) throw deleteError;
-
-      if (assignedGroupIds.length > 0) {
-        const { error: insertError } = await supabase.from('exam_group_assignments').insert(
-          assignedGroupIds.map((groupId) => ({
-            exam_id: exam.id,
-            group_id: groupId,
-          }))
-        );
-        if (insertError) throw insertError;
-      }
-
       const patchRes = await fetch(`/api/exams/${exam.id}`, {
         method: 'PATCH',
         headers: await dashboardAuthJsonHeaders(),
-        body: JSON.stringify({ group_id: assignedGroupIds[0] ?? null }),
+        body: JSON.stringify({ group_ids: assignedGroupIds }),
       });
+      const payload = (await patchRes.json().catch(() => ({}))) as { message?: string; hint?: string; error?: string };
       if (!patchRes.ok) {
-        throw new Error('No se pudo actualizar el grupo principal del examen');
+        const detail = [payload.message, payload.hint].filter(Boolean).join(' — ');
+        throw new Error(detail || payload.error || 'No se pudieron guardar los grupos');
       }
 
       toast.success('Grupos actualizados');
       window.location.reload();
-    } catch {
-      toast.error('No se pudieron actualizar los grupos');
+    } catch (error: any) {
+      toast.error('No se pudieron actualizar los grupos', {
+        description: toSpanishAuthMessage(error?.message ?? 'Error desconocido'),
+      });
     } finally {
       setSavingAssignedGroups(false);
     }

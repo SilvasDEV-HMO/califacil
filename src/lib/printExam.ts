@@ -62,18 +62,19 @@ function questionBlock(
   let body = '';
 
   if (q.type === 'multiple_choice' && q.options?.length) {
-    body = q.options
+    const inlineOptions = q.options
       .map((opt, i) => {
         const letter = String.fromCharCode(65 + i);
         const isCorrect = includeAnswerKey && opt === q.correct_answer;
         const mark = isCorrect ? ' <strong>(correcta)</strong>' : '';
-        return `<div class="opt"><span class="opt-letter">${letter}.</span><span class="opt-body">${escapeHtml(opt)}${mark}</span></div>`;
+        return `<span class="opt-inline-item"><span class="opt-letter">${letter}.</span> ${escapeHtml(opt)}${mark}</span>`;
       })
-      .join('');
+      .join('<span class="opt-inline-sep"> | </span>');
+    body = `<p class="opt-inline">${inlineOptions}</p>`;
   } else {
     body =
       '<div class="open-lines">' +
-      Array.from({ length: 4 }, () => '<div class="write-line"></div>').join('') +
+      Array.from({ length: 2 }, () => '<div class="write-line"></div>').join('') +
       '</div>';
   }
 
@@ -186,9 +187,9 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     .print-page {
       max-width: 7in;
       margin: 0 auto;
+      position: relative;
       min-height: calc(279.4mm - 11mm);
-      display: flex;
-      flex-direction: column;
+      padding-bottom: 53mm;
       page-break-inside: avoid;
       break-inside: avoid-page;
     }
@@ -199,10 +200,10 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     .sheet-header {
       display: flex;
       flex-direction: column;
-      gap: 4pt;
+      gap: 2pt;
       border-bottom: 1px solid #000;
-      padding-bottom: 3pt;
-      margin-bottom: 4pt;
+      padding-bottom: 2pt;
+      margin-bottom: 2pt;
     }
     .sheet-banner-wrap {
       width: 100%;
@@ -225,54 +226,48 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       text-align: right;
     }
     .header-exam-title {
-      font-size: 10pt;
+      font-size: 9pt;
       font-weight: bold;
       margin: 0;
       line-height: 1.1;
     }
     .header-exam-range {
-      font-size: 9pt;
+      font-size: 8pt;
       font-weight: bold;
-      margin: 4pt 0 0;
+      margin: 2pt 0 0;
       color: #333;
     }
     .meta-grid {
       display: grid;
       grid-template-columns: minmax(0, 2.35fr) minmax(0, 0.55fr) minmax(0, 1.1fr);
-      gap: 3pt 8pt;
-      margin-top: 9pt;
-      margin-bottom: 10pt;
-      font-size: 8pt;
+      gap: 2pt 6pt;
+      margin-top: 4pt;
+      margin-bottom: 5pt;
+      font-size: 7pt;
     }
     .meta-grid label { font-weight: bold; }
     .meta-line {
       border-bottom: 1px solid #000;
-      min-height: 16pt;
-      margin-top: 6pt;
+      min-height: 10pt;
+      margin-top: 3pt;
     }
-    .questions-block { margin-top: 0; flex: 1; }
-    .question { margin-bottom: 2.5pt; page-break-inside: avoid; break-inside: avoid-page; }
+    .questions-block { margin-top: 0; }
+    .question { margin-bottom: 1.75pt; page-break-inside: avoid; break-inside: avoid-page; }
     .question--placeholder .q-num { color: #777; }
-    .q-num { margin: 0 0 1pt; text-align: justify; font-size: 8.5pt; line-height: 1.1; }
-    .opt {
-      display: flex;
-      align-items: baseline;
-      gap: 3pt;
+    .q-num { margin: 0 0 0.5pt; text-align: justify; font-size: 7.5pt; line-height: 1.05; }
+    .opt-letter { font-weight: bold; }
+    .opt-inline {
       margin: 0 0 0 2pt;
-      font-size: 8pt;
-      line-height: 1.08;
-    }
-    .opt-body {
-      flex: 1;
-      min-width: 0;
+      font-size: 7pt;
+      line-height: 1.04;
       text-align: justify;
     }
-    .opt-letter { font-weight: bold; margin-right: 3pt; }
-    .open-lines { margin-top: 2pt; margin-left: 5pt; }
+    .opt-inline-sep { color: #666; padding: 0 1pt; }
+    .open-lines { margin-top: 1pt; margin-left: 5pt; }
     .write-line {
       border-bottom: 1px solid #333;
-      min-height: 9pt;
-      margin-bottom: 3pt;
+      min-height: 7pt;
+      margin-bottom: 2pt;
     }
     .footer-note {
       margin-top: 2pt;
@@ -284,8 +279,11 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
     }
     .empty-note { font-size: 9pt; color: #666; font-style: italic; }
     .califacil-omr {
-      margin-top: auto;
-      padding-top: 4pt;
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 7pt;
+      margin-top: 0;
       padding: 5pt 6pt 6pt;
       border: 2pt solid #000;
       page-break-inside: avoid;
