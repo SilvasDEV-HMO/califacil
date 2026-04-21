@@ -6,7 +6,15 @@ const supabaseAnonKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
   '00000000-0000-0000-0000-000000000000';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    // Mantener sesión compartida entre pestañas y recargas.
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storageKey: 'califacil.auth.token',
+  },
+});
 
 export type Database = {
   public: {

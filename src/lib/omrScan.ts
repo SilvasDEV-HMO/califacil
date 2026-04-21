@@ -512,7 +512,7 @@ function columnInnerRectMeanDarkness(
 
 function drawSourceToCanvas(
   source: HTMLImageElement | HTMLCanvasElement,
-  maxSide = 1100
+  maxSide = 1400
 ): HTMLCanvasElement | null {
   const srcW =
     source instanceof HTMLImageElement ? source.naturalWidth || source.width : source.width;
@@ -2492,7 +2492,7 @@ export function scanCalifacilOmrSheet(
     strictFixedTemplateMode
       ? buildFullSheetFixedTemplateCandidates()
       : [];
-  const fixedTemplateShifts = strictFixedTemplateMode ? ([0] as const) : ([-16, -8, 0, 8, 16] as const);
+  const fixedTemplateShifts = strictFixedTemplateMode ? ([-8, 0, 8] as const) : ([-16, -8, 0, 8, 16] as const);
 
   for (const { canvas: c, preferFullSheetFirst } of selectedVariants) {
     if (fixedTemplates.length > 0) {
@@ -2514,7 +2514,7 @@ export function scanCalifacilOmrSheet(
           }
         }
       }
-      if (strictFixedTemplateMode) continue;
+      // En modo plantilla fija priorizamos estas soluciones, pero permitimos fallback dinámico si sale mejor.
     }
     const likelyFullSheet = geometryMode === 'auto' ? isLikelyFullSheetPhoto(c) : geometryMode === 'fullSheet';
     const orderedProfiles =

@@ -544,7 +544,7 @@ export default function CalificarPage() {
         picksInChunk[0] !== null &&
         picksInChunk.every((p) => p !== null);
 
-      if (CALIFACIL_VISION_POLICY.onAmbiguousRows && ambiguousIdx.length > 0 && examId) {
+      if (CALIFACIL_VISION_POLICY.onAmbiguousRows && ambiguousIdx.length > 0 && examId && !fallbackFile) {
         const rowsPayload = ambiguousIdx.map((i) => ({
           questionId: chunk[i].id,
           globalNumber: si * 10 + i + 1,
@@ -590,7 +590,8 @@ export default function CalificarPage() {
         examId &&
         chunk.length >= 8 &&
         meta.maxSameColumnCount >= 8 &&
-        !allSameCol
+        !allSameCol &&
+        !fallbackFile
       ) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
@@ -636,7 +637,8 @@ export default function CalificarPage() {
         CALIFACIL_VISION_POLICY.onAllSameColumn &&
         allSameCol &&
         examId &&
-        !ambiguousIdx.length
+        !ambiguousIdx.length &&
+        !fallbackFile
       ) {
         const rowsPayload = chunk.map((q, i) => ({
           questionId: q.id,
@@ -2046,23 +2048,6 @@ export default function CalificarPage() {
                     </p>
                   </div>
                 ) : null}
-                {canGradeStudents ? (
-                  <div className="rounded-md border bg-white px-3 py-2">
-                    <div className="mb-1 flex items-center justify-between text-xs text-gray-600">
-                      <span>Blur de clave automática esperada</span>
-                      <span>{overlayOpacity}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={overlayOpacity}
-                      onChange={(e) => setOverlayOpacity(Number(e.target.value))}
-                      className="w-full accent-orange-600"
-                    />
-                  </div>
-                ) : null}
               </div>
             )}
 
@@ -2075,16 +2060,6 @@ export default function CalificarPage() {
                     <AlertDescription className="text-sm">{reviewQualityHint}</AlertDescription>
                   </Alert>
                 ) : null}
-                <Alert variant="default" className="border-sky-200 bg-sky-50 text-sky-950">
-                  <Info className="h-4 w-4" />
-                  <AlertTitle className="text-sm">Exactitud de la lectura automática</AlertTitle>
-                  <AlertDescription className="text-sm">
-                    Ninguna cámara ni algoritmo garantiza un 100% de acierto en todos los casos (luz, sombras,
-                    marca incompleta, etc.). La nota que se guardará es la que elijas aquí; revisa la foto y las
-                    casillas resaltadas antes de confirmar. Si necesitas máxima ayuda automática, configura la
-                    verificación por IA en el servidor (ver <code className="text-xs">.env.example</code>).
-                  </AlertDescription>
-                </Alert>
                 <p className="text-sm font-medium text-gray-800">
                   Confirma o corrige cada respuesta antes de guardar. Con clave completa: verde = acierto vs
                   clave, rojo = lectura distinta de la correcta, naranja = opción correcta esperada, azul =
