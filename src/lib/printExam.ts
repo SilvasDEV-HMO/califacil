@@ -166,7 +166,7 @@ function califacilOmrTableHtml(
   }
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
-      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>toda la casilla</strong> (cuadrado) con bolígrafo <strong>azul o negro</strong> (tinta bien oscura). La <strong>fila</strong> es el número de pregunta; la <strong>columna</strong> es A, B, C… Incluye <strong>todo</strong> este recuadro al fotografiar.</p>
+      <p class="omr-title">CaliFacil — <strong>Una</strong> respuesta por fila: rellena <strong>toda la casilla</strong> (cuadrado) con bolígrafo <strong>azul o negro</strong> (tinta bien oscura).</p>
       <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-version="2">
         ${thead}
         <tbody>${rows.join('')}</tbody>
@@ -242,7 +242,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       grid-template-columns: minmax(0, 2.35fr) minmax(0, 0.55fr) minmax(0, 1.1fr);
       gap: 2pt 6pt;
       margin-top: 4pt;
-      margin-bottom: 9pt;
+      margin-bottom: 12pt;
       font-size: 7pt;
     }
     .meta-grid label { font-weight: bold; }
@@ -455,9 +455,6 @@ export function buildPrintExamHtml(
     </div>
     <!-- Cada hoja: 10 preguntas + recuadro CaliFacil para esa hoja -->
     ${omrCols > 0 ? califacilOmrTableHtml(chunkQs, startIdx, omrCols) : ''}
-    <p class="footer-note">
-      ${includeAnswerKey ? 'Clave de respuestas (uso docente).' : 'Hoja para el estudiante.'} · Hoja ${pageIdx + 1} de ${chunks.length}
-    </p>
   </section>`;
     })
     .join('');
