@@ -69,7 +69,7 @@ function questionBlock(
         const mark = isCorrect ? ' <strong>(correcta)</strong>' : '';
         return `<span class="opt-inline-item"><span class="opt-letter">${letter}.</span> ${escapeHtml(opt)}${mark}</span>`;
       })
-      .join('<span class="opt-inline-sep"> | </span>');
+      .join('');
     body = `<p class="opt-inline">${inlineOptions}</p>`;
   } else {
     body =
@@ -252,17 +252,23 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       margin-top: 3pt;
     }
     .questions-block { margin-top: 0; }
-    .question { margin-bottom: 1.75pt; page-break-inside: avoid; break-inside: avoid-page; }
+    .question { margin-bottom: 3pt; page-break-inside: avoid; break-inside: avoid-page; }
     .question--placeholder .q-num { color: #777; }
-    .q-num { margin: 0 0 0.5pt; text-align: justify; font-size: 7.5pt; line-height: 1.05; }
+    .q-num { margin: 0 0 1pt; text-align: justify; font-size: 8.2pt; line-height: 1.14; }
     .opt-letter { font-weight: bold; }
     .opt-inline {
-      margin: 0 0 0 2pt;
-      font-size: 7pt;
-      line-height: 1.04;
-      text-align: justify;
+      margin: 0 0 0 8pt;
+      font-size: 7.5pt;
+      line-height: 1.16;
+      text-align: left;
     }
-    .opt-inline-sep { color: #666; padding: 0 1pt; }
+    .opt-inline-item {
+      display: inline-block;
+      margin-right: 10pt;
+      margin-bottom: 1pt;
+      max-width: 100%;
+      vertical-align: top;
+    }
     .open-lines { margin-top: 1pt; margin-left: 5pt; }
     .write-line {
       border-bottom: 1px solid #333;
