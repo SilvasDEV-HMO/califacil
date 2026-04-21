@@ -252,7 +252,7 @@ const PRINT_STYLES = `    @page { size: letter; margin: 5.5mm 8mm; }
       margin-top: 3pt;
     }
     .questions-block { margin-top: 0; }
-    .question { margin-bottom: 3pt; page-break-inside: avoid; break-inside: avoid-page; }
+    .question { margin-bottom: 5pt; page-break-inside: avoid; break-inside: avoid-page; }
     .question--placeholder .q-num { color: #777; }
     .q-num { margin: 0 0 1pt; text-align: justify; font-size: 8.2pt; line-height: 1.14; }
     .opt-letter { font-weight: bold; }

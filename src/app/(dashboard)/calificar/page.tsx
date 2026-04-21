@@ -46,7 +46,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { StudentCombobox } from '@/components/student-combobox';
 import {
@@ -81,6 +80,8 @@ const STABLE_FULL_TICKS = 2;
 const AMBIGUOUS_ROW_WARN_RATIO = 0.35;
 /** Resolución máxima usada para escaneo en vivo móvil (mejora fluidez). */
 const MOBILE_SCAN_MAX_WIDTH = 960;
+/** Tras varios ticks sin detección, intentamos flash en móvil si está disponible. */
+const LOW_VISIBILITY_AUTOTORCH_TICKS = 5;
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
 const VIRTUAL_CAMERA_RE = /(droidcam|airdroid|iriun|epoccam|obs|virtual|ndi)/i;
 
@@ -185,8 +186,6 @@ export default function CalificarPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   /** Geometría de celdas del último escaneo (misma relación de aspecto que la vista previa). */
   const [reviewOmrGeometry, setReviewOmrGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
-  /** Confirmación explícita de que el usuario revisó lectura vs foto (no se guarda sin esto). */
-  const [reviewHumanAck, setReviewHumanAck] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
 
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -202,6 +201,9 @@ export default function CalificarPage() {
   const liveBusyRef = useRef(false);
   const stablePartialTicksRef = useRef(0);
   const stableFullTicksRef = useRef(0);
+  const lowVisibilityTicksRef = useRef(0);
+  const autotorchTriedRef = useRef(false);
+  const glareHintShownRef = useRef(false);
   const autoFinalizeInProgressRef = useRef(false);
   /** Respuestas ya capturadas en vivo por id de pregunta; no se sobrescriben hasta «Escanear otra vez». */
   const liveLockedAnswersRef = useRef<Record<string, string>>({});
@@ -389,6 +391,9 @@ export default function CalificarPage() {
   const resetLiveReadings = useCallback(() => {
     stablePartialTicksRef.current = 0;
     stableFullTicksRef.current = 0;
+    lowVisibilityTicksRef.current = 0;
+    autotorchTriedRef.current = false;
+    glareHintShownRef.current = false;
     autoFinalizeInProgressRef.current = false;
     liveLockedAnswersRef.current = {};
     liveCompleteSoundPlayedRef.current = false;
@@ -419,6 +424,9 @@ export default function CalificarPage() {
     }
     stablePartialTicksRef.current = 0;
     stableFullTicksRef.current = 0;
+    lowVisibilityTicksRef.current = 0;
+    autotorchTriedRef.current = false;
+    glareHintShownRef.current = false;
     autoFinalizeInProgressRef.current = false;
     setFlashSupported(false);
     setFlashOn(false);
@@ -525,13 +533,40 @@ export default function CalificarPage() {
         );
         return { success: false };
       }
-      const meta = scanCalifacilOmrSheetWithMeta(oriented, omrCols, {
+      let activeScanSource: HTMLImageElement | HTMLCanvasElement = oriented;
+      let meta = scanCalifacilOmrSheetWithMeta(activeScanSource, omrCols, {
         skipGuideCrop: true,
         geometryMode: fallbackFile ? 'fullSheet' : isMobile ? 'croppedBox' : 'auto',
         preserveInputCanvas: preserveCapturedFrame,
         fixedTemplateAnchor: Boolean(fallbackFile),
       });
-      const raw = [...meta.picks];
+      let raw = [...meta.picks];
+      let mapped = mapRawToDraft(raw, chunk);
+      const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
+
+      if (isMobile && mapped.resolvedCount < minResolved) {
+        const recoverySource =
+          autoOrientCalifacilSheet(source, omrCols, {
+            useGuideCrop: false,
+            allowTiltSweep: true,
+          }) ?? (oriented as HTMLCanvasElement | HTMLImageElement);
+
+        const recoveryMeta = scanCalifacilOmrSheetWithMeta(recoverySource, omrCols, {
+          skipGuideCrop: true,
+          geometryMode: fallbackFile ? 'fullSheet' : 'auto',
+          preserveInputCanvas: false,
+          fixedTemplateAnchor: Boolean(fallbackFile),
+        });
+        const recoveryRaw = [...recoveryMeta.picks];
+        const recoveryMapped = mapRawToDraft(recoveryRaw, chunk);
+
+        if (recoveryMapped.resolvedCount > mapped.resolvedCount) {
+          meta = recoveryMeta;
+          raw = recoveryRaw;
+          mapped = recoveryMapped;
+          activeScanSource = recoverySource;
+        }
+      }
 
       const ambiguousIdx = meta.rows
         .map((r, i) => (i < chunk.length && r.ambiguous ? i : -1))
@@ -718,7 +753,6 @@ export default function CalificarPage() {
         }
       }
 
-      const mapped = mapRawToDraft(raw, chunk);
       const locks = liveLockedAnswersRef.current;
       const mergedDraft: Record<string, string> = {};
       let mergedResolved = 0;
@@ -736,7 +770,6 @@ export default function CalificarPage() {
           }
         }
       }
-      const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
       if (mergedResolved < minResolved) {
         const allowManualReview = !skipReviewUi;
         setDraftSelections({});
@@ -788,7 +821,7 @@ export default function CalificarPage() {
           setReviewQualityHint(null);
         }
 
-        await setPreviewFromSource(meta.reviewSourceCanvas ?? oriented, fallbackFile);
+        await setPreviewFromSource(meta.reviewSourceCanvas ?? activeScanSource, fallbackFile);
         setReviewOmrGeometry(meta.geometry);
         setPhase('revisar_hoja');
         setLiveStatus(
@@ -850,9 +883,6 @@ export default function CalificarPage() {
   }, [exam?.id, exam?.group_id]);
 
   useEffect(() => {
-    if (phase === 'revisar_hoja' && prevPhaseRef.current !== 'revisar_hoja') {
-      setReviewHumanAck(false);
-    }
     prevPhaseRef.current = phase;
   }, [phase]);
 
@@ -905,7 +935,6 @@ export default function CalificarPage() {
       return null;
     });
     setReviewOmrGeometry(null);
-    setReviewHumanAck(false);
     setSelectedStudentId('');
   }, [stopLiveCamera, isMobile]);
 
@@ -945,7 +974,6 @@ export default function CalificarPage() {
         return null;
       });
       setReviewOmrGeometry(null);
-      setReviewHumanAck(false);
     });
     if (isMobile) {
       void startLiveCameraRef.current?.({ skipPhaseGuard: true });
@@ -1048,7 +1076,7 @@ export default function CalificarPage() {
       setFlashSupported(supportsTorch);
       // Inicia siempre con flash apagado para abrir la cámara más rápido.
       setFlashOn(false);
-      const liveScanIntervalMs = isMobile ? 1150 : 750;
+      const liveScanIntervalMs = isMobile ? 900 : 750;
       const scanCanvas = document.createElement('canvas');
       const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
       let hotLoopStatus = '';
@@ -1084,6 +1112,7 @@ export default function CalificarPage() {
             stopScanningHum();
             stablePartialTicksRef.current = 0;
             stableFullTicksRef.current = 0;
+            lowVisibilityTicksRef.current += 1;
             const locksNoExam = liveLockedAnswersRef.current;
             const mergedNoExam: Record<string, string> = {};
             let resolvedNoExam = 0;
@@ -1100,8 +1129,25 @@ export default function CalificarPage() {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
             }
+
+            if (
+              isMobile &&
+              flashSupported &&
+              !flashOn &&
+              !autotorchTriedRef.current &&
+              lowVisibilityTicksRef.current >= LOW_VISIBILITY_AUTOTORCH_TICKS
+            ) {
+              autotorchTriedRef.current = true;
+              void setTorchEnabled(true);
+              setLiveStatus('Activé el flash automáticamente para mejorar detección. Mantén el recuadro centrado.');
+              if (!glareHintShownRef.current) {
+                glareHintShownRef.current = true;
+                toast.message('Si hay reflejo, inclina ligeramente el celular y evita brillo directo.');
+              }
+            }
             return;
           }
+          lowVisibilityTicksRef.current = 0;
           const raw = scanCalifacilOmrSheet(oriented, omrCols, {
             skipGuideCrop: true,
             qnumSweep: 'live',
@@ -1147,6 +1193,23 @@ export default function CalificarPage() {
           }
 
           const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
+          if (mergedResolved < Math.ceil(chunk.length * 0.35)) {
+            lowVisibilityTicksRef.current += 1;
+          } else {
+            lowVisibilityTicksRef.current = 0;
+          }
+
+          if (
+            isMobile &&
+            flashSupported &&
+            !flashOn &&
+            !autotorchTriedRef.current &&
+            lowVisibilityTicksRef.current >= LOW_VISIBILITY_AUTOTORCH_TICKS
+          ) {
+            autotorchTriedRef.current = true;
+            void setTorchEnabled(true);
+            setLiveStatus('Poca luz detectada: activé flash automáticamente.');
+          }
           if (mergedResolved >= chunk.length && chunk.length > 0) {
             const nextStatus = 'Detección completa. Toca «Revisar y confirmar».';
             if (nextStatus !== hotLoopStatus) {
@@ -1226,11 +1289,14 @@ export default function CalificarPage() {
     cameraOpen,
     exam,
     examId,
+    flashOn,
+    flashSupported,
     isMobile,
     mapRawToDraft,
     omrCols,
     phase,
     resetLiveReadings,
+    setTorchEnabled,
     showAutoCaptureSnapshot,
     sheets,
     supportsCalifacil,
@@ -1486,22 +1552,54 @@ export default function CalificarPage() {
       }
 
       let omrReviewMeta: OmrScanMetaResult | null = null;
+      let previewSource: HTMLCanvasElement | null = orientedForPreview;
       if (orientedForPreview) {
         omrReviewMeta = scanCalifacilOmrSheetWithMeta(orientedForPreview, omrCols, {
           skipGuideCrop: true,
           geometryMode: 'croppedBox',
           preserveInputCanvas: true,
         });
-        setReviewOmrGeometry(omrReviewMeta.geometry);
-      } else {
-        setReviewOmrGeometry(null);
       }
+
+      if (isMobile && orientedForPreview && omrReviewMeta) {
+        const currentResolved = chunk.reduce((acc, q) => (mergedChunk[q.id]?.trim() ? acc + 1 : acc), 0);
+        const minResolved = Math.max(1, Math.ceil(chunk.length * MIN_AUTO_READ_RATIO));
+        if (currentResolved < minResolved) {
+          const recoveredOriented =
+            autoOrientCalifacilSheet(orientedForPreview, omrCols, {
+              useGuideCrop: false,
+              allowTiltSweep: true,
+            }) ?? orientedForPreview;
+          const recoveryMeta = scanCalifacilOmrSheetWithMeta(recoveredOriented, omrCols, {
+            skipGuideCrop: true,
+            geometryMode: 'auto',
+            preserveInputCanvas: false,
+          });
+          const recoveryDraft = mapRawToDraft(recoveryMeta.picks, chunk).draft;
+          let added = 0;
+          for (const q of chunk) {
+            const curr = mergedChunk[q.id]?.trim() ?? '';
+            const next = recoveryDraft[q.id]?.trim() ?? '';
+            if (!curr && next) {
+              mergedChunk[q.id] = next;
+              added++;
+            }
+          }
+          if (added > 0) {
+            omrReviewMeta = recoveryMeta;
+            previewSource = recoveredOriented;
+            toast.message(`Recuperación automática: ${added} respuesta(s) adicionales detectadas.`);
+          }
+        }
+      }
+
+      setReviewOmrGeometry(omrReviewMeta?.geometry ?? null);
 
       setDraftSelections(mergedChunk);
 
-      if (orientedForPreview && omrReviewMeta) {
-        await setPreviewFromSource(omrReviewMeta.reviewSourceCanvas ?? orientedForPreview);
-      } else if (!orientedForPreview) {
+      if (previewSource && omrReviewMeta) {
+        await setPreviewFromSource(omrReviewMeta.reviewSourceCanvas ?? previewSource);
+      } else if (!previewSource) {
         setPreviewUrl((u) => {
           if (u) URL.revokeObjectURL(u);
           return null;
@@ -1525,7 +1623,9 @@ export default function CalificarPage() {
     draftSelections,
     exam,
     examId,
+    isMobile,
     liveDraftSelections,
+    mapRawToDraft,
     omrCols,
     phase,
     setPreviewFromSource,
@@ -2082,11 +2182,6 @@ export default function CalificarPage() {
                     <AlertDescription className="text-sm">{reviewQualityHint}</AlertDescription>
                   </Alert>
                 ) : null}
-                <p className="text-sm font-medium text-gray-800">
-                  Confirma o corrige cada respuesta antes de guardar. Con clave completa: verde = acierto vs
-                  clave, rojo = lectura distinta de la correcta, naranja = opción correcta esperada, azul =
-                  casillas vacías en la imagen.
-                </p>
                 {currentChunk.map((q, idx) => {
                   const globalNum = sheetIndex * 10 + idx + 1;
                   const opts = q.options ?? [];
@@ -2097,7 +2192,6 @@ export default function CalificarPage() {
                       <Select
                         value={val ? val : SELECT_NO_OPTION}
                         onValueChange={(v) => {
-                          setReviewHumanAck(false);
                           setDraftSelections((prev) => ({
                             ...prev,
                             [q.id]: v === SELECT_NO_OPTION ? '' : v,
@@ -2120,25 +2214,12 @@ export default function CalificarPage() {
                   );
                 })}
 
-                <div className="flex items-start gap-3 rounded-md border border-gray-200 bg-white p-3">
-                  <Checkbox
-                    id="review-human-ack"
-                    checked={reviewHumanAck}
-                    onCheckedChange={(c) => setReviewHumanAck(c === true)}
-                  />
-                  <Label htmlFor="review-human-ack" className="cursor-pointer text-sm font-normal leading-snug text-gray-800">
-                    He revisado la foto y cada opción: la calificación guardada será la que figure arriba, no la
-                    lectura automática por sí sola.
-                  </Label>
-                </div>
-
                 <div className="flex flex-col gap-2 pt-2 sm:flex-row">
                   <Button
                     variant="outline"
                     className="flex-1"
                     onClick={() => {
                       setPhase('capturar');
-                      setReviewHumanAck(false);
                       setReviewOmrGeometry(null);
                       setPreviewUrl((u) => {
                         if (u) URL.revokeObjectURL(u);
@@ -2152,7 +2233,7 @@ export default function CalificarPage() {
                   </Button>
                   <Button
                     className="flex-1 bg-orange-600 hover:bg-orange-700"
-                    disabled={!reviewHumanAck || scanBusy}
+                    disabled={scanBusy}
                     onClick={() => void confirmCurrentSheet()}
                   >
                     Guardar calificación

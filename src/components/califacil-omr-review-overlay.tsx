@@ -30,30 +30,54 @@ export function CalifacilOmrReviewOverlay({
 }: Props) {
   const rows = Math.min(10, rowCount);
   const clipId = useId();
+  const W = Math.max(1, geometry.imageWidth);
+  const H = Math.max(1, geometry.imageHeight);
+  const clipPx = clipRect
+    ? {
+        x: clipRect.x * W,
+        y: clipRect.y * H,
+        w: clipRect.w * W,
+        h: clipRect.h * H,
+      }
+    : null;
+
+  const toPxCell = (row: number, col: number) => {
+    const cell = geometry.cells[row]?.[col];
+    if (!cell) return null;
+    return {
+      x: cell.x * W,
+      y: cell.y * H,
+      w: cell.w * W,
+      h: cell.h * H,
+    };
+  };
+
   return (
     <svg
       className="pointer-events-none absolute left-0 top-0 h-full w-full"
-      viewBox="0 0 1 1"
+      viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="none"
+      shapeRendering="geometricPrecision"
       aria-hidden
     >
       <defs>
         <filter id="expected-blur" x="-20%" y="-20%" width="140%" height="140%">
           <feGaussianBlur stdDeviation="0.008" />
         </filter>
-        {clipRect ? (
+        {clipPx ? (
           <clipPath id={clipId}>
-            <rect x={clipRect.x} y={clipRect.y} width={clipRect.w} height={clipRect.h} />
+            <rect x={clipPx.x} y={clipPx.y} width={clipPx.w} height={clipPx.h} />
           </clipPath>
         ) : null}
       </defs>
-      <g clipPath={clipRect ? `url(#${clipId})` : undefined}>
+      <g clipPath={clipPx ? `url(#${clipId})` : undefined}>
         {Array.from({ length: rows }, (_, row) => {
           const rowCells = geometry.cells[row];
           if (!rowCells) return null;
           const expectedPick = expectedPicks?.[row] ?? null;
           if (expectedPick === null || expectedPick < 0 || expectedPick >= rowCells.length) return null;
-          const cell = rowCells[expectedPick];
+          const cell = toPxCell(row, expectedPick);
+          if (!cell) return null;
           return (
             <rect
               key={`expected-${row}`}
@@ -79,9 +103,11 @@ export function CalifacilOmrReviewOverlay({
           return (
             <g key={row}>
               {rowCells.map((cell, col) => {
+                const pxCell = toPxCell(row, col);
+                if (!pxCell) return null;
                 const isPicked = pick !== null && pick === col;
                 let stroke = 'rgba(59,130,246,0.35)';
-                let strokeW = 0.004;
+                let strokeW = Math.max(1, Math.round(W * 0.002));
 
                 if (isPicked) {
                   if (hasExpected) {
@@ -89,23 +115,24 @@ export function CalifacilOmrReviewOverlay({
                       pick === expectedPick
                         ? 'rgba(22,163,74,0.95)'
                         : 'rgba(220,38,38,0.95)';
-                    strokeW = 0.009;
+                    strokeW = Math.max(2, Math.round(W * 0.0055));
                   } else {
                     stroke = 'rgba(22,163,74,0.95)';
-                    strokeW = 0.008;
+                    strokeW = Math.max(2, Math.round(W * 0.005));
                   }
                 }
 
                 return (
                   <rect
                     key={col}
-                    x={cell.x}
-                    y={cell.y}
-                    width={cell.w}
-                    height={cell.h}
+                    x={pxCell.x}
+                    y={pxCell.y}
+                    width={pxCell.w}
+                    height={pxCell.h}
                     fill="none"
                     stroke={stroke}
                     strokeWidth={strokeW}
+                    vectorEffect="non-scaling-stroke"
                   />
                 );
               })}
