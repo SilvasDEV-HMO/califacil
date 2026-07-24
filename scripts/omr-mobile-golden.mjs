@@ -87,8 +87,7 @@ function testBlankSheetZero() {
 }
 
 /**
- * Compact print layout: row height fixed at capacity-30.
- * Outer OMR height ≈ chrome + thead + N * rowPt → h10/h30 ≈ 0.37.
+ * Fixed 30-row print layout: outer OMR height always capacity-30 (N=10 and N=30 identical).
  */
 function testCompactAnswerSheetHeights() {
   const MAX = 30;
@@ -117,22 +116,27 @@ function testCompactAnswerSheetHeights() {
     const tbodyPt = n * rowPt;
     return asidePadPt + titleBlockPt + tableBorderPt + theadPt + tbodyPt;
   };
-  const h10 = outer(10);
-  const h30 = outer(30);
+  // Plantilla fija 30: altura de tabla siempre la de capacidad 30 (N=10 y N=30 iguales).
+  const h10 = outer(MAX);
+  const h30 = outer(MAX);
   const ratio = h10 / h30;
-  assert(ratio > 0.28 && ratio < 0.55, `h10/h30=${ratio.toFixed(3)} expected ~0.35–0.45`);
+  assert(Math.abs(ratio - 1) < 1e-9, `h10/h30=${ratio.toFixed(3)} expected 1.0 (fixed 30 template)`);
   assert(h30 + 40 < sheetInnerPt, `30 rows must fit letter (h30=${h30.toFixed(1)} pt)`);
-  assert(rowPt < 35, `rowPt=${rowPt} must stay compact (not stretch for N=10)`);
-  console.log(`ok: compact OMR heights N=10/30 (rowPt=${rowPt}, ratio=${ratio.toFixed(3)})`);
+  assert(rowPt < 35, `rowPt=${rowPt} must stay compact`);
+  console.log(`ok: fixed 30-row OMR heights (rowPt=${rowPt}, ratio=${ratio.toFixed(3)})`);
 }
 
-/** Label and row count must track N (no hardcoded 1–30 on a 10-row sheet). */
+/** Label: N activos + plantilla 30 cuando N < 30. */
 function testDynamicReactivosLabel() {
-  const labelFor = (n) => `Hoja de respuestas · Reactivos 1–${n}`;
-  assert(labelFor(10) === 'Hoja de respuestas · Reactivos 1–10', 'N=10 label');
+  const MAX = 30;
+  const labelFor = (n) =>
+    n < MAX
+      ? `Hoja de respuestas · Reactivos 1–${n} · plantilla ${MAX}`
+      : `Hoja de respuestas · Reactivos 1–${n}`;
+  assert(labelFor(10) === 'Hoja de respuestas · Reactivos 1–10 · plantilla 30', 'N=10 label');
   assert(labelFor(30) === 'Hoja de respuestas · Reactivos 1–30', 'N=30 label');
   assert(labelFor(10) !== labelFor(30), 'labels differ by N');
-  console.log('ok: dynamic Reactivos 1–N labels');
+  console.log('ok: Reactivos 1–N · plantilla 30 labels');
 }
 
 function testPickRequiresInkAndScore() {

@@ -1,19 +1,22 @@
 /**
- * Checklist iPhone — OMR rápido y preciso (N=10 y N=30)
+ * Checklist iPhone — OMR rápido y preciso (plantilla fija 30)
  * ----------------------------------------------------
  * Impresión
- * 1. Examen de 10 → hoja de respuestas: solo 10 bolitas compactas (no llenan la carta).
+ * 1. Examen de 10 → hoja de respuestas: 30 bolitas (filas 11–30 filler) · etiqueta «Reactivos 1–10 · plantilla 30».
  * 2. Examen de 30 → 30 bolitas en UNA sola página carta.
  *
  * Calificar móvil
- * 3. Hoja papel EN BLANCO → popup 0/N (no 2/10 por ruido).
+ * 3. Hoja papel EN BLANCO → popup 0/N (no 2/10 por ruido); N = preguntas reales, no 30.
  * 4. Hoja con marcas reales → overlay sobre burbujas impresas + nota en segundos.
- * 5. Post-foto < ~3 s (sin 2ª pasada eterna).
+ * 5. Post-foto < ~3 s (sin 2ª pasada eterna de 320 iters).
  * 6. CTAs: Calificar de nuevo / Calificar otro examen.
  * 7. Si falla el guardado en nube → toast de error (la nota en pantalla no implica “guardado”).
  *
  * Calificar desktop
- * 8. Subir foto/PDF de hoja 10 y 30 → revisar_hoja con overlay → guardar.
+ * 8. Subir foto/PDF de hoja 10 y 30 (ambas plantilla 30) → revisar_hoja con overlay → guardar.
  *
- * Automatizado: npm run test:omr-mobile
+ * Automatizado:
+ *   npm run test:omr-mobile
+ *   npx tsx scripts/assert-omr-print-n.mts
+ *   npx tsx scripts/assert-calificar-grading.mts
  */

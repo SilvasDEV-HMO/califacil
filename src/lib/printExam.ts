@@ -290,12 +290,17 @@ function answerSheetControlNumberHtml(
     </div>`;
 }
 
+/**
+ * Tabla OMR de hoja de respuestas: siempre 30 filas (plantilla fija).
+ * Filas 1..N = preguntas reales; N+1..30 = filler con las mismas bolitas (sin pregunta).
+ */
 function answerSheetOmrTableHtml(
   questions: Question[],
   omrCols: number,
   questionOffset = 0
 ): string {
-  const rowCount = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, questions.length);
+  const activeCount = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, questions.length);
+  const rowCount = CALIFACIL_PRINT_MAX_QUESTIONS;
   const headerCells: string[] = [
     `<th class="omr-qnum omr-th" scope="col"><span class="omr-th-num">N.º</span></th>`,
   ];
@@ -309,10 +314,12 @@ function answerSheetOmrTableHtml(
 
   const rows: string[] = [];
   for (let i = 0; i < rowCount; i++) {
-    const q = questions[i];
     const qNum = questionOffset + i + 1;
-    if (!q || !isGradableMultipleChoiceQuestion(q)) continue;
-    const nOpts = Math.min(omrCols, normalizeQuestionOptions(q.options).length);
+    const q = i < activeCount ? questions[i] : undefined;
+    const isActive = !!q && isGradableMultipleChoiceQuestion(q);
+    const nOpts = isActive
+      ? Math.min(omrCols, normalizeQuestionOptions(q!.options).length)
+      : omrCols;
     const cells: string[] = [];
     for (let c = 0; c < omrCols; c++) {
       const letter = String.fromCharCode(65 + c);
@@ -324,12 +331,15 @@ function answerSheetOmrTableHtml(
         cells.push(`<td class="omr-bubble-cell omr-bubble-cell--muted"></td>`);
       }
     }
-    rows.push(`<tr class="omr-tr"><td class="omr-qnum">${qNum}</td>${cells.join('')}</tr>`);
+    const fillerClass = isActive ? '' : ' omr-tr--filler';
+    rows.push(
+      `<tr class="omr-tr${fillerClass}"${isActive ? '' : ' data-omr-filler="1"'}><td class="omr-qnum">${qNum}</td>${cells.join('')}</tr>`
+    );
   }
   return `
     <aside class="califacil-omr" aria-label="Zona CaliFacil">
       <p class="omr-title">Marca <strong>un círculo</strong> por reactivo con bolígrafo <strong>azul o negro</strong> (tinta oscura).</p>
-      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rows.length}" data-califacil-omr-version="9">
+      <table class="omr-table" data-califacil-omr-cols="${omrCols}" data-califacil-omr-rows="${rowCount}" data-califacil-omr-active-rows="${activeCount}" data-califacil-omr-version="10">
         ${thead}
         <tbody>${rows.join('')}</tbody>
       </table>
@@ -1583,29 +1593,26 @@ export type CalifacilAnswerSheetOmrTemplate = {
 /**
  * Plantilla OMR normalizada (0–1) alineada con la hoja de respuestas impresa.
  * Debe usarse tras enderezar la captura con los 4 fiduciales de esquina.
- * Altura de tabla = N filas compactas (capacidad 30), no stretch a página completa.
+ * Plantilla fija: siempre capacidad 30 (misma geometría para cualquier N ≤ 30).
  */
 export function buildCalifacilAnswerSheetOmrTemplate(
-  rowCount: number
+  _rowCount?: number
 ): CalifacilAnswerSheetOmrTemplate {
-  const rows = Math.min(CALIFACIL_PRINT_MAX_QUESTIONS, Math.max(2, Math.round(rowCount)));
-  return computeAnswerSheetPageTemplate(rows);
+  return computeAnswerSheetPageTemplate(CALIFACIL_PRINT_MAX_QUESTIONS);
 }
 
 /**
- * Ratios de marco OMR para regressión: N=10 debe ser ~1/3 de la altura de N=30
- * (misma fila compacta; solo N filas dibujadas).
+ * Regresión: plantilla única de 30 filas (N=10 y N=30 comparten la misma geometría).
  */
-export function assertCompactAnswerSheetLayoutRatios(): {
+export function assertFixedAnswerSheetLayoutRatios(): {
   t10: CalifacilAnswerSheetOmrTemplate;
   t30: CalifacilAnswerSheetOmrTemplate;
 } {
   const t10 = buildCalifacilAnswerSheetOmrTemplate(10);
   const t30 = buildCalifacilAnswerSheetOmrTemplate(30);
-  const heightRatio = t10.tableHeightRatio / Math.max(1e-6, t30.tableHeightRatio);
-  if (!(heightRatio > 0.28 && heightRatio < 0.55)) {
+  if (Math.abs(t10.tableHeightRatio - t30.tableHeightRatio) > 1e-9) {
     throw new Error(
-      `Compact layout broken: h10/h30=${heightRatio.toFixed(3)} (expected ~0.35–0.45)`
+      `Fixed 30-row template broken: h10=${t10.tableHeightRatio} h30=${t30.tableHeightRatio}`
     );
   }
   if (t30.tableHeightRatio > 0.92) {
@@ -1617,6 +1624,14 @@ export function assertCompactAnswerSheetLayoutRatios(): {
     throw new Error('tableLeftRatio must match for 10 and 30');
   }
   return { t10, t30 };
+}
+
+/** @deprecated Usar assertFixedAnswerSheetLayoutRatios (plantilla fija 30). */
+export function assertCompactAnswerSheetLayoutRatios(): {
+  t10: CalifacilAnswerSheetOmrTemplate;
+  t30: CalifacilAnswerSheetOmrTemplate;
+} {
+  return assertFixedAnswerSheetLayoutRatios();
 }
 
 function omrSheetMetaRowHtml(): string {
@@ -1638,21 +1653,25 @@ function buildOmrAnswerSheetSection(
     0,
     CALIFACIL_PRINT_MAX_QUESTIONS
   );
-  const rowCount = sheetQs.length;
-  if (rowCount === 0 || omrCols <= 0) return '';
+  const activeCount = sheetQs.length;
+  if (activeCount === 0 || omrCols <= 0) return '';
 
+  const gridRows = CALIFACIL_PRINT_MAX_QUESTIONS;
   const omrHtml = answerSheetOmrTableHtml(sheetQs, omrCols, questionOffset);
-  /** Filas a tamaño capacidad-30: N=10 compacta arriba; N=30 llena la carta. */
+  /** Siempre plantilla densa de 30 filas (misma geometría para N≤30). */
   const denseOmrClass = ' print-page--dense-omr';
   const startNum = questionOffset + 1;
-  const endNum = questionOffset + rowCount;
-  const sheetNote = `Hoja de respuestas · Reactivos ${startNum}–${endNum}`;
+  const endNum = questionOffset + activeCount;
+  const sheetNote =
+    activeCount < gridRows
+      ? `Hoja de respuestas · Reactivos ${startNum}–${endNum} · plantilla ${gridRows}`
+      : `Hoja de respuestas · Reactivos ${startNum}–${endNum}`;
 
-  const rowPt = answerSheetCompactRowHeightPt(rowCount);
+  const rowPt = answerSheetCompactRowHeightPt(gridRows);
   const bubblePt = Math.round(Math.min(rowPt - 3, Math.max(5.5, rowPt * 0.5)) * 10) / 10;
 
   return `
-  <section class="print-page print-page--omr-only print-page--omr-answer-sheet${denseOmrClass} print-page--omr-first print-page--break" style="--omr-row-count: ${rowCount}; --omr-row-pt: ${rowPt}pt; --omr-bubble-pt: ${bubblePt}pt;">
+  <section class="print-page print-page--omr-only print-page--omr-answer-sheet${denseOmrClass} print-page--omr-first print-page--break" style="--omr-row-count: ${gridRows}; --omr-row-pt: ${rowPt}pt; --omr-bubble-pt: ${bubblePt}pt;">
 ${answerSheetAlignMarkersHtml()}
     <div class="print-page-omr-sheet-body">
       <header class="sheet-header sheet-header--omr">

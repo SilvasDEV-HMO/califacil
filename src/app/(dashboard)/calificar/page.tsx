@@ -132,7 +132,7 @@ import {
   isMobileLetterGradeCanvasReady,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
-import { scanWarpedGradeMobileAsync, isStrongMobileOmrMeta } from '@/lib/omr/unified-grade-scan';
+import { scanWarpedGradeMobileAsync } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
@@ -773,7 +773,7 @@ export default function CalificarPage() {
   const virtualKeyMaps = useMemo(() => buildVirtualKeyMaps(virtualKey.rows), [virtualKey.rows]);
   const examVirtualKeyByQuestionId = virtualKeyMaps.byQuestionId;
   const virtualKeyCorrectIndexByQuestionId = virtualKeyMaps.indexByQuestionId;
-  /** Mismas hojas MC que la impresión (N filas de bolitas por carta, máx. 30). */
+  /** Hojas MC (chunk de preguntas reales); la rejilla OMR impresa/escaneada es siempre 30. */
   const sheets = useMemo(
     () =>
       omrQuestions.length > 0
@@ -783,7 +783,8 @@ export default function CalificarPage() {
   );
   const totalSheets = sheets.length;
   const currentChunk = useMemo(() => sheets[sheetIndex] ?? [], [sheets, sheetIndex]);
-  const omrRowCount = currentChunk.length;
+  /** Filas de la plantilla OMR (fija 30). Las preguntas reales son currentChunk.length. */
+  const omrRowCount = CALIFACIL_PRINT_MAX_QUESTIONS;
   const chunkQuestionOffset = useMemo(() => {
     let offset = 0;
     for (let i = 0; i < sheetIndex; i++) offset += sheets[i]?.length ?? 0;
@@ -939,14 +940,18 @@ export default function CalificarPage() {
           };
         }
       }
-      const meta = await scanWarpedGradeMobileAsync(docCanvas, omrCols, omrRowCount);
+      const activeRows =
+        sheets[sheetIndexRef.current]?.length ?? omrRowCount;
+      const meta = await scanWarpedGradeMobileAsync(docCanvas, omrCols, omrRowCount, {
+        activeRows,
+      });
       const orangeFrameNorm =
         (meta.geometry
           ? califacilOmrOrangeFrameRect(meta.geometry, omrRowCount)
           : null) ?? califacilOmrTableFrameNormRect(omrRowCount);
       return { meta, orangeFrameNorm, docCanvas, rejectedCorners: false as const };
     },
-    [omrCols, omrRowCount]
+    [omrCols, omrRowCount, sheets]
   );
 
   const mobileScanPreviewSetters = useMemo(
@@ -3665,27 +3670,26 @@ export default function CalificarPage() {
         );
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
         const warpMeta = califacilFastScan.meta;
-        // Solo override si la lectura es fuerte; si no, finalize usa el pipeline completo.
-        if (isStrongMobileOmrMeta(warpMeta, chunkRows)) {
-          readingOverride = buildCalifacilOmrReadingOverride(
-            {
-              ...warpMeta,
-              reviewSourceCanvas: warpMeta.reviewSourceCanvas ?? docCanvas,
-              geometry:
-                warpMeta.geometry != null
-                  ? syncCalifacilOmrGeometryImageSize(
-                      warpMeta.geometry,
-                      docCanvas.width,
-                      docCanvas.height
-                    )
-                  : null,
-            },
-            chunk,
-            docCanvas,
-            liveLockedAnswersRef.current,
-            alignment
-          );
-        }
+        // Siempre override tras el pase móvil (strip recovery ya incluido si era débil).
+        // Evita segunda pasada de hasta 320 iters en finalizeCapturedSheet.
+        readingOverride = buildCalifacilOmrReadingOverride(
+          {
+            ...warpMeta,
+            reviewSourceCanvas: warpMeta.reviewSourceCanvas ?? docCanvas,
+            geometry:
+              warpMeta.geometry != null
+                ? syncCalifacilOmrGeometryImageSize(
+                    warpMeta.geometry,
+                    docCanvas.width,
+                    docCanvas.height
+                  )
+                : null,
+          },
+          chunk,
+          docCanvas,
+          liveLockedAnswersRef.current,
+          alignment
+        );
       }
 
       const result = await finalizeCapturedSheet(docCanvas, undefined, {
@@ -3935,26 +3939,24 @@ export default function CalificarPage() {
         toast.error('Centra la hoja: 3 esquinas + franjas laterales, o las 4 esquinas negras.');
         return;
       }
-      const readingOverride = isStrongMobileOmrMeta(meta, chunk.length)
-        ? buildCalifacilOmrReadingOverride(
-            {
-              ...meta,
-              reviewSourceCanvas: docCanvas,
-              geometry:
-                meta.geometry != null
-                  ? syncCalifacilOmrGeometryImageSize(
-                      meta.geometry,
-                      docCanvas.width,
-                      docCanvas.height
-                    )
-                  : null,
-            },
-            chunk,
-            docCanvas,
-            liveLockedAnswersRef.current,
-            mobileReviewAlign.alignment
-          )
-        : undefined;
+      const readingOverride = buildCalifacilOmrReadingOverride(
+        {
+          ...meta,
+          reviewSourceCanvas: docCanvas,
+          geometry:
+            meta.geometry != null
+              ? syncCalifacilOmrGeometryImageSize(
+                  meta.geometry,
+                  docCanvas.width,
+                  docCanvas.height
+                )
+              : null,
+        },
+        chunk,
+        docCanvas,
+        liveLockedAnswersRef.current,
+        mobileReviewAlign.alignment
+      );
       const result = await finalizeCapturedSheet(docCanvas, undefined, {
         preWarped: true,
         warpAlignment: mobileReviewAlign.alignment,

@@ -14,6 +14,7 @@ import {
 import {
   scanDesktopGradeUnifiedOrLegacyAsync,
   scanLiveOmrUnifiedOrLegacy,
+  scanWarpedGradeMobileAsync,
   scanWarpedGradeUnifiedOrLegacyAsync,
 } from '@/lib/omr/unified-grade-scan';
 import { prepareCalifacilGradeScanCanvas } from '@/lib/omr/pipeline';
@@ -221,12 +222,23 @@ export async function runCalifacilOmrReadingPipeline(
   }
   let activeScanSource: HTMLImageElement | HTMLCanvasElement = scanCanvas ?? oriented;
   let meta: OmrScanMetaResult;
-  if (useWarpedScan && scanCanvas) {
+  const useMobileFastPath =
+    Boolean(isMobileCamera && preWarped && scanCanvas) ||
+    Boolean(isMobile && preWarped && scanCanvas && !fallbackFile);
+
+  if (useMobileFastPath && scanCanvas) {
+    // Cámara móvil: un solo perfil rápido (nunca 320 iters).
+    meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
+      activeRows: chunk.length,
+    });
+  } else if (useWarpedScan && scanCanvas) {
     meta = await scanWarpedGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
   } else if (useDocumentScan && scanCanvas) {
     meta = await scanDesktopGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
   } else if (scanCanvas && isMobile) {
-    meta = await scanWarpedGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
+    meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
+      activeRows: chunk.length,
+    });
   } else {
     meta = scanLiveOmrUnifiedOrLegacy(activeScanSource, omrCols, {
       skipGuideCrop: true,
@@ -268,10 +280,12 @@ export async function runCalifacilOmrReadingPipeline(
     const recoveryCanvas = resolveScanCanvas(recoverySource);
     if (recoveryCanvas) {
       const preparedRecovery = prepareGradeCanvas(recoveryCanvas);
-      const recoveryMeta = await scanWarpedGradeUnifiedOrLegacyAsync(
+      // Móvil: recovery también en perfil rápido (no 320 iters).
+      const recoveryMeta = await scanWarpedGradeMobileAsync(
         preparedRecovery,
         omrCols,
-        omrRowCount
+        omrRowCount,
+        { activeRows: chunk.length }
       );
       const recoveryRaw = [...recoveryMeta.picks];
       const recoveryMapped = mapRawToDraftDetailed(recoveryRaw, chunk);

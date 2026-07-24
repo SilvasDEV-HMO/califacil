@@ -34,22 +34,33 @@ function countResolvedPicks(meta: OmrScanMetaResult, rows: number): number {
   return meta.picks.slice(0, rows).filter((p) => p != null).length;
 }
 
-/** Lectura débil: pocos picks, blank falso o sesgo de columna. */
-export function isWeakMobileOmrMeta(meta: OmrScanMetaResult, rows: number): boolean {
-  const resolved = countResolvedPicks(meta, rows);
-  if (resolved < Math.ceil(rows * 0.45)) return true;
-  if (isAnswerSheetOmrMostlyBlank(meta, rows) && resolved < 3) return true;
-  if (meta.maxSameColumnCount > Math.max(4, Math.round(rows * 0.35))) return true;
+/**
+ * Lectura débil: pocos picks, blank falso o sesgo de columna.
+ * `activeRows` = preguntas reales (ignora filler de plantilla 30).
+ */
+export function isWeakMobileOmrMeta(
+  meta: OmrScanMetaResult,
+  rows: number,
+  activeRows: number = rows
+): boolean {
+  const scored = Math.max(1, Math.min(rows, activeRows));
+  const resolved = countResolvedPicks(meta, scored);
+  if (resolved < Math.ceil(scored * 0.4)) return true;
+  if (isAnswerSheetOmrMostlyBlank(meta, scored) && resolved < 3) return true;
+  if (meta.maxSameColumnCount > Math.max(4, Math.round(scored * 0.4))) return true;
   return false;
 }
 
-/** Lectura suficientemente buena para confiar en readingOverride (sin re-pipeline). */
-export function isStrongMobileOmrMeta(meta: OmrScanMetaResult, rows: number): boolean {
-  const resolved = countResolvedPicks(meta, rows);
-  if (resolved < Math.ceil(rows * 0.55)) return false;
-  if (isAnswerSheetOmrMostlyBlank(meta, rows) && resolved < 3) return false;
-  if (meta.maxSameColumnCount > Math.max(4, Math.round(rows * 0.4))) return false;
-  return true;
+/**
+ * Lectura suficientemente buena (señal UI). Ya no bloquea re-pipeline móvil:
+ * tras scanWarpedGradeMobileAsync siempre se usa readingOverride.
+ */
+export function isStrongMobileOmrMeta(
+  meta: OmrScanMetaResult,
+  rows: number,
+  activeRows: number = rows
+): boolean {
+  return !isWeakMobileOmrMeta(meta, rows, activeRows);
 }
 
 function finalizeUnifiedDisplayMeta(
@@ -172,18 +183,30 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
 
 /**
  * Perfil móvil: ~70 iters + strip fast solo si la lectura es débil.
- * Sin segundo pase de 160 iters (evita «Calificando…» eterno).
+ * Sin segundo pase de 160/320 iters (evita «Calificando…» eterno).
  * Clave del examen (expectedPicks) se aplica en el popup, no aquí.
+ * `activeRows` = preguntas reales cuando la rejilla es plantilla fija 30.
  */
 export async function scanWarpedGradeMobileAsync(
   displayCanvas: HTMLCanvasElement,
   columns: number,
-  rows: number
+  rows: number,
+  opts?: { activeRows?: number }
 ): Promise<OmrScanMetaResult> {
+  const activeRows = opts?.activeRows ?? rows;
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_GRADE_SCAN_MAX_SIDE);
   if (!isUnifiedOmrEngineEnabled()) {
     return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
   }
+
+  // Ceder un frame para que «Calificando…» pinte antes del CPU pesado.
+  await new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
 
   const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
     fastMode: true,
@@ -195,21 +218,21 @@ export async function scanWarpedGradeMobileAsync(
     unifiedResultToMeta(unified),
     rows,
     columns,
-    { skipBubbleReattach: false }
+    { skipBubbleReattach: true }
   );
   meta = sanitizeAnswerSheetOmrMeta(meta, rows);
 
-  if (!isWeakMobileOmrMeta(meta, rows)) {
+  if (!isWeakMobileOmrMeta(meta, rows, activeRows)) {
     return meta;
   }
 
-  // Recovery barato: solo strip live sweeps (sin optimize 160).
+  // Recovery barato: solo strip live sweeps (sin optimize 160/320).
   const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
   let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns, {
-    skipBubbleReattach: false,
+    skipBubbleReattach: true,
   });
   stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
-  return pickBetterOmrMeta(meta, stripMeta, rows);
+  return pickBetterOmrMeta(meta, stripMeta, activeRows);
 }
 
 export function scanLiveOmrUnifiedOrLegacy(

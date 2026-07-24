@@ -156,24 +156,22 @@ export function gradeOmrChunkPicksAgainstVirtualKey(
   picks: (number | null)[],
   key: VirtualKeyMaps
 ): McGradeStats {
-  let correctCount = 0;
-  let gradedTotal = 0;
-  const { draft, pickIndices } = mapOmrPicksToMcDraftDetailed(chunk, picks);
+  // Misma fórmula ponderada que gradeMcDraftAgainstVirtualKey (picks → draft → puntos).
+  const { draft } = mapOmrPicksToMcDraftDetailed(chunk, picks);
+  return gradeMcDraftAgainstVirtualKey(draft, chunk, key);
+}
 
-  for (let i = 0; i < chunk.length; i++) {
-    const q = chunk[i];
-    if (!q || q.type !== 'multiple_choice') continue;
-    const expectedIndex = key.indexByQuestionId[q.id];
-    if (expectedIndex === undefined) continue;
-    gradedTotal++;
-    if (isMcPickCorrect(expectedIndex, pickIndices[i] ?? null, q.options, draft[q.id])) {
-      correctCount++;
-    }
-  }
-
-  const wrong = Math.max(0, gradedTotal - correctCount);
-  const pct = gradedTotal > 0 ? calculatePercentage(correctCount, gradedTotal) : 0;
-  return { pct, correct: correctCount, wrong, total: gradedTotal };
+/**
+ * Paridad con Results/online: índice de clave + respuesta del alumno
+ * (vacío / OOB / sin marca → incorrecto).
+ */
+export function isMcAnswerCorrectAgainstKey(
+  options: string[] | null | undefined,
+  studentAnswer: string | null | undefined,
+  expectedIndex: number
+): boolean {
+  const gotIdx = resolveStudentPickIndex(options, studentAnswer);
+  return isMcPickCorrect(expectedIndex, gotIdx, options, studentAnswer);
 }
 
 export function gradeMcQuestionForPersist(
