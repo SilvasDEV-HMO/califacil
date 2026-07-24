@@ -21,11 +21,11 @@ export default function LandingPage() {
               variant="ghost"
               size="sm"
               asChild
-              className="h-8 px-2 text-xs text-gray-700 sm:h-9 sm:px-3 sm:text-sm"
+              className="h-9 px-2.5 text-sm text-gray-700 sm:h-10 sm:px-3 sm:text-base"
             >
               <Link href="/login">Iniciar sesión</Link>
             </Button>
-            <Button size="sm" className="h-8 px-2.5 text-xs sm:h-9 sm:px-4 sm:text-sm" asChild>
+            <Button size="sm" className="h-9 px-3 text-sm sm:h-10 sm:px-4 sm:text-base" asChild>
               <Link href="/register">Crear cuenta</Link>
             </Button>
           </nav>
@@ -33,15 +33,15 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto app-scroll">
-        <section className="mx-auto grid h-full min-h-full w-full max-w-5xl grid-rows-[auto_1fr_auto_1fr] px-4 pt-5 sm:px-6 sm:pt-7 lg:px-8 lg:pt-8">
+        <section className="mx-auto grid h-full min-h-full w-full max-w-5xl grid-rows-[auto_1fr_auto_1fr] px-4 pt-3 sm:px-6 sm:pt-4 lg:px-8 lg:pt-5">
           <div className="flex w-full max-w-3xl flex-col items-center justify-self-center text-center">
-            <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-orange-600 sm:text-xs lg:text-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-orange-600 sm:text-sm lg:text-base">
               Plataforma para Docentes
             </p>
-            <h1 className="mt-2 max-w-[22ch] text-balance text-[clamp(1.55rem,5.2vw,2.75rem)] font-bold leading-[1.12] tracking-tight text-gray-900 sm:mt-2.5 sm:max-w-none">
+            <h1 className="mt-2 max-w-[22ch] text-balance text-[clamp(1.75rem,5.5vw,3.1rem)] font-bold leading-[1.12] tracking-tight text-gray-900 sm:mt-2.5 sm:max-w-none">
               Crea tus exámenes, imprime y califica TODO el mismo día.
             </h1>
-            <p className="mx-auto mt-2.5 max-w-xl text-pretty text-[clamp(0.95rem,2vw,1.15rem)] leading-relaxed text-gray-600 sm:mt-3">
+            <p className="mx-auto mt-2.5 max-w-xl text-pretty text-[clamp(1.05rem,2.2vw,1.3rem)] leading-relaxed text-gray-600 sm:mt-3">
               Crea evaluaciones personalizadas, compártelas con tus grupos y revisa resultados en un solo
               lugar. Sin complicaciones.
             </p>
@@ -49,18 +49,18 @@ export default function LandingPage() {
             <div className="mt-4 flex w-full max-w-md flex-col items-stretch gap-2.5 sm:mt-5 sm:max-w-none sm:flex-row sm:items-center sm:justify-center sm:gap-3">
               <Button
                 size="sm"
-                className="h-11 w-full text-sm font-semibold sm:h-11 sm:w-auto sm:min-w-[11.5rem] sm:px-6 lg:h-12 lg:min-w-[12.5rem] lg:text-base"
+                className="h-12 w-full text-base font-semibold sm:w-auto sm:min-w-[12rem] sm:px-6 lg:h-14 lg:min-w-[13rem] lg:text-lg"
                 asChild
               >
                 <Link href="/register">
                   Regístrate gratis
-                  <ArrowRight className="ml-1.5 h-4 w-4" />
+                  <ArrowRight className="ml-1.5 h-4 w-4 lg:h-5 lg:w-5" />
                 </Link>
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                className="h-11 w-full border-orange-200 bg-white/85 text-sm font-semibold sm:h-11 sm:w-auto sm:min-w-[11.5rem] sm:px-6 lg:h-12 lg:min-w-[12.5rem] lg:text-base"
+                className="h-12 w-full border-orange-200 bg-white/85 text-base font-semibold sm:w-auto sm:min-w-[12rem] sm:px-6 lg:h-14 lg:min-w-[13rem] lg:text-lg"
                 asChild
               >
                 <Link href="/login">Ya tengo cuenta</Link>
@@ -72,36 +72,36 @@ export default function LandingPage() {
 
           <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-3 self-center sm:grid-cols-3 sm:gap-3.5 lg:gap-4">
             <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-100 text-orange-700">
-                <Sparkles className="h-4 w-4" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-100 text-orange-700">
+                <Sparkles className="h-5 w-5" />
               </div>
-              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+              <h2 className="mt-3 text-base font-semibold text-gray-900 sm:text-[1.05rem]">
                 Preguntas con IA
               </h2>
-              <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
+              <p className="mt-1.5 text-sm leading-relaxed text-gray-600 sm:text-[0.9rem]">
                 Genera reactivos a partir de temas y tipos de pregunta que elijas.
               </p>
             </article>
             <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-800">
-                <QrCode className="h-4 w-4" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 text-amber-800">
+                <QrCode className="h-5 w-5" />
               </div>
-              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+              <h2 className="mt-3 text-base font-semibold text-gray-900 sm:text-[1.05rem]">
                 Acceso por QR
               </h2>
-              <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
+              <p className="mt-1.5 text-sm leading-relaxed text-gray-600 sm:text-[0.9rem]">
                 Publica el examen y que los alumnos entren desde el móvil. O imprímelo y aplícalo en el
                 aula.
               </p>
             </article>
             <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-200/70 text-orange-800">
-                <BarChart3 className="h-4 w-4" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-200/70 text-orange-800">
+                <BarChart3 className="h-5 w-5" />
               </div>
-              <h2 className="mt-3 text-sm font-semibold text-gray-900 sm:text-[0.95rem]">
+              <h2 className="mt-3 text-base font-semibold text-gray-900 sm:text-[1.05rem]">
                 Resultados claros
               </h2>
-              <p className="mt-1.5 text-xs leading-relaxed text-gray-600 sm:text-[0.8rem]">
+              <p className="mt-1.5 text-sm leading-relaxed text-gray-600 sm:text-[0.9rem]">
                 Visualiza el desempeño por examen y por grupo, el mismo día y cuando sea necesario.
               </p>
             </article>
@@ -118,7 +118,7 @@ export default function LandingPage() {
             className="justify-center"
             imgClassName="mx-auto h-6 w-auto max-w-[min(100%,12rem)] object-contain sm:h-9 sm:max-w-[18rem]"
           />
-          <p className="mt-1 text-[0.65rem] leading-snug text-gray-600 sm:mt-1.5 sm:text-xs">
+          <p className="mt-1 text-xs leading-snug text-gray-600 sm:mt-1.5 sm:text-sm">
             Herramienta creada por{' '}
             <Link
               href="https://silvasdev.vercel.app/"
@@ -128,9 +128,9 @@ export default function LandingPage() {
             </Link>
             .
           </p>
-          <p className="mt-0.5 flex items-center justify-center gap-1 text-[0.65rem] text-gray-500 sm:text-xs">
+          <p className="mt-0.5 flex items-center justify-center gap-1 text-xs text-gray-500 sm:text-sm">
             <span>Todos los derechos reservados 2026.</span>
-            <Copyright className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" aria-hidden />
+            <Copyright className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" aria-hidden />
           </p>
         </div>
       </footer>
