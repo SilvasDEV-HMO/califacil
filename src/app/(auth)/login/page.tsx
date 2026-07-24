@@ -90,9 +90,10 @@ export default function LoginPage() {
       </header>
 
       <main
-        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center px-4 pt-1 sm:px-6 sm:pt-2 lg:px-8"
+        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center px-4 sm:px-6 lg:px-8"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}
       >
+        <div className="min-h-0 flex-1" aria-hidden />
         <Card className="w-full max-w-md shrink-0 overflow-hidden rounded-2xl border-0 shadow-xl sm:max-w-lg">
           <CardHeader className="space-y-1 px-4 pb-3 pt-5 sm:px-6 sm:pb-3 sm:pt-6">
             <CardTitle className="text-center text-xl font-bold sm:text-2xl">Iniciar Sesión</CardTitle>
@@ -171,7 +172,7 @@ export default function LoginPage() {
             </p>
           </CardContent>
         </Card>
-        <div className="min-h-0 flex-1" aria-hidden />
+        <div className="min-h-0 flex-[2]" aria-hidden />
       </main>
     </div>
   );

@@ -5,7 +5,7 @@ import { QrCode, Sparkles, BarChart3, ArrowRight, Copyright } from 'lucide-react
 
 export default function LandingPage() {
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-x-hidden bg-transparent app-scroll sm:overflow-y-auto">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
       <header className="shrink-0 border-b border-orange-200/50 bg-white/75 backdrop-blur-md">
         <div
           className="mx-auto flex w-full max-w-5xl items-center justify-between gap-2 px-4 pb-2 sm:px-6 sm:pb-2.5 lg:px-8"
@@ -32,9 +32,9 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
-        <section className="mx-auto flex min-h-full w-full max-w-5xl flex-1 flex-col px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-8">
-          <div className="flex w-full max-w-3xl shrink-0 flex-col items-center self-center text-center">
+      <main className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto app-scroll">
+        <section className="mx-auto grid h-full min-h-full w-full max-w-5xl grid-rows-[auto_1fr_auto_1fr] px-4 pt-5 sm:px-6 sm:pt-7 lg:px-8 lg:pt-8">
+          <div className="flex w-full max-w-3xl flex-col items-center justify-self-center text-center">
             <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-orange-600 sm:text-xs lg:text-sm">
               Plataforma para Docentes
             </p>
@@ -68,9 +68,9 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1" aria-hidden />
+          <div className="min-h-0" aria-hidden />
 
-          <div className="grid w-full max-w-4xl shrink-0 grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5 lg:gap-4">
+          <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-3 self-center sm:grid-cols-3 sm:gap-3.5 lg:gap-4">
             <article className="flex flex-col items-start rounded-xl border border-orange-100/80 bg-white/90 px-4 py-4 text-left shadow-sm backdrop-blur-md sm:px-4 sm:py-5">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-100 text-orange-700">
                 <Sparkles className="h-4 w-4" />
@@ -107,7 +107,7 @@ export default function LandingPage() {
             </article>
           </div>
 
-          <div className="min-h-0 flex-1" aria-hidden />
+          <div className="min-h-0" aria-hidden />
         </section>
       </main>
 

@@ -138,9 +138,10 @@ export default function RegisterPage() {
       </header>
 
       <main
-        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center px-4 pt-1 sm:px-6 sm:pt-2 lg:px-8"
+        className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col items-center px-4 sm:px-6 lg:px-8"
         style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}
       >
+        <div className="min-h-0 flex-1" aria-hidden />
         <Card className="flex max-h-[min(100%,calc(100dvh-6.5rem))] w-full max-w-md shrink-0 flex-col overflow-hidden rounded-2xl border-0 shadow-xl sm:max-h-none sm:max-w-lg">
           <CardHeader className="shrink-0 space-y-1 px-4 pb-3 pt-5 sm:px-6 sm:pb-3 sm:pt-6">
             <CardTitle className="text-center text-xl font-bold sm:text-2xl">
@@ -314,7 +315,7 @@ export default function RegisterPage() {
             </p>
           </CardContent>
         </Card>
-        <div className="min-h-0 flex-1" aria-hidden />
+        <div className="min-h-0 flex-[2]" aria-hidden />
       </main>
     </div>
   );
