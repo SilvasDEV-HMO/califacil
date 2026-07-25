@@ -57,7 +57,7 @@ export function scaleReferenceColEdges(canvasWidth: number): number[] {
   return REFERENCE_COL_EDGES.map((x) => Math.round(x * scale));
 }
 
-/** Mezcla líneas detectadas con la referencia (prioridad a referencia salvo desviación mínima). */
+/** Mezcla líneas detectadas con la referencia (prioridad a lo detectado en overlay). */
 export function mergeReferenceRowLineYs(
   detected: number[] | null,
   canvasHeight: number,
@@ -68,12 +68,13 @@ export function mergeReferenceRowLineYs(
   if (!detected || detected.length !== rowCount + 1) return reference;
 
   const rowH = (reference[rowCount]! - reference[0]!) / rowCount;
-  const threshold = Math.max(4, rowH * 0.28);
+  const threshold = Math.max(4, rowH * 0.35);
 
   return detected.map((y, i) => {
     const refY = reference[i]!;
     const dev = Math.abs(y - refY);
-    if (dev <= threshold) return Math.round(y * 0.38 + refY * 0.62);
+    // Más peso a la rejilla real del PDF/escaneo (corrige desfase UP residual).
+    if (dev <= threshold) return Math.round(y * 0.62 + refY * 0.38);
     return refY;
   });
 }
@@ -89,12 +90,12 @@ export function mergeReferenceColumnEdges(
   if (!detected || detected.length !== columns + 1) return reference;
 
   const cellW = (reference[columns]! - reference[0]!) / columns;
-  const threshold = Math.max(5, cellW * 0.32);
+  const threshold = Math.max(5, cellW * 0.38);
 
   return detected.map((x, i) => {
     const refX = reference[i]!;
     const dev = Math.abs(x - refX);
-    if (dev <= threshold) return Math.round(x * 0.35 + refX * 0.65);
+    if (dev <= threshold) return Math.round(x * 0.58 + refX * 0.42);
     return refX;
   });
 }

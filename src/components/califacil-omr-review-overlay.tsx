@@ -22,7 +22,7 @@ type Props = {
 
 type BubbleCircle = { cx: number; cy: number; r: number };
 
-const RADIUS_SCALE = 0.42;
+const RADIUS_SCALE = 0.36;
 const SANE_BUBBLE_R_MIN = 0.002;
 const SANE_BUBBLE_R_MAX = 0.06;
 

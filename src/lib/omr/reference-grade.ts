@@ -187,6 +187,38 @@ export function buildReferenceAnchoredGeometry(
 /**
  * Overlay desktop 30×4: geometría anclada a referencia + anillos (mismo canvas que el JPEG).
  * Nunca usa plantilla carta (nudges UP / qnum 0.09).
+ *
+ * Nudge residual: la calibración chilo.pdf queda ligeramente arriba-izquierda
+ * respecto a PDFs/impresiones actuales; desplazamos abajo-derecha ~½ celda.
+ */
+const DESKTOP_OVERLAY_NUDGE_X = 0.0075;
+const DESKTOP_OVERLAY_NUDGE_Y = 0.011;
+
+function nudgeDesktopOverlayGeometry(
+  geometry: CalifacilOmrScanGeometry,
+  dx: number,
+  dy: number
+): CalifacilOmrScanGeometry {
+  const shiftRect = (r: { x: number; y: number; w: number; h: number }) => {
+    const x = Math.max(0, Math.min(1 - r.w, r.x + dx));
+    const y = Math.max(0, Math.min(1 - r.h, r.y + dy));
+    return { ...r, x, y };
+  };
+  const cells = geometry.cells.map((row) => row.map(shiftRect));
+  const bubbles = geometry.bubbles?.map((row) =>
+    row.map((b) => ({
+      ...b,
+      cx: Math.max(0, Math.min(1, b.cx + dx)),
+      cy: Math.max(0, Math.min(1, b.cy + dy)),
+      bounds: b.bounds ? shiftRect(b.bounds) : b.bounds,
+    }))
+  );
+  return { ...geometry, cells, bubbles };
+}
+
+/**
+ * Overlay desktop 30×4: geometría anclada a referencia + anillos (mismo canvas que el JPEG).
+ * Nunca usa plantilla carta (nudges UP / qnum 0.09).
  */
 export function buildDesktopDisplayOverlayGeometry(
   canvas: HTMLCanvasElement,
@@ -218,9 +250,14 @@ export function buildDesktopDisplayOverlayGeometry(
     },
     cols,
     rows,
-    { forceRebuild: true, maxShiftRatio: 0.3 }
+    { forceRebuild: true, maxShiftRatio: 0.22 }
   );
-  return attached.geometry ?? base;
+  const withBubbles = attached.geometry ?? base;
+  return nudgeDesktopOverlayGeometry(
+    withBubbles,
+    DESKTOP_OVERLAY_NUDGE_X,
+    DESKTOP_OVERLAY_NUDGE_Y
+  );
 }
 
 /** Alinea (si aplica) y devuelve canvas listo para lectura OMR de 30 filas. */
