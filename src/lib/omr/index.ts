@@ -31,6 +31,8 @@ export {
   scanWarpedGradeUnifiedOrLegacyAsync,
   scanWarpedGradeMobileAsync,
   scanLiveOmrUnifiedOrLegacy,
+  pickBetterOmrMeta,
+  resolveMobileGradeDisplay,
 } from '@/lib/omr/unified-grade-scan';
 export {
   runUnifiedOmrPipeline,

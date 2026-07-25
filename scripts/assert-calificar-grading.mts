@@ -17,6 +17,7 @@ import {
   isAnswerSheetOmrMostlyBlank,
   sanitizeAnswerSheetOmrMeta,
 } from '../src/lib/omrScan.ts';
+import { pickBetterOmrMeta } from '../src/lib/omr/unified-grade-scan.ts';
 import type { Question } from '../src/types';
 
 function assert(cond: boolean, msg: string) {
@@ -186,6 +187,98 @@ assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blan
   assert(after.correct === 0 && after.pct === 0, '5 falsos → 0/30');
 }
 
+// --- 1 pick "fuerte" + mediana de hoja vacía (madera/strip) → blank → 0/30 ---
+{
+  const rows = 30;
+  const picks: (number | null)[] = Array.from({ length: rows }, () => null);
+  picks[7] = 2; // coincide con clave → sería 1/30 sin sanitize
+  const rowMetas = Array.from({ length: rows }, (_, i) => ({
+    pick: picks[i],
+    ambiguous: false,
+    inkFractions:
+      picks[i] != null
+        ? [0.06, 0.05, 0.28, 0.05]
+        : [0.045, 0.04, 0.04, 0.038],
+  }));
+  const meta = {
+    picks,
+    rows: rowMetas,
+    needsVisionAssist: false,
+    maxSameColumnCount: 1,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  assert(isAnswerSheetOmrMostlyBlank(meta, rows), '1 pick fuerte + mediana ruido = mostly-blank');
+  const cleaned = sanitizeAnswerSheetOmrMeta(meta, rows);
+  assert(
+    cleaned.picks.every((p) => p == null),
+    '1 pick fuerte sanitizado a null'
+  );
+  const after = gradeOmrChunkPicksAgainstVirtualKey(chunk30, cleaned.picks, key30);
+  assert(after.correct === 0 && after.pct === 0, '1 falso fuerte → 0/30');
+}
+
+// --- pickBetterOmrMeta: blank gana a strip con 1 pick ---
+{
+  const rows = 30;
+  const blankMeta = {
+    picks: Array.from({ length: rows }, () => null as number | null),
+    rows: Array.from({ length: rows }, () => ({
+      pick: null as number | null,
+      ambiguous: false,
+      inkFractions: [0.04, 0.03, 0.03, 0.03],
+    })),
+    needsVisionAssist: false,
+    maxSameColumnCount: 0,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  const stripPicks: (number | null)[] = Array.from({ length: rows }, () => null);
+  stripPicks[3] = 1;
+  const stripMeta = {
+    picks: stripPicks,
+    rows: Array.from({ length: rows }, (_, i) => ({
+      pick: stripPicks[i],
+      ambiguous: false,
+      inkFractions:
+        stripPicks[i] != null
+          ? [0.05, 0.26, 0.04, 0.04]
+          : [0.045, 0.04, 0.04, 0.038],
+    })),
+    needsVisionAssist: false,
+    maxSameColumnCount: 1,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  // stripMeta es mostly-blank por la regla sparse-fuerte; sanitize ambos a 0.
+  // pickBetter: si blank vs no-blank sintético (sin pasar por mostly-blank en strip)...
+  const stripNotBlank = {
+    ...stripMeta,
+    // Simula strip que escapa blank (muchas filas con tinta alta mediana)
+    rows: Array.from({ length: rows }, (_, i) => ({
+      pick: stripPicks[i],
+      ambiguous: false,
+      inkFractions:
+        stripPicks[i] != null
+          ? [0.05, 0.35, 0.04, 0.04]
+          : [0.14, 0.13, 0.12, 0.12],
+    })),
+  };
+  assert(isAnswerSheetOmrMostlyBlank(blankMeta, rows), 'blankMeta blank');
+  assert(!isAnswerSheetOmrMostlyBlank(stripNotBlank, rows), 'stripNotBlank no blank');
+  const chosen = pickBetterOmrMeta(blankMeta, stripNotBlank, rows);
+  assert(
+    chosen.picks.every((p) => p == null),
+    'pickBetterOmrMeta prefiere blank sobre strip con 1 pick'
+  );
+}
+
 // --- 1 error, puntos iguales ---
 const oneWrong = [...perfectPicks];
 oneWrong[0] = (oneWrong[0]! + 1) % 4;
@@ -230,4 +323,6 @@ for (let i = 0; i < mixed.length; i++) {
 assert(persistCorrect === draftStats.correct, 'persist correct count');
 assert(persistEarned === 2, `persist earned=${persistEarned}`);
 
-console.log('ok: calificar grading (paridad, 100%, blank 0/30, sanitize 3falsos, filler, puntos, muted)');
+console.log(
+  'ok: calificar grading (paridad, 100%, blank 0/30, sanitize 3falsos, 1fuerte, pickBetter blank-safe, filler, puntos, muted)'
+);

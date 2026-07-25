@@ -135,7 +135,7 @@ import {
   buildDesktopDisplayOverlayGeometry,
   isReferenceGradeCanvasAnchor,
 } from '@/lib/omr/reference-grade';
-import { scanWarpedGradeMobileAsync } from '@/lib/omr/unified-grade-scan';
+import { scanWarpedGradeMobileAsync, resolveMobileGradeDisplay } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
@@ -1599,20 +1599,22 @@ export default function CalificarPage() {
         }
         const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
         const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
-        // Overlay siempre sobre el canvas de preview (carta), plantilla fija 30.
+        // Overlay sobre el canvas de preview: referencia (paridad desktop) o carta.
         let geomClone: CalifacilOmrScanGeometry;
         if (reviewCanvas instanceof HTMLCanvasElement) {
-          const letterOverlay = isCalifacilWarpedLetterCanvas(reviewCanvas)
-            ? buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
+          const refOverlay = isReferenceGradeCanvasAnchor(reviewCanvas.width, reviewCanvas.height)
+            ? buildDesktopDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
             : null;
-          const refOverlay =
-            !letterOverlay && isReferenceGradeCanvasAnchor(reviewCanvas.width, reviewCanvas.height)
-              ? buildDesktopDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
+          const letterOverlay =
+            !refOverlay && isCalifacilWarpedLetterCanvas(reviewCanvas)
+              ? buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
               : null;
           const overlayGeom =
-            letterOverlay ??
             refOverlay ??
-            buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount);
+            letterOverlay ??
+            (geom
+              ? syncCalifacilOmrGeometryImageSize(geom, previewW, previewH)
+              : buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount));
           geomClone = syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH);
         } else if (geom) {
           try {
@@ -3589,6 +3591,7 @@ export default function CalificarPage() {
       // El preview del modal se genera ligero dentro de finalizeCapturedSheet.
 
       let readingOverride: CalifacilOmrReadingResult | undefined;
+      let mobileDisplaySource: HTMLCanvasElement = displayCanvas;
       if (sheetKind === 'zipgrade' && zipPreviewMeta) {
         const zgRows = Array.from({ length: chunkRows }, () => ({
           pick: null as number | null,
@@ -3614,15 +3617,23 @@ export default function CalificarPage() {
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
         const warpMeta = califacilFastScan.meta;
         // Siempre override tras el pase móvil (strip recovery ya incluido si era débil).
-        // Picks: sanitize+blank en override. Preview/bolitas: canvas carta (displayCanvas).
+        // Preview = scanCanvas (referencia) cuando el align es válido — paridad desktop.
+        const resolved = resolveMobileGradeDisplay(
+          displayCanvas,
+          scanCanvas,
+          omrCols,
+          omrRowCount,
+          warpMeta
+        );
+        mobileDisplaySource = resolved.previewCanvas;
         readingOverride = buildCalifacilOmrReadingOverride(
           {
             ...warpMeta,
-            reviewSourceCanvas: displayCanvas,
-            geometry: null,
+            reviewSourceCanvas: resolved.previewCanvas,
+            geometry: resolved.geometry,
           },
           chunk,
-          displayCanvas,
+          scanCanvas,
           liveLockedAnswersRef.current,
           alignment
         );
@@ -3633,7 +3644,7 @@ export default function CalificarPage() {
         warpAlignment: alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        displaySource: displayCanvas,
+        displaySource: mobileDisplaySource,
         readingOverride,
       });
       if (result.success) {
@@ -3749,10 +3760,8 @@ export default function CalificarPage() {
         if (scanGen !== reviewScanGenRef.current) return;
         const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
         applyControlNumberFromRead(controlRead, { silent: true });
-        const { meta, orangeFrameNorm, displayCanvas, rejectedCorners } = await runFastWarpedScan(
-          warped,
-          alignment
-        );
+        const { meta, orangeFrameNorm, displayCanvas, docCanvas, rejectedCorners } =
+          await runFastWarpedScan(warped, alignment);
         if (scanGen !== reviewScanGenRef.current) return;
         if (rejectedCorners || !meta) {
           setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
@@ -3760,9 +3769,15 @@ export default function CalificarPage() {
           return;
         }
         const mapped = mapRawToDraft([...meta.picks], chunk);
-        const geometry = buildLetterDisplayOverlayGeometry(displayCanvas, omrCols, omrRowCount);
+        const { previewCanvas, geometry } = resolveMobileGradeDisplay(
+          displayCanvas,
+          docCanvas,
+          omrCols,
+          omrRowCount,
+          meta
+        );
         const previewUrl =
-          canvasPreviewDataUrl(displayCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? '';
+          canvasPreviewDataUrl(previewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? '';
         setMobileReviewAlign({
           warped,
           alignment,
@@ -3806,19 +3821,23 @@ export default function CalificarPage() {
       setReviewStatus('Actualizando lectura…');
       try {
         if (scanGen !== reviewScanGenRef.current) return;
-        const { meta, orangeFrameNorm, displayCanvas, rejectedCorners } = await runFastWarpedScan(
-          mobileReviewAlign.warped,
-          mobileReviewAlign.alignment
-        );
+        const { meta, orangeFrameNorm, displayCanvas, docCanvas, rejectedCorners } =
+          await runFastWarpedScan(mobileReviewAlign.warped, mobileReviewAlign.alignment);
         if (scanGen !== reviewScanGenRef.current) return;
         if (rejectedCorners || !meta) {
           setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
           return;
         }
         const mapped = mapRawToDraft([...meta.picks], chunk);
-        const geometry = buildLetterDisplayOverlayGeometry(displayCanvas, omrCols, omrRowCount);
+        const { previewCanvas, geometry } = resolveMobileGradeDisplay(
+          displayCanvas,
+          docCanvas,
+          omrCols,
+          omrRowCount,
+          meta
+        );
         const previewUrl =
-          canvasPreviewDataUrl(displayCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ??
+          canvasPreviewDataUrl(previewCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ??
           mobileReviewAlign.previewUrl;
         setMobileReviewAlign({
           ...mobileReviewAlign,
@@ -3860,11 +3879,18 @@ export default function CalificarPage() {
         toast.error('Centra la hoja: 3 esquinas + franjas laterales, o las 4 esquinas negras.');
         return;
       }
+      const resolved = resolveMobileGradeDisplay(
+        displayCanvas,
+        docCanvas,
+        omrCols,
+        omrRowCount,
+        meta
+      );
       const readingOverride = buildCalifacilOmrReadingOverride(
         {
           ...meta,
-          reviewSourceCanvas: displayCanvas,
-          geometry: null,
+          reviewSourceCanvas: resolved.previewCanvas,
+          geometry: resolved.geometry,
         },
         chunk,
         docCanvas,
@@ -3876,7 +3902,7 @@ export default function CalificarPage() {
         warpAlignment: mobileReviewAlign.alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        displaySource: displayCanvas,
+        displaySource: resolved.previewCanvas,
         readingOverride,
       });
       if (result.success) {
@@ -3892,7 +3918,7 @@ export default function CalificarPage() {
     } finally {
       setReviewScanning(false);
     }
-  }, [finalizeCapturedSheet, mobileReviewAlign, omrRowCount, runFastWarpedScan, sheets]);
+  }, [finalizeCapturedSheet, mobileReviewAlign, omrCols, omrRowCount, runFastWarpedScan, sheets]);
 
   finalizeMobileReviewGradeRef.current = finalizeMobileReviewGrade;
 

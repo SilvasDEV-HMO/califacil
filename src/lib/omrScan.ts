@@ -8411,6 +8411,17 @@ export function countAnswerSheetMarkedRows(
   return n;
 }
 
+/** Mediana de maxInk por fila (todas las filas, con o sin pick). */
+function answerSheetRowInkMedian(meta: OmrScanMetaResult, rows: number): number {
+  const inks: number[] = [];
+  for (let i = 0; i < rows; i++) {
+    const row = meta.rows[i];
+    inks.push(row ? rowMaxInkFraction(row) : 0);
+  }
+  inks.sort((a, b) => a - b);
+  return inks[Math.floor(inks.length / 2)] ?? 0;
+}
+
 /** Hoja sin respuestas marcadas (evita calificar ruido como aciertos). */
 export function isAnswerSheetOmrMostlyBlank(
   meta: OmrScanMetaResult,
@@ -8421,8 +8432,16 @@ export function isAnswerSheetOmrMostlyBlank(
   const resolved = meta.picks.slice(0, rows).filter((p) => p != null).length;
   const marked = countAnswerSheetMarkedRows(meta, rows);
   const markedCap = Math.max(1, Math.ceil(rows * 0.15));
+  const mid = answerSheetRowInkMedian(meta, rows);
   // Sin ninguna lectura OMR y poca tinta "marcada": hoja en blanco (anillos impresos no cuentan).
   if (resolved === 0 && marked <= markedCap) return true;
+
+  // 1–2 falsos "fuertes" (madera/sombra/strip) + mediana de hoja en zona de ruido → blank.
+  // Cierra 1/30 en hoja vacía sin tumbar exámenes ≥40% contestados.
+  const strongSparseCap = Math.max(1, Math.floor(rows * 0.07));
+  if (resolved > 0 && resolved <= strongSparseCap && mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.4) {
+    return true;
+  }
 
   // Pocas lecturas con tinta débil (foto de pantalla / moiré / anillos): tratar como blank.
   // Evita 5/30 en hoja vacía cuando marked supera ligeramente el umbral.
@@ -8445,13 +8464,6 @@ export function isAnswerSheetOmrMostlyBlank(
   if (marked > markedCap) return false;
 
   // Mediana de maxInk por fila: hoja vacía / ruido debe quedar bajo blankMaxInk.
-  const inks: number[] = [];
-  for (let i = 0; i < rows; i++) {
-    const row = meta.rows[i];
-    inks.push(row ? rowMaxInkFraction(row) : 0);
-  }
-  inks.sort((a, b) => a - b);
-  const mid = inks[Math.floor(inks.length / 2)] ?? 0;
   return mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.25;
 }
 

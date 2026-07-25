@@ -9,6 +9,8 @@ import {
   sanitizeAnswerSheetOmrMeta,
   downscaleCanvasForOmrScan,
   isAnswerSheetOmrMostlyBlank,
+  buildLetterDisplayOverlayGeometry,
+  type CalifacilOmrScanGeometry,
   type CalifacilScanOptions,
   type OmrScanMetaResult,
 } from '@/lib/omrScan';
@@ -149,11 +151,19 @@ function finalizeUnifiedDisplayMeta(
   };
 }
 
-function pickBetterOmrMeta(
+/**
+ * Elige entre pase unified y strip recovery.
+ * Preferir hoja mostly-blank sobre un strip que inventa picks (evita 1/30 en vacío).
+ */
+export function pickBetterOmrMeta(
   a: OmrScanMetaResult,
   b: OmrScanMetaResult,
   rows: number
 ): OmrScanMetaResult {
+  const blankA = isAnswerSheetOmrMostlyBlank(a, rows);
+  const blankB = isAnswerSheetOmrMostlyBlank(b, rows);
+  if (blankA !== blankB) return blankA ? a : b;
+
   const ra = countResolvedPicks(a, rows);
   const rb = countResolvedPicks(b, rows);
   if (rb !== ra) return rb > ra ? b : a;
@@ -161,6 +171,38 @@ function pickBetterOmrMeta(
     return b.maxSameColumnCount < a.maxSameColumnCount ? b : a;
   }
   return a;
+}
+
+/**
+ * Preview móvil: mismo canvas/geometría que la lectura cuando hay ancla de referencia
+ * (paridad desktop). Si no, carta + plantilla letter.
+ */
+export function resolveMobileGradeDisplay(
+  displayCanvas: HTMLCanvasElement,
+  scanCanvas: HTMLCanvasElement,
+  columns: number,
+  rowCount: number,
+  meta?: OmrScanMetaResult | null
+): { previewCanvas: HTMLCanvasElement; geometry: CalifacilOmrScanGeometry } {
+  if (isReferenceGradeCanvasAnchor(scanCanvas.width, scanCanvas.height)) {
+    const fromMeta =
+      meta?.geometry?.bubbles && meta.geometry.bubbles.length >= Math.min(30, rowCount)
+        ? syncCalifacilOmrGeometryImageSize(
+            meta.geometry,
+            scanCanvas.width,
+            scanCanvas.height
+          )
+        : null;
+    const desktop =
+      fromMeta ?? buildDesktopDisplayOverlayGeometry(scanCanvas, columns, rowCount);
+    if (desktop) {
+      return { previewCanvas: scanCanvas, geometry: desktop };
+    }
+  }
+  return {
+    previewCanvas: displayCanvas,
+    geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount),
+  };
 }
 
 export function scanDesktopGradeUnifiedOrLegacy(

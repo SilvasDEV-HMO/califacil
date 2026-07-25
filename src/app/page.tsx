@@ -14,7 +14,7 @@ export default function LandingPage() {
           <BrandWordmark
             priority
             className="min-w-0 shrink"
-            imgClassName="h-[clamp(1.5rem,4.2vh,2.75rem)] w-auto max-w-[min(100%,11rem)] object-contain object-left sm:h-11 sm:max-w-[22rem] lg:h-12 lg:max-w-[26rem]"
+            imgClassName="h-[clamp(1.85rem,5vh,3.25rem)] w-auto max-w-[min(100%,13rem)] object-contain object-left sm:h-14 sm:max-w-[26rem] lg:h-16 lg:max-w-[30rem]"
           />
           <nav className="flex shrink-0 items-center gap-1 sm:gap-2.5">
             <Button
@@ -81,7 +81,7 @@ export default function LandingPage() {
           <div className="min-h-0" aria-hidden />
 
           <div className="mx-auto grid w-full max-w-4xl shrink-0 grid-cols-3 gap-1.5 self-center sm:gap-3.5 lg:gap-4">
-            <article className="flex min-w-0 flex-col items-start rounded-lg border border-orange-100/80 bg-white/90 px-2 py-2 text-left shadow-sm backdrop-blur-md sm:rounded-xl sm:px-4 sm:py-5">
+            <article className="flex min-w-0 flex-col items-center rounded-lg border border-orange-100/80 bg-white/90 px-2 py-2 text-center shadow-sm backdrop-blur-md sm:rounded-xl sm:px-4 sm:py-5">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-700 sm:h-10 sm:w-10 sm:rounded-lg">
                 <Sparkles className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
               </div>
@@ -92,7 +92,7 @@ export default function LandingPage() {
                 Genera reactivos a partir de temas y tipos de pregunta que elijas.
               </p>
             </article>
-            <article className="flex min-w-0 flex-col items-start rounded-lg border border-orange-100/80 bg-white/90 px-2 py-2 text-left shadow-sm backdrop-blur-md sm:rounded-xl sm:px-4 sm:py-5">
+            <article className="flex min-w-0 flex-col items-center rounded-lg border border-orange-100/80 bg-white/90 px-2 py-2 text-center shadow-sm backdrop-blur-md sm:rounded-xl sm:px-4 sm:py-5">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-800 sm:h-10 sm:w-10 sm:rounded-lg">
                 <QrCode className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
               </div>
@@ -100,11 +100,10 @@ export default function LandingPage() {
                 Acceso por QR
               </h2>
               <p className="mt-1 text-[clamp(0.62rem,1.2vh,0.9rem)] leading-snug text-gray-600 sm:mt-1.5 sm:leading-relaxed">
-                Publica el examen y que los alumnos entren desde el móvil. O imprímelo y aplícalo en el
-                aula.
+                Publica el examen y aplícalo en línea. O imprímelo y aplícalo en el aula.
               </p>
             </article>
-            <article className="flex min-w-0 flex-col items-start rounded-lg border border-orange-100/80 bg-white/90 px-2 py-2 text-left shadow-sm backdrop-blur-md sm:rounded-xl sm:px-4 sm:py-5">
+            <article className="flex min-w-0 flex-col items-center rounded-lg border border-orange-100/80 bg-white/90 px-2 py-2 text-center shadow-sm backdrop-blur-md sm:rounded-xl sm:px-4 sm:py-5">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-200/70 text-orange-800 sm:h-10 sm:w-10 sm:rounded-lg">
                 <BarChart3 className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
               </div>
@@ -112,7 +111,7 @@ export default function LandingPage() {
                 Resultados claros
               </h2>
               <p className="mt-1 text-[clamp(0.62rem,1.2vh,0.9rem)] leading-snug text-gray-600 sm:mt-1.5 sm:leading-relaxed">
-                Visualiza el desempeño por examen y por grupo, el mismo día y cuando sea necesario.
+                Visualiza resultados, el mismo día y cuando sea necesario.
               </p>
             </article>
           </div>
@@ -126,7 +125,7 @@ export default function LandingPage() {
           <BrandWordmark
             href={false}
             className="justify-center"
-            imgClassName="mx-auto h-[clamp(1.1rem,3vh,2.25rem)] w-auto max-w-[min(100%,10rem)] object-contain sm:h-9 sm:max-w-[18rem]"
+            imgClassName="mx-auto h-[clamp(1.4rem,3.8vh,2.75rem)] w-auto max-w-[min(100%,12rem)] object-contain sm:h-11 sm:max-w-[22rem]"
           />
           <p className="mt-0.5 text-[clamp(0.6rem,1.2vh,0.875rem)] leading-snug text-gray-600 sm:mt-1.5 sm:text-sm">
             Herramienta creada por{' '}
