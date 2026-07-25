@@ -1,4 +1,5 @@
 import {
+  attachAnswerSheetReviewBubbleOverlay,
   buildCellsFromTableLines,
   califacilOmrTableFrameNormRect,
   detectFullCanvasTableGeometry,
@@ -36,6 +37,9 @@ export {
   mergeReferenceColumnEdges,
   mergeReferenceRowLineYs,
   referenceTableFrameNorm,
+  canvasMatchesReferenceGrade,
+  canvasNearReferenceGrade,
+  isReferenceGradeCanvasAnchor,
 };
 
 function normRectToQuad(
@@ -174,9 +178,49 @@ export function buildReferenceAnchoredGeometry(
       ctx.getImageData(0, 0, width, height).data;
     geometry = refineAnswerSheetGeometryToBubblePeaks(canvas, geometry, imageData, {
       preferInk: false,
+      maxShiftRatio: 0.3,
     });
   }
   return geometry;
+}
+
+/**
+ * Overlay desktop 30×4: geometría anclada a referencia + anillos (mismo canvas que el JPEG).
+ * Nunca usa plantilla carta (nudges UP / qnum 0.09).
+ */
+export function buildDesktopDisplayOverlayGeometry(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount: number
+): CalifacilOmrScanGeometry | null {
+  if (!isReferenceGradeCanvasAnchor(canvas.width, canvas.height)) {
+    return null;
+  }
+  const base = buildReferenceAnchoredGeometry(canvas, rowCount, columns);
+  if (!base) return null;
+  const rows = rowCount;
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const attached = attachAnswerSheetReviewBubbleOverlay(
+    canvas,
+    {
+      picks: Array(rows).fill(null),
+      rows: Array.from({ length: rows }, () => ({
+        pick: null as number | null,
+        ambiguous: false,
+        inkFractions: [] as number[],
+      })),
+      needsVisionAssist: false,
+      maxSameColumnCount: 0,
+      geometry: base,
+      reviewSourceCanvas: canvas,
+      controlNumberDigits: [],
+      controlNumber: null,
+    },
+    cols,
+    rows,
+    { forceRebuild: true, maxShiftRatio: 0.3 }
+  );
+  return attached.geometry ?? base;
 }
 
 /** Alinea (si aplica) y devuelve canvas listo para lectura OMR de 30 filas. */

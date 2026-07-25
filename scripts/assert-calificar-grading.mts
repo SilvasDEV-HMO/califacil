@@ -153,6 +153,39 @@ assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blan
   assert(after.correct === 0 && after.pct === 0, 'tras sanitize grade 0/30');
 }
 
+// --- 5 picks débiles (caso móvil foto/pantalla) → blank → 0/30 ---
+{
+  const rows = 30;
+  const picks: (number | null)[] = Array.from({ length: rows }, () => null);
+  for (let i = 0; i < 5; i++) picks[i] = i % 4;
+  const rowMetas = Array.from({ length: rows }, (_, i) => ({
+    pick: picks[i],
+    ambiguous: false,
+    inkFractions:
+      picks[i] != null
+        ? [0.12, 0.06, 0.05, 0.05]
+        : [0.05, 0.04, 0.04, 0.04],
+  }));
+  const meta = {
+    picks,
+    rows: rowMetas,
+    needsVisionAssist: false,
+    maxSameColumnCount: 2,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  assert(isAnswerSheetOmrMostlyBlank(meta, rows), '5 picks débiles = mostly-blank');
+  const cleaned = sanitizeAnswerSheetOmrMeta(meta, rows);
+  assert(
+    cleaned.picks.every((p) => p == null),
+    '5 picks débiles sanitizados a null'
+  );
+  const after = gradeOmrChunkPicksAgainstVirtualKey(chunk30, cleaned.picks, key30);
+  assert(after.correct === 0 && after.pct === 0, '5 falsos → 0/30');
+}
+
 // --- 1 error, puntos iguales ---
 const oneWrong = [...perfectPicks];
 oneWrong[0] = (oneWrong[0]! + 1) % 4;

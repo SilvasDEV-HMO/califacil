@@ -7,6 +7,7 @@ import {
   califacilImageToJpegDataUrl,
   isAnswerSheetOmrMostlyBlank,
   prepareCalifacilScanInput,
+  sanitizeAnswerSheetOmrMeta,
   scanWarpedMobileCaptureSheetFast,
   type OmrScanMetaResult,
   type WarpAlignmentReport,
@@ -18,6 +19,10 @@ import {
   scanWarpedGradeUnifiedOrLegacyAsync,
 } from '@/lib/omr/unified-grade-scan';
 import { prepareCalifacilGradeScanCanvas } from '@/lib/omr/pipeline';
+import {
+  canvasMatchesReferenceGrade,
+  isReferenceGradeExam,
+} from '@/lib/omr/reference-grade';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import type { Question } from '@/types';
 
@@ -210,11 +215,19 @@ export async function runCalifacilOmrReadingPipeline(
     return prepareCalifacilScanInput(input, { useGuideCrop: false });
   };
 
-  const prepareGradeCanvas = (canvas: HTMLCanvasElement): HTMLCanvasElement =>
-    prepareCalifacilGradeScanCanvas(canvas, omrCols, omrRowCount, {
+  const prepareGradeCanvas = (canvas: HTMLCanvasElement): HTMLCanvasElement => {
+    // Evita segunda homografía si el PDF ya está en tamaño de referencia.
+    if (
+      isReferenceGradeExam(omrRowCount, omrCols) &&
+      canvasMatchesReferenceGrade(canvas.width, canvas.height)
+    ) {
+      return canvas;
+    }
+    return prepareCalifacilGradeScanCanvas(canvas, omrCols, omrRowCount, {
       preWarped: preWarped || useWarpedScan,
       warpAlignment: input.warpAlignment ?? null,
     });
+  };
 
   let scanCanvas = resolveScanCanvas(oriented);
   if (scanCanvas) {
@@ -660,13 +673,17 @@ export function buildCalifacilOmrReadingOverride(
   liveLockedAnswers: Record<string, string>,
   warpAlignment: WarpAlignmentReport | null = null
 ): CalifacilOmrReadingResult {
-  // Hoja mostly-blank → siempre 0 picks (sin gate de «≥3 lecturas útiles»).
-  const mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
+  // Siempre sanitizar primero (anula tinta débil por fila + blank total).
+  const sanitizedFull = sanitizeAnswerSheetOmrMeta(
+    meta,
+    Math.max(chunk.length, meta.picks.length || chunk.length)
+  );
+  const mostlyBlank = isAnswerSheetOmrMostlyBlank(sanitizedFull, chunk.length);
   const sanitized = mostlyBlank
     ? {
-        ...meta,
+        ...sanitizedFull,
         picks: Array(chunk.length).fill(null) as (number | null)[],
-        rows: meta.rows.slice(0, chunk.length).map((r) => ({
+        rows: sanitizedFull.rows.slice(0, chunk.length).map((r) => ({
           ...r,
           pick: null,
           ambiguous: false,
@@ -674,7 +691,11 @@ export function buildCalifacilOmrReadingOverride(
         maxSameColumnCount: 0,
         needsVisionAssist: false,
       }
-    : meta;
+    : {
+        ...sanitizedFull,
+        picks: sanitizedFull.picks.slice(0, chunk.length),
+        rows: sanitizedFull.rows.slice(0, chunk.length),
+      };
   const raw = [...sanitized.picks];
   const mapped = mapRawToDraftDetailed(raw, chunk);
   const minResolved = Math.max(1, Math.ceil(chunk.length * CALIFACIL_MIN_AUTO_READ_RATIO));
@@ -708,7 +729,12 @@ export function buildCalifacilOmrReadingOverride(
   }
 
   return {
-    meta: sanitized,
+    meta: {
+      ...sanitized,
+      reviewSourceCanvas:
+        meta.reviewSourceCanvas ??
+        (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null),
+    },
     raw,
     mapped,
     mergedDraft,

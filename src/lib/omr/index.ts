@@ -18,8 +18,11 @@ export {
 export {
   alignCanvasToReferenceGrade,
   buildReferenceAnchoredGeometry,
+  buildDesktopDisplayOverlayGeometry,
   isReferenceGradeExam,
   prepareReferenceGradeCanvas,
+  canvasMatchesReferenceGrade,
+  isReferenceGradeCanvasAnchor,
 } from '@/lib/omr/reference-grade';
 export {
   scanDesktopGradeUnifiedOrLegacy,

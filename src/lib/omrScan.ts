@@ -8423,6 +8423,25 @@ export function isAnswerSheetOmrMostlyBlank(
   const markedCap = Math.max(1, Math.ceil(rows * 0.15));
   // Sin ninguna lectura OMR y poca tinta "marcada": hoja en blanco (anillos impresos no cuentan).
   if (resolved === 0 && marked <= markedCap) return true;
+
+  // Pocas lecturas con tinta débil (foto de pantalla / moiré / anillos): tratar como blank.
+  // Evita 5/30 en hoja vacía cuando marked supera ligeramente el umbral.
+  const sparseCap = Math.max(2, Math.ceil(rows * 0.2));
+  if (resolved > 0 && resolved <= sparseCap) {
+    let inkSum = 0;
+    let n = 0;
+    for (let i = 0; i < rows; i++) {
+      if (meta.picks[i] == null) continue;
+      const row = meta.rows[i];
+      inkSum += row ? rowMaxInkFraction(row) : 0;
+      n++;
+    }
+    const avgInk = n > 0 ? inkSum / n : 0;
+    if (avgInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 2.2) {
+      return true;
+    }
+  }
+
   if (marked > markedCap) return false;
 
   // Mediana de maxInk por fila: hoja vacía / ruido debe quedar bajo blankMaxInk.
@@ -8433,7 +8452,7 @@ export function isAnswerSheetOmrMostlyBlank(
   }
   inks.sort((a, b) => a - b);
   const mid = inks[Math.floor(inks.length / 2)] ?? 0;
-  return mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.1;
+  return mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.25;
 }
 
 /** Anula lecturas falsas en hojas en blanco o con pocas marcas reales. */

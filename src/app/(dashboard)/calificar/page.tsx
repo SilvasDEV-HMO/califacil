@@ -131,6 +131,10 @@ import {
   isMobileLetterGradeCanvasReady,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
+import {
+  buildDesktopDisplayOverlayGeometry,
+  isReferenceGradeCanvasAnchor,
+} from '@/lib/omr/reference-grade';
 import { scanWarpedGradeMobileAsync } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
@@ -524,10 +528,6 @@ export default function CalificarPage() {
   /** Geometría de celdas del último escaneo (misma relación de aspecto que la vista previa). */
   const [reviewOmrGeometry, setReviewOmrGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
   const [reviewOmrPicks, setReviewOmrPicks] = useState<(number | null)[]>([]);
-  const [reviewScanMeta, setReviewScanMeta] = useState<{
-    unifiedEngine?: boolean;
-    usedFallback?: boolean;
-  } | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
 
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -822,42 +822,6 @@ export default function CalificarPage() {
     const draft = buildMcDraftFromChunk(currentChunk, draftSelections);
     return gradeMcDraftAgainstVirtualKey(draft, currentChunk, virtualKeyMaps);
   }, [currentChunk, draftSelections, virtualKeyMaps]);
-
-  const expectedChunkKeyString = useMemo(
-    () =>
-      expectedChunkPicks
-        .map((p) => (p === null || p < 0 ? '?' : 'ABCD'[p]!))
-        .join(''),
-    [expectedChunkPicks]
-  );
-  const readChunkKeyString = useMemo(
-    () =>
-      reviewOmrPicks
-        .slice(0, currentChunk.length)
-        .map((p) => (p === null ? '?' : 'ABCD'[p]!))
-        .join(''),
-    [reviewOmrPicks, currentChunk.length]
-  );
-  const reviewGeometrySummary = useMemo(() => {
-    if (!reviewOmrGeometry) return null;
-    const bubbleCount =
-      reviewOmrGeometry.bubbles?.reduce((n, row) => n + row.length, 0) ??
-      reviewOmrGeometry.cells.reduce((n, row) => n + row.length, 0);
-    const q = reviewOmrGeometry.quality;
-    const conv = q?.convergence;
-    return {
-      bubbleCount,
-      bubbleFitPct: q?.bubbleFit != null ? Math.round(q.bubbleFit * 100) : null,
-      validationOk: q?.validationOk,
-      imageSize: `${reviewOmrGeometry.imageWidth}×${reviewOmrGeometry.imageHeight}`,
-      converged: conv?.converged,
-      iterations: conv?.iterations,
-      meanCenterErrorPx: conv?.meanCenterErrorPx,
-      resolvedCount: conv?.resolvedCount,
-      ambiguousCount: conv?.ambiguousCount,
-      qualityIssues: q?.issues ?? [],
-    };
-  }, [reviewOmrGeometry]);
 
   const sortedStudents = useMemo(
     () => [...students].sort((a, b) => a.name.localeCompare(b.name, 'es')),
@@ -1638,11 +1602,18 @@ export default function CalificarPage() {
         // Overlay siempre sobre el canvas de preview (carta), plantilla fija 30.
         let geomClone: CalifacilOmrScanGeometry;
         if (reviewCanvas instanceof HTMLCanvasElement) {
-          geomClone = syncCalifacilOmrGeometryImageSize(
-            buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount),
-            previewW,
-            previewH
-          );
+          const letterOverlay = isCalifacilWarpedLetterCanvas(reviewCanvas)
+            ? buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
+            : null;
+          const refOverlay =
+            !letterOverlay && isReferenceGradeCanvasAnchor(reviewCanvas.width, reviewCanvas.height)
+              ? buildDesktopDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
+              : null;
+          const overlayGeom =
+            letterOverlay ??
+            refOverlay ??
+            buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount);
+          geomClone = syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH);
         } else if (geom) {
           try {
             geomClone = structuredClone(geom);
@@ -1699,12 +1670,39 @@ export default function CalificarPage() {
 
         setDraftSelections(mapped.draft);
         setReviewOmrPicks(raw.slice(0, chunk.length));
-        await setPreviewFromSource(meta.reviewSourceCanvas ?? activeScanSource, fallbackFile);
-        setReviewOmrGeometry(meta.geometry);
-        setReviewScanMeta({
-          unifiedEngine: meta.unifiedEngine,
-          usedFallback: meta.usedFallback,
-        });
+        const previewCanvas =
+          meta.reviewSourceCanvas instanceof HTMLCanvasElement
+            ? meta.reviewSourceCanvas
+            : activeScanSource instanceof HTMLCanvasElement
+              ? activeScanSource
+              : null;
+        await setPreviewFromSource(previewCanvas ?? activeScanSource, fallbackFile);
+        // Desktop 30×4: overlay anclado a referencia (mismo canvas que el JPEG).
+        let reviewGeom = meta.geometry;
+        if (
+          previewCanvas &&
+          isReferenceGradeCanvasAnchor(previewCanvas.width, previewCanvas.height)
+        ) {
+          const desktopOverlay = buildDesktopDisplayOverlayGeometry(
+            previewCanvas,
+            omrCols,
+            omrRowCount
+          );
+          if (desktopOverlay) {
+            reviewGeom = syncCalifacilOmrGeometryImageSize(
+              desktopOverlay,
+              previewCanvas.width,
+              previewCanvas.height
+            );
+          }
+        } else if (reviewGeom && previewCanvas) {
+          reviewGeom = syncCalifacilOmrGeometryImageSize(
+            reviewGeom,
+            previewCanvas.width,
+            previewCanvas.height
+          );
+        }
+        setReviewOmrGeometry(reviewGeom);
         setPhase('revisar_hoja');
         const picksKey = raw
           .slice(0, chunk.length)
@@ -1982,7 +1980,6 @@ export default function CalificarPage() {
       return null;
     });
     setReviewOmrGeometry(null);
-    setReviewScanMeta(null);
     setReviewOmrPicks([]);
     setSelectedStudentId(CALIFICAR_AUTO_STUDENT_ID);
     setDetectedControlNumber(null);
@@ -2031,7 +2028,6 @@ export default function CalificarPage() {
         return null;
       });
       setReviewOmrGeometry(null);
-      setReviewScanMeta(null);
       setReviewOmrPicks([]);
       return;
     }
@@ -2050,7 +2046,6 @@ export default function CalificarPage() {
         return null;
       });
       setReviewOmrGeometry(null);
-      setReviewScanMeta(null);
       setReviewOmrPicks([]);
     });
   };
@@ -2964,7 +2959,6 @@ export default function CalificarPage() {
         return next;
       });
       setReviewOmrGeometry(null);
-      setReviewScanMeta(null);
       setReviewOmrPicks([]);
       setReviewQualityHint(null);
       setDraftSelections({});
@@ -3120,7 +3114,6 @@ export default function CalificarPage() {
       setSheetIndex(nextIdx);
       sheetIndexRef.current = nextIdx;
       setReviewOmrGeometry(null);
-      setReviewScanMeta(null);
       setReviewOmrPicks([]);
       setPreviewUrl((u) => {
         if (u) URL.revokeObjectURL(u);
@@ -3277,7 +3270,6 @@ export default function CalificarPage() {
       setLiveResolvedCount(0);
       liveLockedAnswersRef.current = {};
       setReviewOmrGeometry(null);
-      setReviewScanMeta(null);
       setReviewOmrPicks([]);
       setReviewQualityHint(null);
     },
@@ -3544,6 +3536,14 @@ export default function CalificarPage() {
         califacilFastScan = await runFastWarpedScan(warped, alignment);
         scanCanvas = califacilFastScan.docCanvas;
         displayCanvas = califacilFastScan.displayCanvas;
+        // Preview debe ser hoja carta enderezada (no foto cruda del monitor/mesa).
+        if (
+          !isCalifacilWarpedLetterCanvas(displayCanvas) &&
+          isCalifacilWarpedLetterCanvas(warped)
+        ) {
+          displayCanvas =
+            prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: false }) ?? warped;
+        }
         if (califacilFastScan.rejectedCorners) {
           clearPreview();
           const corners = countCalifacilCornerMarkers(warped);
@@ -3614,8 +3614,7 @@ export default function CalificarPage() {
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
         const warpMeta = califacilFastScan.meta;
         // Siempre override tras el pase móvil (strip recovery ya incluido si era débil).
-        // Evita segunda pasada de hasta 320 iters en finalizeCapturedSheet.
-        // Picks viven en espacio de lectura; geometry de UI se reconstruye en finalize sobre carta.
+        // Picks: sanitize+blank en override. Preview/bolitas: canvas carta (displayCanvas).
         readingOverride = buildCalifacilOmrReadingOverride(
           {
             ...warpMeta,
@@ -3623,7 +3622,7 @@ export default function CalificarPage() {
             geometry: null,
           },
           chunk,
-          scanCanvas,
+          displayCanvas,
           liveLockedAnswersRef.current,
           alignment
         );
@@ -4054,7 +4053,6 @@ export default function CalificarPage() {
     strictValidationTicksRef.current = 0;
     lastQualityProbeRef.current = null;
     setReviewOmrGeometry(null);
-    setReviewScanMeta(null);
     setReviewOmrPicks([]);
     setPreviewUrl((u) => {
       if (u) URL.revokeObjectURL(u);
@@ -4808,75 +4806,6 @@ export default function CalificarPage() {
 
             {previewUrl && phase === 'revisar_hoja' && (
               <div className="space-y-2">
-                <div className="rounded-lg border border-slate-200 bg-slate-50/95 px-3 py-2.5 text-xs">
-                  <p className="text-sm font-semibold text-slate-900">Referencia de calificación</p>
-                  {canGradeStudents && currentChunk.length > 0 ? (
-                    <div className="mt-2 space-y-2">
-                      <div>
-                        <p className="font-medium text-slate-700">
-                          Clave del examen (hoja {sheetIndex + 1}, {currentChunk.length} reactivos)
-                        </p>
-                        <p className="mt-0.5 break-all font-mono text-[11px] leading-relaxed tracking-wide text-orange-900">
-                          {expectedChunkKeyString}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="font-medium text-slate-700">Lectura OMR extraída del documento</p>
-                        <p className="mt-0.5 break-all font-mono text-[11px] leading-relaxed tracking-wide text-slate-900">
-                          {readChunkKeyString}
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="mt-1 text-slate-600">
-                      La clave automática del examen no está completa; solo se muestra la lectura del documento.
-                    </p>
-                  )}
-                  {reviewGeometrySummary ? (
-                    <div className="mt-2 space-y-1 text-[11px] leading-snug text-slate-600">
-                      <p>
-                        Geometría de burbujas: {reviewGeometrySummary.bubbleCount} posiciones · imagen{' '}
-                        {reviewGeometrySummary.imageSize}
-                        {reviewGeometrySummary.bubbleFitPct != null
-                          ? ` · ajuste visual ${reviewGeometrySummary.bubbleFitPct}%`
-                          : ''}
-                        {reviewScanMeta?.unifiedEngine ? ' · motor unificado' : ''}
-                        {reviewScanMeta?.usedFallback ? ' · barrido plantilla' : ''}
-                        {reviewGeometrySummary.validationOk === false ? ' · validación débil' : ''}
-                      </p>
-                      {reviewGeometrySummary.converged != null ? (
-                        <p>
-                          Convergencia:{' '}
-                          {reviewGeometrySummary.converged ? 'sí' : 'no'}
-                          {reviewGeometrySummary.iterations != null
-                            ? ` · ${reviewGeometrySummary.iterations} iteraciones`
-                            : ''}
-                          {reviewGeometrySummary.meanCenterErrorPx != null
-                            ? ` · error centro ${reviewGeometrySummary.meanCenterErrorPx.toFixed(2)} px`
-                            : ''}
-                          {reviewGeometrySummary.resolvedCount != null
-                            ? ` · lectura ${reviewGeometrySummary.resolvedCount}/30`
-                            : ''}
-                          {reviewGeometrySummary.ambiguousCount != null &&
-                          reviewGeometrySummary.ambiguousCount > 0
-                            ? ` · ${reviewGeometrySummary.ambiguousCount} ambiguas`
-                            : ''}
-                        </p>
-                      ) : null}
-                      {reviewGeometrySummary.qualityIssues.length > 0 &&
-                      chunkKeyComparison.pct < 100 ? (
-                        <p className="text-amber-800">
-                          Diagnóstico: {reviewGeometrySummary.qualityIssues.slice(0, 6).join(' · ')}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  <p className="mt-2 text-[11px] leading-snug text-slate-500">
-                    En la vista previa: círculos <span className="text-orange-700">naranjas</span> = respuesta
-                    correcta esperada; <span className="text-green-700">verde</span> /{' '}
-                    <span className="text-red-600">rojo</span> = opción leída en el documento.
-                  </p>
-                </div>
                 {reviewOmrGeometry ? (
                   <CalifacilReviewImageStack
                     previewUrl={previewUrl}
@@ -4885,10 +4814,21 @@ export default function CalificarPage() {
                     overlay={
                       <CalifacilOmrReviewOverlay
                         geometry={reviewOmrGeometry}
-                        picks={draftSelectionsToColumnPicks(currentChunk, draftSelections)}
-                        expectedPicks={expectedChunkPicks}
+                        picks={(() => {
+                          const picks = draftSelectionsToColumnPicks(
+                            currentChunk,
+                            draftSelections
+                          );
+                          while (picks.length < omrRowCount) picks.push(null);
+                          return picks;
+                        })()}
+                        expectedPicks={(() => {
+                          const picks = [...expectedChunkPicks];
+                          while (picks.length < omrRowCount) picks.push(null);
+                          return picks;
+                        })()}
                         expectedOpacity={overlayOpacity / 100}
-                        rowCount={currentChunk.length}
+                        rowCount={omrRowCount}
                         clipRect={null}
                       />
                     }
@@ -4992,7 +4932,6 @@ export default function CalificarPage() {
                       setPhase('capturar');
                       clearPendingPdfGrading();
                       setReviewOmrGeometry(null);
-                      setReviewScanMeta(null);
                       setReviewOmrPicks([]);
                       setPreviewUrl((u) => {
                         if (u) URL.revokeObjectURL(u);

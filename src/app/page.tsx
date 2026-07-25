@@ -37,23 +37,29 @@ export default function LandingPage() {
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <section className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col justify-center gap-[clamp(0.5rem,2.2vh,1.75rem)] px-3 py-[clamp(0.35rem,1.5vh,1.25rem)] sm:px-6 lg:px-8">
-          <div className="flex w-full max-w-3xl shrink-0 flex-col items-center self-center text-center">
-            <p className="text-[clamp(0.65rem,1.6vh,1rem)] font-semibold uppercase tracking-[0.14em] text-orange-600">
+        {/*
+          Grid 1fr / auto / 1fr / auto / 1fr: reparte el aire sobrante
+          por igual arriba, entre hero y cards, y abajo (sin scroll).
+        */}
+        <section className="mx-auto grid h-full min-h-0 w-full max-w-5xl grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] px-3 sm:px-6 lg:px-8">
+          <div className="min-h-0" aria-hidden />
+
+          <div className="flex w-full max-w-3xl shrink-0 flex-col items-center justify-self-center text-center">
+            <p className="text-[clamp(0.65rem,1.6vh,1rem)] font-semibold uppercase tracking-[0.14em] text-orange-600 sm:text-sm lg:text-base">
               Plataforma para Docentes
             </p>
-            <h1 className="mt-[clamp(0.25rem,0.9vh,0.65rem)] max-w-[22ch] text-balance text-[clamp(1.2rem,calc(2.4vh+1.8vw),3.1rem)] font-bold leading-[1.12] tracking-tight text-gray-900 sm:max-w-none">
+            <h1 className="mt-[clamp(0.35rem,1.1vh,0.75rem)] max-w-[22ch] text-balance text-[clamp(1.25rem,calc(2.2vh+1.6vw),3.1rem)] font-bold leading-[1.12] tracking-tight text-gray-900 sm:mt-3 sm:max-w-none">
               Crea tus exámenes, imprime y califica TODO el mismo día.
             </h1>
-            <p className="mx-auto mt-[clamp(0.35rem,1vh,0.75rem)] max-w-xl text-pretty text-[clamp(0.8rem,calc(1.5vh+0.4vw),1.3rem)] leading-snug text-gray-600 sm:leading-relaxed">
+            <p className="mx-auto mt-[clamp(0.4rem,1.2vh,0.85rem)] max-w-xl text-pretty text-[clamp(0.8rem,calc(1.4vh+0.35vw),1.3rem)] leading-snug text-gray-600 sm:mt-3.5 sm:leading-relaxed">
               Crea evaluaciones personalizadas, compártelas con tus grupos y revisa resultados en un solo
               lugar. Sin complicaciones.
             </p>
 
-            <div className="mt-[clamp(0.5rem,1.6vh,1.25rem)] flex w-full max-w-md flex-row items-stretch justify-center gap-2 sm:max-w-none sm:gap-3">
+            <div className="mt-[clamp(0.65rem,2vh,1.5rem)] flex w-full max-w-md flex-row items-stretch justify-center gap-2 sm:mt-6 sm:max-w-none sm:gap-3">
               <Button
                 size="sm"
-                className="h-[clamp(2.25rem,5.5vh,3.5rem)] min-w-0 flex-1 text-[clamp(0.8rem,1.5vh,1.125rem)] font-semibold sm:flex-none sm:min-w-[12rem] sm:px-6 lg:min-w-[13rem]"
+                className="h-[clamp(2.25rem,5vh,3.5rem)] min-w-0 flex-1 text-[clamp(0.8rem,1.4vh,1.125rem)] font-semibold sm:h-12 sm:flex-none sm:min-w-[12rem] sm:px-6 sm:text-base lg:h-14 lg:min-w-[13rem] lg:text-lg"
                 asChild
               >
                 <Link href="/register">
@@ -64,7 +70,7 @@ export default function LandingPage() {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-[clamp(2.25rem,5.5vh,3.5rem)] min-w-0 flex-1 border-orange-200 bg-white/85 text-[clamp(0.8rem,1.5vh,1.125rem)] font-semibold sm:flex-none sm:min-w-[12rem] sm:px-6 lg:min-w-[13rem]"
+                className="h-[clamp(2.25rem,5vh,3.5rem)] min-w-0 flex-1 border-orange-200 bg-white/85 text-[clamp(0.8rem,1.4vh,1.125rem)] font-semibold sm:h-12 sm:flex-none sm:min-w-[12rem] sm:px-6 sm:text-base lg:h-14 lg:min-w-[13rem] lg:text-lg"
                 asChild
               >
                 <Link href="/login">Ya tengo cuenta</Link>
@@ -72,7 +78,9 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="mx-auto grid w-full max-w-4xl shrink-0 grid-cols-3 gap-1.5 sm:gap-3.5 lg:gap-4">
+          <div className="min-h-0" aria-hidden />
+
+          <div className="mx-auto grid w-full max-w-4xl shrink-0 grid-cols-3 gap-1.5 self-center sm:gap-3.5 lg:gap-4">
             <article className="flex min-w-0 flex-col items-start rounded-lg border border-orange-100/80 bg-white/90 px-2 py-2 text-left shadow-sm backdrop-blur-md sm:rounded-xl sm:px-4 sm:py-5">
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-100 text-orange-700 sm:h-10 sm:w-10 sm:rounded-lg">
                 <Sparkles className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
@@ -108,6 +116,8 @@ export default function LandingPage() {
               </p>
             </article>
           </div>
+
+          <div className="min-h-0" aria-hidden />
         </section>
       </main>
 

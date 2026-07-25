@@ -18,13 +18,21 @@ import {
   unifiedResultToMeta,
   runStripFallbackFast,
 } from '@/lib/omr/engine';
+import {
+  buildDesktopDisplayOverlayGeometry,
+  isReferenceGradeCanvasAnchor,
+  isReferenceGradeExam,
+} from '@/lib/omr/reference-grade';
 
 const OMR_GRADE_SCAN_MAX_SIDE = 1100;
 const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 
-/** Presupuesto móvil: un pase rápido (~70 iters). Sin recovery 160. */
+/** Presupuesto móvil / desktop fast: ~70 iters. */
 const MOBILE_FAST_OPTIMIZE_ITERS = 70;
 const MOBILE_FAST_STAGNANT = 10;
+/** Segundo pase desktop solo si fast fue débil (antes 320). */
+const DESKTOP_WEAK_OPTIMIZE_ITERS = 140;
+const DESKTOP_WEAK_STAGNANT = 16;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
   return downscaleCanvasForOmrScan(canvas, maxSide) ?? canvas;
@@ -63,6 +71,23 @@ export function isStrongMobileOmrMeta(
   return !isWeakMobileOmrMeta(meta, rows, activeRows);
 }
 
+/** Fast path suficiente para no lanzar segundo pase pesado en desktop. */
+function isDesktopFastPassEnough(
+  meta: OmrScanMetaResult,
+  rows: number,
+  displayCanvas: HTMLCanvasElement,
+  columns: number
+): boolean {
+  if (isAnswerSheetOmrMostlyBlank(meta, rows)) return true;
+  if (isReferenceGradeExam(rows, columns) && isReferenceGradeCanvasAnchor(displayCanvas.width, displayCanvas.height)) {
+    // Exact/near ref: con ≥55% lecturas o blank ya limpio basta el pase fast.
+    const resolved = countResolvedPicks(meta, rows);
+    if (resolved >= Math.ceil(rows * 0.55)) return true;
+    if (resolved === 0) return true;
+  }
+  return isStrongMobileOmrMeta(meta, rows);
+}
+
 function finalizeUnifiedDisplayMeta(
   displayCanvas: HTMLCanvasElement,
   meta: OmrScanMetaResult,
@@ -70,6 +95,25 @@ function finalizeUnifiedDisplayMeta(
   columns: number,
   opts?: { skipBubbleReattach?: boolean }
 ): OmrScanMetaResult {
+  // Desktop 30×4 near/exact ref: overlay desde calibración (no plantilla carta).
+  if (
+    isReferenceGradeExam(rows, columns) &&
+    isReferenceGradeCanvasAnchor(displayCanvas.width, displayCanvas.height)
+  ) {
+    const desktopGeom = buildDesktopDisplayOverlayGeometry(displayCanvas, columns, rows);
+    if (desktopGeom) {
+      return {
+        ...meta,
+        geometry: syncCalifacilOmrGeometryImageSize(
+          desktopGeom,
+          displayCanvas.width,
+          displayCanvas.height
+        ),
+        reviewSourceCanvas: displayCanvas,
+      };
+    }
+  }
+
   const geometry = meta.geometry
     ? syncCalifacilOmrGeometryImageSize(
         meta.geometry,
@@ -84,7 +128,6 @@ function finalizeUnifiedDisplayMeta(
       row?.some((b) => Number.isFinite(b.r) && b.r > 0.002 && b.r < 0.06)
     );
 
-  // Móvil: reutilizar bubbles sanos; si r/cx basura → re-anclar en display.
   if (opts?.skipBubbleReattach && hasSaneEngineBubbles) {
     return {
       ...meta,
@@ -114,7 +157,6 @@ function pickBetterOmrMeta(
   const ra = countResolvedPicks(a, rows);
   const rb = countResolvedPicks(b, rows);
   if (rb !== ra) return rb > ra ? b : a;
-  // Preferir menos sesgo de columna.
   if (b.maxSameColumnCount !== a.maxSameColumnCount) {
     return b.maxSameColumnCount < a.maxSameColumnCount ? b : a;
   }
@@ -129,11 +171,21 @@ export function scanDesktopGradeUnifiedOrLegacy(
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
   if (isUnifiedOmrEngineEnabled()) {
     const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
-      fastMode: false,
-      maxOptimizeIterations: 320,
-      requireFullOptimize: true,
+      fastMode: true,
+      maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
+      stagnantLimit: MOBILE_FAST_STAGNANT,
     });
-    return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+    let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+    meta = sanitizeAnswerSheetOmrMeta(meta, rows);
+    if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
+      return meta;
+    }
+    const full = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+      fastMode: false,
+      maxOptimizeIterations: DESKTOP_WEAK_OPTIMIZE_ITERS,
+      stagnantLimit: DESKTOP_WEAK_STAGNANT,
+    });
+    return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(full), rows, columns);
   }
   return scanCalifacilDesktopGradeDocument(displayCanvas, columns, rows);
 }
@@ -144,7 +196,6 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
   rows: number
 ): Promise<OmrScanMetaResult> {
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
-  // Ceder un frame para que «Leyendo…» pinte antes del CPU pesado.
   await new Promise<void>((resolve) => {
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => resolve());
@@ -154,7 +205,6 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
   });
 
   if (isUnifiedOmrEngineEnabled()) {
-    // Pase rápido: si la hoja está en blanco, no hacer 320 iters (UI trabada).
     const fast = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
       fastMode: true,
       maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
@@ -162,15 +212,15 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
     });
     let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(fast), rows, columns);
     meta = sanitizeAnswerSheetOmrMeta(meta, rows);
-    if (isAnswerSheetOmrMostlyBlank(meta, rows)) {
+    if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
       return meta;
     }
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
       fastMode: false,
-      maxOptimizeIterations: 320,
-      requireFullOptimize: true,
+      maxOptimizeIterations: DESKTOP_WEAK_OPTIMIZE_ITERS,
+      stagnantLimit: DESKTOP_WEAK_STAGNANT,
     });
     return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
   }
@@ -221,7 +271,6 @@ export async function scanWarpedGradeMobileAsync(
     return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
   }
 
-  // Ceder un frame para que «Calificando…» pinte antes del CPU pesado.
   await new Promise<void>((resolve) => {
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => resolve());
