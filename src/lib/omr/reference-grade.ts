@@ -188,11 +188,11 @@ export function buildReferenceAnchoredGeometry(
  * Overlay desktop 30×4: geometría anclada a referencia + anillos (mismo canvas que el JPEG).
  * Nunca usa plantilla carta (nudges UP / qnum 0.09).
  *
- * Nudge residual: la calibración chilo.pdf queda ligeramente arriba-izquierda
- * respecto a PDFs/impresiones actuales; desplazamos abajo-derecha ~½ celda.
+ * Pre-nudge solo siembra las celdas para que el snap a anillos encuentre el círculo;
+ * el snap es el último paso (no desplazar después).
  */
-const DESKTOP_OVERLAY_NUDGE_X = 0.0075;
-const DESKTOP_OVERLAY_NUDGE_Y = 0.011;
+const DESKTOP_OVERLAY_PRE_NUDGE_X = -0.003;
+const DESKTOP_OVERLAY_PRE_NUDGE_Y = 0.008;
 
 function nudgeDesktopOverlayGeometry(
   geometry: CalifacilOmrScanGeometry,
@@ -230,6 +230,11 @@ export function buildDesktopDisplayOverlayGeometry(
   }
   const base = buildReferenceAnchoredGeometry(canvas, rowCount, columns);
   if (!base) return null;
+  const seeded = nudgeDesktopOverlayGeometry(
+    base,
+    DESKTOP_OVERLAY_PRE_NUDGE_X,
+    DESKTOP_OVERLAY_PRE_NUDGE_Y
+  );
   const rows = rowCount;
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const attached = attachAnswerSheetReviewBubbleOverlay(
@@ -243,21 +248,16 @@ export function buildDesktopDisplayOverlayGeometry(
       })),
       needsVisionAssist: false,
       maxSameColumnCount: 0,
-      geometry: base,
+      geometry: seeded,
       reviewSourceCanvas: canvas,
       controlNumberDigits: [],
       controlNumber: null,
     },
     cols,
     rows,
-    { forceRebuild: true, maxShiftRatio: 0.22 }
+    { forceRebuild: true, maxShiftRatio: 0.3 }
   );
-  const withBubbles = attached.geometry ?? base;
-  return nudgeDesktopOverlayGeometry(
-    withBubbles,
-    DESKTOP_OVERLAY_NUDGE_X,
-    DESKTOP_OVERLAY_NUDGE_Y
-  );
+  return attached.geometry ?? seeded;
 }
 
 /** Alinea (si aplica) y devuelve canvas listo para lectura OMR de 30 filas. */
