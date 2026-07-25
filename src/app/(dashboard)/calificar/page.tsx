@@ -43,7 +43,6 @@ import {
 } from '@/lib/omrZipGrade';
 import {
   autoOrientCalifacilSheet,
-  califacilOmrOrangeFrameRect,
   califacilImageToJpegDataUrl,
   califacilMobileAnswerSheetGuideInViewportPx,
   captureVideoFullFrame,
@@ -97,8 +96,8 @@ import {
   sanitizeAnswerSheetOmrMeta,
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
+  buildLetterDisplayOverlayGeometry,
   buildAnswerSheetOmrGeometry,
-  attachAnswerSheetReviewBubbleOverlay,
   smoothMobileRoiQuad,
   warpCalifacilSheetFromCornerMarkers,
   type WarpAlignmentReport,
@@ -128,7 +127,7 @@ import {
 import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
-  prepareCalifacilGradeScanCanvas,
+  prepareCalifacilGradeScanCanvases,
   isMobileLetterGradeCanvasReady,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
@@ -197,7 +196,11 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
-import { useCalificarLiveCamera, useIsMobile } from '@/hooks/use-mobile';
+import {
+  isDesktopPointerDevice,
+  useCalificarLiveCamera,
+  useIsMobile,
+} from '@/hooks/use-mobile';
 import {
   CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO,
   CALIFACIL_MIN_AUTO_READ_RATIO,
@@ -305,7 +308,6 @@ const MIN_FRAME_LUMINANCE = 0.11;
 /** Superpone plantilla PDF y error fiducial en px (`.env`: `NEXT_PUBLIC_CALIFACIL_OMR_DEBUG=true`). */
 const OMR_DEBUG_ENABLED = process.env.NEXT_PUBLIC_CALIFACIL_OMR_DEBUG === 'true';
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
-const VIRTUAL_CAMERA_RE = /(droidcam|airdroid|iriun|epoccam|obs|virtual|ndi)/i;
 
 /** Valores centinela para que Radix Select sea siempre controlado (evita uncontrolled→controlled). */
 const SELECT_NO_EXAM = '__califacil_no_exam__';
@@ -389,24 +391,6 @@ function buildMcDraftFromChunk(
     out[q.id] = source[q.id]?.trim() ?? '';
   }
   return out;
-}
-
-function isVirtualCameraLabel(label: string | undefined): boolean {
-  return Boolean(label && VIRTUAL_CAMERA_RE.test(label));
-}
-
-async function pickPreferredDesktopCameraDeviceId(excludeDeviceId?: string): Promise<string | null> {
-  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return null;
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  const videos = devices.filter((d) => d.kind === 'videoinput');
-  if (videos.length === 0) return null;
-  const filtered = videos.filter((d) => d.deviceId && d.deviceId !== excludeDeviceId);
-  const preferred =
-    filtered.find((d) => !isVirtualCameraLabel(d.label)) ??
-    videos.find((d) => !isVirtualCameraLabel(d.label)) ??
-    filtered[0] ??
-    videos[0];
-  return preferred?.deviceId ?? null;
 }
 
 /**
@@ -911,23 +895,26 @@ export default function CalificarPage() {
 
   const runFastWarpedScan = useCallback(
     async (warped: HTMLCanvasElement, warpAlignment?: WarpAlignmentReport | null) => {
-      // Refine primero: a veces recupera una esquina; luego re-evaluar Acceptable.
-      const docCanvas = prepareCalifacilGradeScanCanvas(warped, omrCols, omrRowCount, {
-        preWarped: true,
-        warpAlignment,
-      });
+      // displayCanvas = carta (UI); scanCanvas = referencia (lectura OMR).
+      const { displayCanvas, scanCanvas } = prepareCalifacilGradeScanCanvases(
+        warped,
+        omrCols,
+        omrRowCount,
+        { preWarped: true, warpAlignment }
+      );
       const acceptable =
-        isMobileLetterGradeCanvasReady(docCanvas) ||
-        isMobileWarpedAnswerSheetAcceptable(warped);
+        isMobileLetterGradeCanvasReady(displayCanvas) ||
+        isMobileWarpedAnswerSheetAcceptable(warped) ||
+        isMobileWarpedAnswerSheetAcceptable(displayCanvas);
       if (!acceptable) {
         const corners = Math.max(
-          countCalifacilCornerMarkers(docCanvas),
+          countCalifacilCornerMarkers(displayCanvas),
           countCalifacilCornerMarkers(warped)
         );
         const strips =
-          hasCalifacilAlignStrips(docCanvas) || hasCalifacilAlignStrips(warped);
+          hasCalifacilAlignStrips(displayCanvas) || hasCalifacilAlignStrips(warped);
         const letterOk =
-          isCalifacilWarpedLetterCanvas(docCanvas) ||
+          isCalifacilWarpedLetterCanvas(displayCanvas) ||
           isCalifacilWarpedLetterCanvas(warped);
         // Evita toast falso si hay franjas + ≥2 esquinas útiles (casi Acceptable).
         const softOk = letterOk && strips && corners >= 2;
@@ -935,21 +922,26 @@ export default function CalificarPage() {
           return {
             meta: null as OmrScanMetaResult | null,
             orangeFrameNorm: null as OmrNormRect | null,
-            docCanvas,
+            docCanvas: scanCanvas,
+            displayCanvas,
             rejectedCorners: true as const,
           };
         }
       }
       const activeRows =
         sheets[sheetIndexRef.current]?.length ?? omrRowCount;
-      const meta = await scanWarpedGradeMobileAsync(docCanvas, omrCols, omrRowCount, {
+      const meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
         activeRows,
       });
-      const orangeFrameNorm =
-        (meta.geometry
-          ? califacilOmrOrangeFrameRect(meta.geometry, omrRowCount)
-          : null) ?? califacilOmrTableFrameNormRect(omrRowCount);
-      return { meta, orangeFrameNorm, docCanvas, rejectedCorners: false as const };
+      // Marco naranja en coords carta (preview), no en canvas de referencia.
+      const orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
+      return {
+        meta,
+        orangeFrameNorm,
+        docCanvas: scanCanvas,
+        displayCanvas,
+        rejectedCorners: false as const,
+      };
     },
     [omrCols, omrRowCount, sheets]
   );
@@ -986,25 +978,38 @@ export default function CalificarPage() {
   const zipGradeSheets = useMemo((): ZipGradeSheetData[] => {
     return mobileSheetSnapshots.map((snap) => {
       const chunk = sheets[snap.sheetIndex] ?? [];
-      const expectedPicks = expectedPicksForChunk(chunk, virtualKeyCorrectIndexByQuestionId);
-      const picks =
+      const expectedPicksRaw = expectedPicksForChunk(chunk, virtualKeyCorrectIndexByQuestionId);
+      const picksRaw =
         snap.columnPicks.length > 0
           ? snap.columnPicks
           : draftSelectionsToColumnPicks(chunk, snap.selectionsByQuestionId);
-      const chunkStats = gradeOmrChunkPicksAgainstVirtualKey(chunk, picks, virtualKeyMaps);
+      const chunkStats = gradeOmrChunkPicksAgainstVirtualKey(chunk, picksRaw, virtualKeyMaps);
+      // Overlay visual: plantilla 30 filas; scoring usa solo el chunk activo.
+      const padToOmr = (arr: (number | null)[]) => {
+        const out = arr.slice(0, omrRowCount);
+        while (out.length < omrRowCount) out.push(null);
+        return out;
+      };
       return {
         previewUrl: snap.previewUrl,
         nameCropUrl: snap.nameCropUrl,
         geometry: snap.geometry,
-        picks,
-        expectedPicks,
-        rowCount: chunk.length,
+        picks: padToOmr(picksRaw),
+        expectedPicks: padToOmr(expectedPicksRaw),
+        rowCount: omrRowCount,
         correct: chunkStats.correct,
         total: chunkStats.total > 0 ? chunkStats.total : chunk.length,
         pct: chunkStats.pct,
       };
     });
-  }, [mobileSheetSnapshots, sheets, virtualKeyMaps, virtualKeyCorrectIndexByQuestionId, mobileResultsDraft]);
+  }, [
+    mobileSheetSnapshots,
+    sheets,
+    virtualKeyMaps,
+    virtualKeyCorrectIndexByQuestionId,
+    mobileResultsDraft,
+    omrRowCount,
+  ]);
 
   const currentZipGradeSheet = zipGradeSheets[resultsSheetIdx] ?? null;
 
@@ -1339,9 +1344,12 @@ export default function CalificarPage() {
 
       let classifiedUploadKind: DesktopUploadKind | undefined;
 
-      if (
+      // PDF renderizado en servidor: ya viene plano y normalizado; no re-clasificar ni pedir visión.
+      if (isServerRenderedPdfPage) {
+        classifiedUploadKind = 'pdf';
+        gradeSkipSheetValidation = true;
+      } else if (
         !gradeReadingOverride &&
-        !isServerRenderedPdfPage &&
         (isDesktopFileUpload || (isMobile && Boolean(fallbackFile)))
       ) {
         const rawCanvas =
@@ -1350,11 +1358,9 @@ export default function CalificarPage() {
             : prepareCalifacilScanInput(source, { useGuideCrop: false });
         if (rawCanvas) {
           await yieldForSpinnerPaint();
-          const uploadClass = isServerRenderedPdfPage
-            ? 'pdf'
-            : classifyDesktopUploadCanvas(rawCanvas, omrCols, {
-                isServerRenderedPdfPage,
-              });
+          const uploadClass = classifyDesktopUploadCanvas(rawCanvas, omrCols, {
+            isServerRenderedPdfPage: false,
+          });
           const flatDocument =
             uploadClass === 'pdf' || uploadClass === 'flatScan';
           const normalized = normalizeCalifacilGradeDocumentCanvas(rawCanvas, omrCols, {
@@ -1375,6 +1381,8 @@ export default function CalificarPage() {
       let desktopUploadKind: DesktopUploadKind | undefined;
       if (classifiedUploadKind) {
         desktopUploadKind = classifiedUploadKind;
+      } else if (isServerRenderedPdfPage) {
+        desktopUploadKind = 'pdf';
       } else if (!isMobile && gradePreWarped) {
         desktopUploadKind = 'warpedPhoto';
       }
@@ -1526,31 +1534,36 @@ export default function CalificarPage() {
       }
 
       if (insufficientForReview) {
-        setDraftSelections({});
-        setLiveDraftSelections(mergedDraft);
-        setLiveResolvedCount(mergedResolved);
-        setLiveStatus(
-          isMobile
-            ? 'Lectura insuficiente: alinea las esquinas negras, mejora la luz y evita sombras.'
-            : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
-        );
-        if (!skipReviewUi) {
-          toast.error(
-            isMobile
-              ? `Lectura insuficiente (${mergedResolved}/${chunk.length}). Vuelve a capturar con mejor encuadre.`
-              : 'La imagen no permite leer bien la tabla. Incluye la hoja completa o el recuadro del pie, con buena luz.'
-          );
-          return { success: false };
-        }
-        // skipReviewUi: no abrir revisión; en móvil cámara se califica con parciales = incorrectas.
-        if (isMobileCamera) {
-          toast.message(
-            `Lectura parcial (${mergedResolved}/${chunk.length}). Las casillas vacías se calificarán como incorrectas.`
-          );
+        // Hoja en blanco (0 lecturas): no abortar; mostrar revisión 0% con burbujas de la clave.
+        if (mergedResolved === 0 || mostlyBlank) {
+          toast.message('Hoja sin respuestas marcadas — calificación 0%.');
         } else {
-          toast.message(
-            `Lectura parcial (${mergedResolved}/${chunk.length}). Revisa las respuestas en el overlay antes de guardar.`
+          setDraftSelections({});
+          setLiveDraftSelections(mergedDraft);
+          setLiveResolvedCount(mergedResolved);
+          setLiveStatus(
+            isMobile
+              ? 'Lectura insuficiente: alinea las esquinas negras, mejora la luz y evita sombras.'
+              : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
           );
+          if (!skipReviewUi) {
+            toast.error(
+              isMobile
+                ? `Lectura insuficiente (${mergedResolved}/${chunk.length}). Vuelve a capturar con mejor encuadre.`
+                : 'La imagen no permite leer bien la tabla. Incluye la hoja completa o el recuadro del pie, con buena luz.'
+            );
+            return { success: false };
+          }
+          // skipReviewUi: no abrir revisión; en móvil cámara se califica con parciales = incorrectas.
+          if (isMobileCamera) {
+            toast.message(
+              `Lectura parcial (${mergedResolved}/${chunk.length}). Las casillas vacías se calificarán como incorrectas.`
+            );
+          } else {
+            toast.message(
+              `Lectura parcial (${mergedResolved}/${chunk.length}). Revisa las respuestas en el overlay antes de guardar.`
+            );
+          }
         }
       } else if (!isMobileCamera && mergedResolved < minResolved) {
         toast.message(
@@ -1622,46 +1635,23 @@ export default function CalificarPage() {
         }
         const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
         const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
+        // Overlay siempre sobre el canvas de preview (carta), plantilla fija 30.
         let geomClone: CalifacilOmrScanGeometry;
-        if (geom) {
+        if (reviewCanvas instanceof HTMLCanvasElement) {
+          geomClone = syncCalifacilOmrGeometryImageSize(
+            buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount),
+            previewW,
+            previewH
+          );
+        } else if (geom) {
           try {
             geomClone = structuredClone(geom);
           } catch {
             geomClone = JSON.parse(JSON.stringify(geom)) as CalifacilOmrScanGeometry;
           }
           geomClone = syncCalifacilOmrGeometryImageSize(geomClone, previewW, previewH);
-          // Re-anclar bubbles al JPEG real si hace falta (mismo docCanvas).
-          if (reviewCanvas instanceof HTMLCanvasElement) {
-            const attached = attachAnswerSheetReviewBubbleOverlay(
-              reviewCanvas,
-              { ...meta, geometry: geomClone },
-              omrCols,
-              chunk.length
-            );
-            if (attached.geometry) {
-              geomClone = syncCalifacilOmrGeometryImageSize(
-                attached.geometry,
-                previewW,
-                previewH
-              );
-            }
-          }
-        } else if (reviewCanvas instanceof HTMLCanvasElement) {
-          // Sin geometry del scan: construir celdas del canvas real y anclar anillos.
-          const base = buildAnswerSheetOmrGeometry(chunk.length, omrCols, previewW, previewH);
-          const attached = attachAnswerSheetReviewBubbleOverlay(
-            reviewCanvas,
-            { ...meta, geometry: base },
-            omrCols,
-            chunk.length
-          );
-          geomClone = syncCalifacilOmrGeometryImageSize(
-            attached.geometry ?? base,
-            previewW,
-            previewH
-          );
         } else {
-          geomClone = buildAnswerSheetOmrGeometry(chunk.length, omrCols, previewW, previewH);
+          geomClone = buildAnswerSheetOmrGeometry(omrRowCount, omrCols, previewW, previewH);
         }
         setMobileSheetSnapshots((prev) => {
           const next = [
@@ -2181,7 +2171,8 @@ export default function CalificarPage() {
   };
 
   const startLiveCamera = useCallback(async (opts?: { skipPhaseGuard?: boolean }): Promise<boolean> => {
-    if (!useLiveCameraUi) return false;
+    // Escritorio: solo PDF/JPG. Nunca pedir permiso de cámara (ni DroidCam / webcams).
+    if (!useLiveCameraUi || !isMobile || isDesktopPointerDevice()) return false;
     if (!examId || !exam || !supportsCalifacil) {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return false;
@@ -2208,41 +2199,27 @@ export default function CalificarPage() {
         startingCameraRef.current = false;
         return false;
       }
-      const attempts: MediaStreamConstraints[] = isMobile
-        ? [
-            {
-              video: {
-                facingMode: { ideal: 'environment' },
-                width: { ideal: 3840 },
-                height: { ideal: 2160 },
-              },
-              audio: false,
-            },
-            {
-              video: {
-                facingMode: { ideal: 'environment' },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-              },
-              audio: false,
-            },
-            { video: { facingMode: { ideal: 'environment' } }, audio: false },
-            { video: { facingMode: 'environment' }, audio: false },
-            { video: true, audio: false },
-          ]
-        : [
-            {
-              video: {
-                facingMode: { ideal: 'environment' },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-              },
-              audio: false,
-            },
-            { video: { facingMode: { ideal: 'environment' } }, audio: false },
-            { video: { facingMode: 'user' }, audio: false },
-            { video: true, audio: false },
-          ];
+      const attempts: MediaStreamConstraints[] = [
+        {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 3840 },
+            height: { ideal: 2160 },
+          },
+          audio: false,
+        },
+        {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        },
+        { video: { facingMode: { ideal: 'environment' } }, audio: false },
+        { video: { facingMode: 'environment' }, audio: false },
+        { video: true, audio: false },
+      ];
       let stream: MediaStream | null = null;
       for (const constraints of attempts) {
         try {
@@ -2256,29 +2233,6 @@ export default function CalificarPage() {
         throw new Error('camera_unavailable');
       }
 
-      if (!isMobile) {
-        const initialTrack = stream.getVideoTracks()[0];
-        const initialLabel = initialTrack?.label ?? '';
-        if (isVirtualCameraLabel(initialLabel)) {
-          const currentId =
-            typeof initialTrack?.getSettings === 'function'
-              ? (initialTrack.getSettings().deviceId ?? undefined)
-              : undefined;
-          const preferredDeviceId = await pickPreferredDesktopCameraDeviceId(currentId);
-          if (preferredDeviceId) {
-            try {
-              const switched = await navigator.mediaDevices.getUserMedia({
-                video: { deviceId: { exact: preferredDeviceId } },
-                audio: false,
-              });
-              stream.getTracks().forEach((t) => t.stop());
-              stream = switched;
-            } catch {
-              // Si falla el cambio, mantenemos el stream ya abierto.
-            }
-          }
-        }
-      }
       streamRef.current = stream;
       resetLiveReadings();
       flushSync(() => {
@@ -2985,20 +2939,17 @@ export default function CalificarPage() {
     flashOn,
     flashSupported,
     isMobile,
-    useLiveCameraUi,
-    stopLiveCamera,
-    updateLiveVideoLayout,
-    isMobile,
     mapRawToDraft,
     omrCols,
     omrRowCount,
     resetLiveReadings,
     setTorchEnabled,
+    sheets,
     showAutoCaptureSnapshot,
     stopLiveCamera,
-    sheets,
     supportsCalifacil,
     updateLiveVideoLayout,
+    useLiveCameraUi,
   ]);
 
   startLiveCameraRef.current = startLiveCamera;
@@ -3049,7 +3000,7 @@ export default function CalificarPage() {
   );
 
   const openMobileCapture = useCallback(() => {
-    if (!useLiveCameraUi) {
+    if (!useLiveCameraUi || isDesktopPointerDevice()) {
       flushSync(() => {
         setPhase('capturar');
         setCameraPermissionPhase('granted');
@@ -3109,7 +3060,7 @@ export default function CalificarPage() {
   ]);
 
   const requestCameraFromGate = useCallback(() => {
-    if (!useLiveCameraUi) return;
+    if (!useLiveCameraUi || isDesktopPointerDevice()) return;
     setCameraPermissionPhase('requesting');
     void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {
       setCameraPermissionPhase(ok ? 'granted' : 'denied');
@@ -3127,17 +3078,11 @@ export default function CalificarPage() {
       return;
     }
     const effectiveDraft = providedDraft ?? draftSelections;
-    for (const q of chunk) {
-      const v = effectiveDraft[q.id]?.trim() ?? '';
-      if (!v) {
-        toast.error(`Falta la respuesta de la pregunta ${questions.findIndex((x) => x.id === q.id) + 1}`);
-        return;
-      }
-    }
+    // Vacío = incorrecto (hoja en blanco → 0%). No exigir marcas para confirmar.
 
     const mergedNow: Record<string, string> = { ...confirmedByQuestionId };
     for (const q of chunk) {
-      mergedNow[q.id] = effectiveDraft[q.id]!;
+      mergedNow[q.id] = effectiveDraft[q.id]?.trim() ?? '';
     }
     setConfirmedByQuestionId(mergedNow);
 
@@ -3148,7 +3093,7 @@ export default function CalificarPage() {
       const cloned = await cloneObjectUrl(previewUrl);
       if (!cloned) return;
       const selections: Record<string, string> = {};
-      for (const q of chunk) selections[q.id] = effectiveDraft[q.id]!.trim();
+      for (const q of chunk) selections[q.id] = (effectiveDraft[q.id] ?? '').trim();
       let geom: CalifacilOmrScanGeometry;
       try {
         geom = structuredClone(reviewOmrGeometry);
@@ -3381,12 +3326,7 @@ export default function CalificarPage() {
   const submitAll = async (merged: Record<string, string>) => {
     if (!exam || !examId) return;
 
-    for (const q of questions) {
-      if (!merged[q.id]?.trim()) {
-        toast.error('Faltan respuestas por confirmar.');
-        return;
-      }
-    }
+    // Vacío = incorrecto (hoja en blanco → 0%). No exigir marcas para guardar.
 
     if (!resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents)) {
       toast.error('Identifica al alumno en la hoja o elígelo manualmente antes de guardar.');
@@ -3597,11 +3537,13 @@ export default function CalificarPage() {
 
       let califacilFastScan: Awaited<ReturnType<typeof runFastWarpedScan>> | null = null;
       let zipPreviewMeta: Pick<OmrScanMetaResult, 'geometry' | 'picks'> | null = null;
-      let docCanvas: HTMLCanvasElement = warped;
+      let scanCanvas: HTMLCanvasElement = warped;
+      let displayCanvas: HTMLCanvasElement = warped;
 
       if (sheetKind === 'califacil') {
         califacilFastScan = await runFastWarpedScan(warped, alignment);
-        docCanvas = califacilFastScan.docCanvas;
+        scanCanvas = califacilFastScan.docCanvas;
+        displayCanvas = califacilFastScan.displayCanvas;
         if (califacilFastScan.rejectedCorners) {
           clearPreview();
           const corners = countCalifacilCornerMarkers(warped);
@@ -3622,7 +3564,8 @@ export default function CalificarPage() {
       } else {
         const zgPreview = scanZipGradeAnswerSheet(warped, omrCols, chunkRows);
         zipPreviewMeta = { picks: zgPreview.picks, geometry: zgPreview.geometry };
-        docCanvas = warped;
+        scanCanvas = warped;
+        displayCanvas = warped;
       }
 
       const hasOmr =
@@ -3659,12 +3602,12 @@ export default function CalificarPage() {
             needsVisionAssist: false,
             maxSameColumnCount: 0,
             geometry: zipPreviewMeta.geometry,
-            reviewSourceCanvas: docCanvas,
+            reviewSourceCanvas: displayCanvas,
             controlNumberDigits: [],
             controlNumber: null,
           },
           chunk,
-          docCanvas,
+          scanCanvas,
           liveLockedAnswersRef.current,
           alignment
         );
@@ -3672,32 +3615,26 @@ export default function CalificarPage() {
         const warpMeta = califacilFastScan.meta;
         // Siempre override tras el pase móvil (strip recovery ya incluido si era débil).
         // Evita segunda pasada de hasta 320 iters en finalizeCapturedSheet.
+        // Picks viven en espacio de lectura; geometry de UI se reconstruye en finalize sobre carta.
         readingOverride = buildCalifacilOmrReadingOverride(
           {
             ...warpMeta,
-            reviewSourceCanvas: warpMeta.reviewSourceCanvas ?? docCanvas,
-            geometry:
-              warpMeta.geometry != null
-                ? syncCalifacilOmrGeometryImageSize(
-                    warpMeta.geometry,
-                    docCanvas.width,
-                    docCanvas.height
-                  )
-                : null,
+            reviewSourceCanvas: displayCanvas,
+            geometry: null,
           },
           chunk,
-          docCanvas,
+          scanCanvas,
           liveLockedAnswersRef.current,
           alignment
         );
       }
 
-      const result = await finalizeCapturedSheet(docCanvas, undefined, {
+      const result = await finalizeCapturedSheet(scanCanvas, undefined, {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        displaySource: docCanvas,
+        displaySource: displayCanvas,
         readingOverride,
       });
       if (result.success) {
@@ -3813,7 +3750,7 @@ export default function CalificarPage() {
         if (scanGen !== reviewScanGenRef.current) return;
         const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
         applyControlNumberFromRead(controlRead, { silent: true });
-        const { meta, orangeFrameNorm, docCanvas, rejectedCorners } = await runFastWarpedScan(
+        const { meta, orangeFrameNorm, displayCanvas, rejectedCorners } = await runFastWarpedScan(
           warped,
           alignment
         );
@@ -3824,17 +3761,9 @@ export default function CalificarPage() {
           return;
         }
         const mapped = mapRawToDraft([...meta.picks], chunk);
-        if (!meta.geometry) {
-          setReviewStatus('No se alineó la tabla. Usa Ajustar y corrige las esquinas.');
-          toast.error('No se alineó la tabla. Usa Ajustar y corrige las esquinas.');
-          return;
-        }
-        const geometry = syncCalifacilOmrGeometryImageSize(
-          meta.geometry,
-          docCanvas.width,
-          docCanvas.height
-        );
-        const previewUrl = canvasPreviewDataUrl(docCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? '';
+        const geometry = buildLetterDisplayOverlayGeometry(displayCanvas, omrCols, omrRowCount);
+        const previewUrl =
+          canvasPreviewDataUrl(displayCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ?? '';
         setMobileReviewAlign({
           warped,
           alignment,
@@ -3857,6 +3786,7 @@ export default function CalificarPage() {
       applyControlNumberFromRead,
       examVirtualKeyByQuestionId,
       mapRawToDraft,
+      omrCols,
       omrRowCount,
       questions,
       runFastWarpedScan,
@@ -3877,7 +3807,7 @@ export default function CalificarPage() {
       setReviewStatus('Actualizando lectura…');
       try {
         if (scanGen !== reviewScanGenRef.current) return;
-        const { meta, orangeFrameNorm, docCanvas, rejectedCorners } = await runFastWarpedScan(
+        const { meta, orangeFrameNorm, displayCanvas, rejectedCorners } = await runFastWarpedScan(
           mobileReviewAlign.warped,
           mobileReviewAlign.alignment
         );
@@ -3887,17 +3817,9 @@ export default function CalificarPage() {
           return;
         }
         const mapped = mapRawToDraft([...meta.picks], chunk);
-        if (!meta.geometry) {
-          setReviewStatus('No se pudo leer con ese marco. Ajusta las esquinas.');
-          return;
-        }
-        const geometry = syncCalifacilOmrGeometryImageSize(
-          meta.geometry,
-          docCanvas.width,
-          docCanvas.height
-        );
+        const geometry = buildLetterDisplayOverlayGeometry(displayCanvas, omrCols, omrRowCount);
         const previewUrl =
-          canvasPreviewDataUrl(docCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ??
+          canvasPreviewDataUrl(displayCanvas, 2200, MOBILE_PREVIEW_JPEG_QUALITY) ??
           mobileReviewAlign.previewUrl;
         setMobileReviewAlign({
           ...mobileReviewAlign,
@@ -3916,7 +3838,7 @@ export default function CalificarPage() {
         if (scanGen === reviewScanGenRef.current) setReviewScanning(false);
       }
     },
-    [mapRawToDraft, mobileReviewAlign, runFastWarpedScan, sheets]
+    [mapRawToDraft, mobileReviewAlign, omrCols, omrRowCount, runFastWarpedScan, sheets]
   );
 
   const finalizeMobileReviewGrade = useCallback(async () => {
@@ -3930,7 +3852,7 @@ export default function CalificarPage() {
         setReviewStatus('No hay preguntas en esta hoja.');
         return;
       }
-      const { meta, docCanvas, rejectedCorners } = await runFastWarpedScan(
+      const { meta, docCanvas, displayCanvas, rejectedCorners } = await runFastWarpedScan(
         mobileReviewAlign.warped,
         mobileReviewAlign.alignment
       );
@@ -3942,15 +3864,8 @@ export default function CalificarPage() {
       const readingOverride = buildCalifacilOmrReadingOverride(
         {
           ...meta,
-          reviewSourceCanvas: docCanvas,
-          geometry:
-            meta.geometry != null
-              ? syncCalifacilOmrGeometryImageSize(
-                  meta.geometry,
-                  docCanvas.width,
-                  docCanvas.height
-                )
-              : null,
+          reviewSourceCanvas: displayCanvas,
+          geometry: null,
         },
         chunk,
         docCanvas,
@@ -3962,7 +3877,7 @@ export default function CalificarPage() {
         warpAlignment: mobileReviewAlign.alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        displaySource: docCanvas,
+        displaySource: displayCanvas,
         readingOverride,
       });
       if (result.success) {
@@ -4428,7 +4343,7 @@ export default function CalificarPage() {
           <input
             ref={galleryInputRef}
             type="file"
-            accept="image/*"
+            accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
             className="sr-only"
             aria-hidden
             onChange={handleGalleryFile}

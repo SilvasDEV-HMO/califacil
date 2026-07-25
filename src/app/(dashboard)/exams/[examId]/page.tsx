@@ -43,7 +43,6 @@ import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { supabase } from '@/lib/supabase';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { examMaxScore } from '@/lib/utils';
-import { isGradableMultipleChoiceQuestion } from '@/lib/printExam';
 import { VoidedAttemptsPanel } from '@/components/voided-attempts-panel';
 import { QuestionIllustration } from '@/components/question-illustration';
 
@@ -163,8 +162,6 @@ export default function ExamDetailPage() {
   const [titleDraft, setTitleDraft] = useState('');
   const [savingTitle, setSavingTitle] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
-  const [omrKeyDraft, setOmrKeyDraft] = useState('ABBCABBBBAADCDBBCABCACABACBCDB');
-  const [applyingOmrKey, setApplyingOmrKey] = useState(false);
   const newQuestionOptions = normalizeOptions(newQuestion.optionsText);
 
   useEffect(() => {
@@ -413,42 +410,6 @@ export default function ExamDetailPage() {
       }
     } catch {
       toast.error('Error al reabrir el examen');
-    }
-  };
-
-  const handleApplyOmrKey = async () => {
-    const key = omrKeyDraft.trim().toUpperCase();
-    if (!/^[ABCD]+$/.test(key)) {
-      toast.error('La clave solo puede contener las letras A, B, C o D.');
-      return;
-    }
-    setApplyingOmrKey(true);
-    try {
-      const response = await fetch(`/api/exams/${examId}/apply-omr-key`, {
-        method: 'POST',
-        headers: await dashboardAuthJsonHeaders(),
-        credentials: 'include',
-        body: JSON.stringify({ key }),
-      });
-      const body = (await response.json().catch(() => ({}))) as {
-        error?: string;
-        message?: string;
-        updated?: number;
-      };
-      if (!response.ok) {
-        toast.error(body.error ?? body.message ?? 'No se pudo aplicar la clave OMR');
-        return;
-      }
-      await refreshExam();
-      toast.success(
-        body.updated && body.updated > 0
-          ? `Clave OMR aplicada (${body.updated} pregunta(s) actualizadas)`
-          : 'La clave OMR ya coincidía con el examen'
-      );
-    } catch {
-      toast.error('Error al aplicar la clave OMR');
-    } finally {
-      setApplyingOmrKey(false);
     }
   };
 
@@ -715,38 +676,6 @@ export default function ExamDetailPage() {
             <p className="text-sm font-medium text-gray-700">
               Total del examen: {examMaxScore(exam.questions)} puntos
             </p>
-          )}
-          {exam.questions.filter(isGradableMultipleChoiceQuestion).length >= 10 && (
-            <Card className="border-orange-200 bg-orange-50/40">
-              <CardContent className="space-y-3 p-4">
-                <p className="text-sm font-medium text-gray-800">Clave OMR (columnas A–D)</p>
-                <p className="text-xs text-gray-600">
-                  Una letra por pregunta de opción múltiple, en el mismo orden que aparecen abajo.
-                </p>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <Input
-                    value={omrKeyDraft}
-                    onChange={(e) => setOmrKeyDraft(e.target.value.toUpperCase())}
-                    className="font-mono text-sm"
-                    spellCheck={false}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="shrink-0 border-orange-300"
-                    disabled={applyingOmrKey}
-                    onClick={() => void handleApplyOmrKey()}
-                  >
-                    {applyingOmrKey ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Check className="mr-2 h-4 w-4" />
-                    )}
-                    Aplicar clave
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
           )}
           {exam.questions.map((question, index) => (
             <QuestionCard

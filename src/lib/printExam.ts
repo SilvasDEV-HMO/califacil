@@ -1553,7 +1553,10 @@ export function getControlNumberBlockPageRatios(
   };
 }
 
-/** Recorte normalizado de la línea «Nombre del alumno» en hoja warp 850×1100. */
+/**
+ * Recorte normalizado de la línea «Nombre del alumno» en hoja warp 850×1100.
+ * Misma geometría que `.sheet-header--omr` + `.omr-sheet-meta-row` del HTML impreso.
+ */
 export function getAnswerSheetNameFieldPageRatios(): {
   left: number;
   top: number;
@@ -1565,18 +1568,23 @@ export function getAnswerSheetNameFieldPageRatios(): {
   const { cornerSizePt, cornerGapPt, alignStripWidthPt } = ANSWER_SHEET_LAYOUT;
   const bodyInsetPx = ptToWarpPx(cornerSizePt + cornerGapPt);
   const sideMarginPx = bodyInsetPx + ptToWarpPx(alignStripWidthPt) + ptToWarpPx(cornerGapPt);
-  const headerPx = ptToWarpPx(8.5 * 1.1 + 7 + 1 + 2 + 2 + 0.75);
-  const metaRowTopPx = bodyInsetPx + headerPx;
-  const nameLabelPx = ptToWarpPx(54);
-  const fieldGapPx = ptToWarpPx(3);
-  const lineHPx = ptToWarpPx(15);
+  // Solo cabecera (sin meta): el nombre vive en la fila meta debajo del header.
+  const headerPt = 8.5 * 1.1 + 7 + 1 + 2 + 2 + 0.75;
+  const metaRowTopPx = bodyInsetPx + ptToWarpPx(headerPt);
   const contentW = pageW - 2 * sideMarginPx;
-  const fieldW = contentW * 0.54;
+  const metaGapPx = ptToWarpPx(10);
+  const shortFieldW = contentW * 0.22;
+  const nameFieldOuterW = Math.max(1, contentW - 2 * shortFieldW - 2 * metaGapPx);
+  const nameLabelPx = ptToWarpPx(52);
+  const fieldGapPx = ptToWarpPx(3);
+  // min-height 7pt + borde + margen extra para UI legible
+  const lineHPx = ptToWarpPx(12);
+  const lineW = Math.max(1, nameFieldOuterW - nameLabelPx - fieldGapPx);
 
   return {
     left: (sideMarginPx + nameLabelPx + fieldGapPx) / pageW,
     top: metaRowTopPx / pageH,
-    width: fieldW / pageW,
+    width: lineW / pageW,
     height: lineHPx / pageH,
   };
 }

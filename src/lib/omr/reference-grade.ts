@@ -99,6 +99,12 @@ export function alignCanvasToReferenceGrade(
     return scaleCanvasToMaxSide(canvas, REFERENCE_GRADE_MAX_SIDE);
   }
 
+  // Evita estirar media hoja (p. ej. solo filas 15–30) sobre el canvas de referencia.
+  const expectedFrame = califacilOmrTableFrameNormRect(rowCount) ?? dstFrame;
+  if (srcFrame.h < expectedFrame.h * 0.7 || srcFrame.w < expectedFrame.w * 0.7) {
+    return null;
+  }
+
   if (isReferenceGradeCanvasAnchor(canvas.width, canvas.height)) {
     return canvas;
   }

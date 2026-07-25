@@ -45,8 +45,8 @@ export function isWeakMobileOmrMeta(
 ): boolean {
   const scored = Math.max(1, Math.min(rows, activeRows));
   const resolved = countResolvedPicks(meta, scored);
+  if (isAnswerSheetOmrMostlyBlank(meta, scored)) return true;
   if (resolved < Math.ceil(scored * 0.4)) return true;
-  if (isAnswerSheetOmrMostlyBlank(meta, scored) && resolved < 3) return true;
   if (meta.maxSameColumnCount > Math.max(4, Math.round(scored * 0.4))) return true;
   return false;
 }
@@ -144,7 +144,29 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
   rows: number
 ): Promise<OmrScanMetaResult> {
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
+  // Ceder un frame para que «Leyendo…» pinte antes del CPU pesado.
+  await new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+
   if (isUnifiedOmrEngineEnabled()) {
+    // Pase rápido: si la hoja está en blanco, no hacer 320 iters (UI trabada).
+    const fast = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+      fastMode: true,
+      maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
+      stagnantLimit: MOBILE_FAST_STAGNANT,
+    });
+    let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(fast), rows, columns);
+    meta = sanitizeAnswerSheetOmrMeta(meta, rows);
+    if (isAnswerSheetOmrMostlyBlank(meta, rows)) {
+      return meta;
+    }
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
       fastMode: false,
       maxOptimizeIterations: 320,

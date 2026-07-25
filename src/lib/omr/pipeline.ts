@@ -363,39 +363,58 @@ export function normalizeCalifacilGradeDocumentCanvas(
   return finish(base, null, false);
 }
 
+export type CalifacilGradeScanCanvases = {
+  /** Carta warpeada (cabecera + nombre + tabla) para preview, crop de nombre y bolitas. */
+  displayCanvas: HTMLCanvasElement;
+  /** Canvas de lectura OMR (referencia 30×4 si aplica). */
+  scanCanvas: HTMLCanvasElement;
+};
+
+type PrepareGradeScanOpts = {
+  preWarped?: boolean;
+  warpAlignment?: WarpAlignmentReport | null;
+  /**
+   * Solo preview/debug: crop impresión sin alineación a referencia 30×4.
+   */
+  skipReferenceAlign?: boolean;
+};
+
+/**
+ * Separa presentación (carta) vs lectura (referencia).
+ * El UI nunca debe usar scanCanvas para nombre/bolitas: ratios carta ≠ referencia.
+ */
+export function prepareCalifacilGradeScanCanvases(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount: number,
+  opts?: PrepareGradeScanOpts
+): CalifacilGradeScanCanvases {
+  const displayCanvas =
+    opts?.preWarped || opts?.skipReferenceAlign
+      ? prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas
+      : canvas;
+  if (opts?.skipReferenceAlign) {
+    return { displayCanvas, scanCanvas: displayCanvas };
+  }
+  const scanCanvas = prepareReferenceGradeCanvas(displayCanvas, columns, rowCount);
+  return { displayCanvas, scanCanvas };
+}
+
 /**
  * Prepara cualquier captura (cámara, galería, PDF, escaneo) al mismo espacio de referencia
  * antes de leer burbujas OMR.
  *
  * Móvil preWarped: carta 850×1100 refinada + recorte a marco de impresión (sin crop a bbox
  * de bolitas: así todas las capturas quedan orientadas igual, 4 esquinas fijas).
+ * Preferir `prepareCalifacilGradeScanCanvases` cuando también se necesita el canvas carta.
  */
 export function prepareCalifacilGradeScanCanvas(
   canvas: HTMLCanvasElement,
   columns: number,
   rowCount: number,
-  opts?: {
-    preWarped?: boolean;
-    warpAlignment?: WarpAlignmentReport | null;
-    /**
-     * Solo preview/debug: crop impresión sin alineación a referencia 30×4.
-     */
-    skipReferenceAlign?: boolean;
-  }
+  opts?: PrepareGradeScanOpts
 ): HTMLCanvasElement {
-  if (opts?.skipReferenceAlign) {
-    return (
-      prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas
-    );
-  }
-  let out = canvas;
-  if (opts?.preWarped) {
-    // Refine fiduciales fast + crop marco impresión (sin deskew lento ni crop a bolitas).
-    out =
-      prepareMobileScannedDocumentCanvasFast(out, { skipPrintCrop: false }) ?? out;
-  }
-  // Bonus 30×4: homografía a canvas de referencia desktop.
-  return prepareReferenceGradeCanvas(out, columns, rowCount);
+  return prepareCalifacilGradeScanCanvases(canvas, columns, rowCount, opts).scanCanvas;
 }
 
 /**

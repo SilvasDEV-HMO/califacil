@@ -96,12 +96,12 @@ export const CALIFACIL_OMR_SCAN = {
 
 /** Umbrales absolutos para hoja de respuestas: nunca elegir la columna «menos blanca». */
 const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
-  minInkFraction: 0.24,
-  minInkGap: 0.075,
-  minFillDarkness: 0.12,
-  minScoreAbsolute: 0.032,
-  minScoreGap: 0.035,
-  blankMaxInk: 0.11,
+  minInkFraction: 0.28,
+  minInkGap: 0.08,
+  minFillDarkness: 0.14,
+  minScoreAbsolute: 0.04,
+  minScoreGap: 0.04,
+  blankMaxInk: 0.095,
 } as const;
 
 /**
@@ -4420,7 +4420,8 @@ export function attachAnswerSheetReviewBubbleOverlay(
   canvas: HTMLCanvasElement,
   meta: OmrScanMetaResult,
   columns: number,
-  rowCount: number
+  rowCount: number,
+  opts?: { forceRebuild?: boolean; maxShiftRatio?: number }
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
   if (!meta.geometry) return meta;
@@ -4429,15 +4430,47 @@ export function attachAnswerSheetReviewBubbleOverlay(
     canvas.width,
     canvas.height
   );
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const maxShiftRatio = opts?.maxShiftRatio ?? 0.35;
 
-  // Si el engine ya dejó bubbles sanos (mismo canvas), no regenerar.
+  const bubblesAlignedWithCells = (
+    g: CalifacilOmrScanGeometry
+  ): boolean => {
+    if (!g.bubbles || g.bubbles.length < rows) return false;
+    let checked = 0;
+    let ok = 0;
+    for (let r = 0; r < rows; r++) {
+      const rowCells = g.cells[r];
+      const rowBubbles = g.bubbles[r];
+      if (!rowCells?.length || !rowBubbles?.length) continue;
+      for (let c = 0; c < cols; c++) {
+        const cell = rowCells[c];
+        const b = rowBubbles[c];
+        if (!cell || !b || !isSaneReviewBubbleR(b.r)) continue;
+        checked++;
+        const padX = cell.w * 0.55;
+        const padY = cell.h * 0.55;
+        if (
+          b.cx >= cell.x - padX &&
+          b.cx <= cell.x + cell.w + padX &&
+          b.cy >= cell.y - padY &&
+          b.cy <= cell.y + cell.h + padY
+        ) {
+          ok++;
+        }
+      }
+    }
+    return checked > 0 && ok >= Math.ceil(checked * 0.85);
+  };
+
+  // Si el engine ya dejó bubbles sanos Y alineados a celdas (mismo canvas), no regenerar.
   const hasSaneBubbles =
     !!geom.bubbles &&
     geom.bubbles.length >= rows &&
     geom.bubbles.some((row) =>
       row?.some((b) => Number.isFinite(b.r) && b.r > 0.002 && b.r < 0.06)
     );
-  if (hasSaneBubbles) {
+  if (!opts?.forceRebuild && hasSaneBubbles && bubblesAlignedWithCells(geom)) {
     return { ...meta, geometry: geom };
   }
 
@@ -4446,13 +4479,10 @@ export function attachAnswerSheetReviewBubbleOverlay(
 
   const W = canvas.width;
   const H = canvas.height;
-  const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  // Sin omrGeometryMatchesPicks: regenerar solo centros visuales sobre celdas actuales.
-  const outputGeom = geom;
   const bubbles: CalifacilOmrBubbleSample[][] = [];
 
   for (let r = 0; r < rows; r++) {
-    const rowCells = outputGeom.cells[r];
+    const rowCells = geom.cells[r];
     const rowBubbles: CalifacilOmrBubbleSample[] = [];
     if (!rowCells?.length) {
       bubbles.push(rowBubbles);
@@ -4462,7 +4492,15 @@ export function attachAnswerSheetReviewBubbleOverlay(
       const cell = rowCells[c];
       if (!cell) continue;
       // Anclar a anillos impresos (nunca preferInk en review).
-      const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk: false });
+      const raw = refineBubbleCenterInCell(data, W, H, cell, { preferInk: false });
+      const cx0 = (cell.x + cell.w * 0.5) * W;
+      const cy0 = (cell.y + cell.h * 0.5) * H;
+      const maxDx = cell.w * W * maxShiftRatio;
+      const maxDy = cell.h * H * maxShiftRatio;
+      const center = {
+        x: Math.max(cx0 - maxDx, Math.min(cx0 + maxDx, raw.x)),
+        y: Math.max(cy0 - maxDy, Math.min(cy0 + maxDy, raw.y)),
+      };
       const cellW = Math.max(1, cell.w * W);
       const cellH = Math.max(1, cell.h * H);
       const rPx = Math.max(3, Math.min(cellW, cellH) * 0.38);
@@ -4484,10 +4522,49 @@ export function attachAnswerSheetReviewBubbleOverlay(
   return {
     ...meta,
     geometry: {
-      ...outputGeom,
+      ...geom,
       bubbles,
     },
   };
+}
+
+function isSaneReviewBubbleR(r: number): boolean {
+  return Number.isFinite(r) && r > 0.002 && r < 0.06;
+}
+
+/**
+ * Geometría de overlay para preview carta: plantilla fija 30 + anclas de anillo.
+ * No reutiliza bubbles del canvas de referencia.
+ */
+export function buildLetterDisplayOverlayGeometry(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount: number = CALIFACIL_OMR_DEFAULT_ROWS
+): CalifacilOmrScanGeometry {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const base = buildAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height);
+  const attached = attachAnswerSheetReviewBubbleOverlay(
+    canvas,
+    {
+      picks: Array(rows).fill(null),
+      rows: Array.from({ length: rows }, () => ({
+        pick: null,
+        ambiguous: false,
+        inkFractions: [] as number[],
+      })),
+      needsVisionAssist: false,
+      maxSameColumnCount: 0,
+      geometry: base,
+      reviewSourceCanvas: canvas,
+      controlNumberDigits: [],
+      controlNumber: null,
+    },
+    cols,
+    rows,
+    { forceRebuild: true, maxShiftRatio: 0.35 }
+  );
+  return attached.geometry ?? base;
 }
 
 /** Centra celdas en burbujas impresas y relee picks con la geometría ajustada. */
@@ -6901,6 +6978,12 @@ export function cropAnswerSheetNameSnippetDataUrl(
   if (typeof document === 'undefined' || canvas.width < 40 || canvas.height < 40) {
     return null;
   }
+  // Ratios carta 850×1100: no recortar canvas de referencia / tabla-only.
+  const aspect = canvas.width / Math.max(1, canvas.height);
+  const letterAspect = CALIFACIL_WARP_PAGE.widthPx / CALIFACIL_WARP_PAGE.heightPx;
+  if (!isCalifacilWarpedLetterCanvas(canvas) && Math.abs(aspect - letterAspect) > 0.08) {
+    return null;
+  }
   const bounds = getAnswerSheetNameFieldPageRatios();
   const W = canvas.width;
   const H = canvas.height;
@@ -8335,8 +8418,11 @@ export function isAnswerSheetOmrMostlyBlank(
 ): boolean {
   const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
   if (rows <= 0) return true;
+  const resolved = meta.picks.slice(0, rows).filter((p) => p != null).length;
   const marked = countAnswerSheetMarkedRows(meta, rows);
   const markedCap = Math.max(1, Math.ceil(rows * 0.15));
+  // Sin ninguna lectura OMR y poca tinta "marcada": hoja en blanco (anillos impresos no cuentan).
+  if (resolved === 0 && marked <= markedCap) return true;
   if (marked > markedCap) return false;
 
   // Mediana de maxInk por fila: hoja vacía / ruido debe quedar bajo blankMaxInk.
@@ -8357,10 +8443,9 @@ export function sanitizeAnswerSheetOmrMeta(
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
   const blankInk = CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.2;
-  const resolved = meta.picks.slice(0, rows).filter((p) => p != null).length;
 
-  // No borrar lecturas útiles (≥3 filas) por blank-check agresivo.
-  if (isAnswerSheetOmrMostlyBlank(meta, rows) && resolved < 3) {
+  // Hoja mostly-blank: siempre 0 picks (nunca conservar 3 falsos → 3/30).
+  if (isAnswerSheetOmrMostlyBlank(meta, rows)) {
     return {
       ...meta,
       picks: Array(rows).fill(null),
@@ -9554,14 +9639,19 @@ async function runDesktopGradeScanTiersAsync(
   const tiers: OmrTierCandidate[] = [];
 
   await yieldOmrScanThread();
+  const tier1 = scanCalifacilOmrSheetWithMeta(scanCanvas, columns, {
+    ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
+    answerSheetTemplateOnly: true,
+    rowCount: rows,
+  });
   tiers.push({
-    meta: scanCalifacilOmrSheetWithMeta(scanCanvas, columns, {
-      ...CALIFACIL_DESKTOP_GRADE_SCAN_OPTS,
-      answerSheetTemplateOnly: true,
-      rowCount: rows,
-    }),
+    meta: tier1,
     tierPriority: 100,
   });
+  // Hoja en blanco: no gastar tiers pesados (evita UI trabada en PDF vacío).
+  if (isAnswerSheetOmrMostlyBlank(tier1, rows)) {
+    return sanitizeAnswerSheetOmrMeta(tier1, rows);
+  }
 
   await yieldOmrScanThread();
   tiers.push({

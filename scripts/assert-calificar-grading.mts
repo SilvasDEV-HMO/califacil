@@ -13,6 +13,10 @@ import {
 } from '../src/lib/calificarGrading.ts';
 import { buildCalifacilVirtualKey, CALIFACIL_PRINT_MAX_QUESTIONS } from '../src/lib/printExam.ts';
 import { isMultipleChoiceAnswerCorrect, resolveOptionIndexFromValue } from '../src/lib/utils.ts';
+import {
+  isAnswerSheetOmrMostlyBlank,
+  sanitizeAnswerSheetOmrMeta,
+} from '../src/lib/omrScan.ts';
 import type { Question } from '../src/types';
 
 function assert(cond: boolean, msg: string) {
@@ -104,6 +108,51 @@ const blankPicks = Array.from({ length: 30 }, () => null);
 const blankStats = gradeOmrChunkPicksAgainstVirtualKey(chunk10, blankPicks, key);
 assert(blankStats.correct === 0 && blankStats.total === 10 && blankStats.pct === 0, 'blank 0/10');
 
+// --- 30 preguntas en blanco → 0/30 ---
+const chunk30 = Array.from({ length: 30 }, (_, i) =>
+  mkMc(`q30_${i}`, opts4, opts4[i % 4]!, 1, i)
+);
+const key30 = buildVirtualKeyMaps(buildCalifacilVirtualKey(chunk30).rows);
+const blank30 = gradeOmrChunkPicksAgainstVirtualKey(
+  chunk30,
+  Array.from({ length: 30 }, () => null),
+  key30
+);
+assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blank 0/30');
+
+// --- 3 picks falsos en hoja mostly-blank deben sanitizarse a 0 (no 3/30) ---
+{
+  const rows = 30;
+  const picks: (number | null)[] = Array.from({ length: rows }, () => null);
+  picks[0] = 0;
+  picks[1] = 1;
+  picks[2] = 2;
+  const rowMetas = Array.from({ length: rows }, (_, i) => ({
+    pick: picks[i],
+    ambiguous: false,
+    inkFractions:
+      picks[i] != null
+        ? [0.08, 0.05, 0.04, 0.04]
+        : [0.04, 0.03, 0.03, 0.03],
+  }));
+  const meta = {
+    picks,
+    rows: rowMetas,
+    needsVisionAssist: false,
+    maxSameColumnCount: 3,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  assert(isAnswerSheetOmrMostlyBlank(meta, rows), 'meta debe ser mostly-blank');
+  const cleaned = sanitizeAnswerSheetOmrMeta(meta, rows);
+  const resolved = cleaned.picks.filter((p) => p != null).length;
+  assert(resolved === 0, `sanitize blank+3falsos → 0 picks, got ${resolved}`);
+  const after = gradeOmrChunkPicksAgainstVirtualKey(chunk30, cleaned.picks, key30);
+  assert(after.correct === 0 && after.pct === 0, 'tras sanitize grade 0/30');
+}
+
 // --- 1 error, puntos iguales ---
 const oneWrong = [...perfectPicks];
 oneWrong[0] = (oneWrong[0]! + 1) % 4;
@@ -148,4 +197,4 @@ for (let i = 0; i < mixed.length; i++) {
 assert(persistCorrect === draftStats.correct, 'persist correct count');
 assert(persistEarned === 2, `persist earned=${persistEarned}`);
 
-console.log('ok: calificar grading (paridad, 100%, blank, filler, puntos, muted)');
+console.log('ok: calificar grading (paridad, 100%, blank 0/30, sanitize 3falsos, filler, puntos, muted)');

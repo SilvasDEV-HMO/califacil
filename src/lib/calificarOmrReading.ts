@@ -265,6 +265,18 @@ export async function runCalifacilOmrReadingPipeline(
   const minResolved = Math.max(1, Math.ceil(chunk.length * CALIFACIL_MIN_AUTO_READ_RATIO));
   let mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
 
+  // PDF/escaneo plano sin ninguna lectura: tratar como hoja en blanco (0%), sin visión.
+  if (
+    !mostlyBlank &&
+    mapped.resolvedCount === 0 &&
+    (uploadKind === 'pdf' ||
+      uploadKind === 'flatDocument' ||
+      uploadKind === 'flatScan' ||
+      Boolean(fallbackFile && !isMobileCamera))
+  ) {
+    mostlyBlank = true;
+  }
+
   if (mostlyBlank) {
     raw = raw.map(() => null);
     mapped = mapRawToDraftDetailed(raw, chunk);
@@ -371,6 +383,7 @@ export async function runCalifacilOmrReadingPipeline(
 
   if (
     !mostlyBlank &&
+    mapped.resolvedCount > 0 &&
     !isMobileCamera &&
     !isMobile &&
     examId &&
@@ -647,10 +660,8 @@ export function buildCalifacilOmrReadingOverride(
   liveLockedAnswers: Record<string, string>,
   warpAlignment: WarpAlignmentReport | null = null
 ): CalifacilOmrReadingResult {
-  const resolvedBefore = meta.picks.slice(0, chunk.length).filter((p) => p != null).length;
-  // Clave del examen se aplica después; aquí solo no borrar lecturas útiles.
-  const mostlyBlank =
-    isAnswerSheetOmrMostlyBlank(meta, chunk.length) && resolvedBefore < 3;
+  // Hoja mostly-blank → siempre 0 picks (sin gate de «≥3 lecturas útiles»).
+  const mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
   const sanitized = mostlyBlank
     ? {
         ...meta,
