@@ -32,9 +32,6 @@ const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 /** Presupuesto móvil / desktop fast: ~70 iters. */
 const MOBILE_FAST_OPTIMIZE_ITERS = 70;
 const MOBILE_FAST_STAGNANT = 10;
-/** Segundo pase desktop solo si fast fue débil (antes 140 / 320). */
-const DESKTOP_WEAK_OPTIMIZE_ITERS = 80;
-const DESKTOP_WEAK_STAGNANT = 12;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
   return downscaleCanvasForOmrScan(canvas, maxSide) ?? canvas;
@@ -154,7 +151,9 @@ function finalizeUnifiedDisplayMeta(
 
 /**
  * Elige entre pase unified y strip recovery.
- * Preferir hoja mostly-blank sobre un strip que inventa picks (evita 1/30 en vacío).
+ * Si un pase es blank y el otro tiene muchos picks/tinta fuerte, preferir el no-blank
+ * (hojas llenas con geometría mediocre). Si ambos son sparse/débiles, preferir blank
+ * para no inventar 1/30 en hoja vacía.
  */
 export function pickBetterOmrMeta(
   a: OmrScanMetaResult,
@@ -163,7 +162,13 @@ export function pickBetterOmrMeta(
 ): OmrScanMetaResult {
   const blankA = isAnswerSheetOmrMostlyBlank(a, rows);
   const blankB = isAnswerSheetOmrMostlyBlank(b, rows);
-  if (blankA !== blankB) return blankA ? a : b;
+  if (blankA !== blankB) {
+    const nonBlank = blankA ? b : a;
+    const resolved = countResolvedPicks(nonBlank, rows);
+    const strongFilled = resolved >= Math.ceil(rows * 0.4);
+    if (strongFilled) return nonBlank;
+    return blankA ? a : b;
+  }
 
   const ra = countResolvedPicks(a, rows);
   const rb = countResolvedPicks(b, rows);
@@ -175,34 +180,28 @@ export function pickBetterOmrMeta(
 }
 
 /**
- * Preview móvil: mismo canvas/geometría que la lectura cuando hay ancla de referencia
- * (paridad desktop). Si no, carta + plantilla letter.
+ * Preview móvil: siempre carta (`displayCanvas`) + geometría letter para bolitas/nombre.
+ * La lectura OMR sigue en `scanCanvas`; no pintar UI sobre ancla de referencia por tamaño.
  */
 export function resolveMobileGradeDisplay(
   displayCanvas: HTMLCanvasElement,
-  scanCanvas: HTMLCanvasElement,
+  _scanCanvas: HTMLCanvasElement,
   columns: number,
   rowCount: number,
   meta?: OmrScanMetaResult | null
 ): { previewCanvas: HTMLCanvasElement; geometry: CalifacilOmrScanGeometry } {
-  if (isReferenceGradeCanvasAnchor(scanCanvas.width, scanCanvas.height)) {
-    const fromMeta =
-      meta?.geometry?.bubbles && meta.geometry.bubbles.length >= Math.min(30, rowCount)
-        ? syncCalifacilOmrGeometryImageSize(
-            meta.geometry,
-            scanCanvas.width,
-            scanCanvas.height
-          )
-        : null;
-    const desktop =
-      fromMeta ?? buildDesktopDisplayOverlayGeometry(scanCanvas, columns, rowCount);
-    if (desktop) {
-      return { previewCanvas: scanCanvas, geometry: desktop };
-    }
-  }
+  const fromMeta =
+    meta?.geometry?.bubbles && meta.geometry.bubbles.length >= Math.min(30, rowCount)
+      ? syncCalifacilOmrGeometryImageSize(
+          meta.geometry,
+          displayCanvas.width,
+          displayCanvas.height
+        )
+      : null;
   return {
     previewCanvas: displayCanvas,
-    geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount),
+    geometry:
+      fromMeta ?? buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount),
   };
 }
 
@@ -213,22 +212,21 @@ export function scanDesktopGradeUnifiedOrLegacy(
 ): OmrScanMetaResult {
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
   if (isUnifiedOmrEngineEnabled()) {
-    const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+    const fast = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
       fastMode: true,
       maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
       stagnantLimit: MOBILE_FAST_STAGNANT,
     });
-    let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+    let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(fast), rows, columns);
     meta = sanitizeAnswerSheetOmrMeta(meta, rows);
     if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
       return meta;
     }
-    const full = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
-      fastMode: false,
-      maxOptimizeIterations: DESKTOP_WEAK_OPTIMIZE_ITERS,
-      stagnantLimit: DESKTOP_WEAK_STAGNANT,
-    });
-    return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(full), rows, columns);
+    // Recovery barato: strip fast (nunca fastMode:false → tiers desktop eternos).
+    const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
+    let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
+    stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
+    return pickBetterOmrMeta(meta, stripMeta, rows);
   }
   return scanCalifacilDesktopGradeDocument(displayCanvas, columns, rows);
 }
@@ -260,12 +258,11 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
     }
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
-      fastMode: false,
-      maxOptimizeIterations: DESKTOP_WEAK_OPTIMIZE_ITERS,
-      stagnantLimit: DESKTOP_WEAK_STAGNANT,
-    });
-    return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+    // Nunca fastMode:false aquí: dispara runDesktopGradeScanTiers y congela «Leyendo…».
+    const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
+    let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
+    stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
+    return pickBetterOmrMeta(meta, stripMeta, rows);
   }
   return scanCalifacilDesktopGradeDocumentAsync(displayCanvas, columns, rows);
 }
@@ -287,12 +284,10 @@ export function scanWarpedGradeUnifiedOrLegacy(
     if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
       return meta;
     }
-    const full = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
-      fastMode: false,
-      maxOptimizeIterations: DESKTOP_WEAK_OPTIMIZE_ITERS,
-      stagnantLimit: DESKTOP_WEAK_STAGNANT,
-    });
-    return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(full), rows, columns);
+    const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
+    let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
+    stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
+    return pickBetterOmrMeta(meta, stripMeta, rows);
   }
   return scanWarpedGradeDocument(displayCanvas, columns, rows);
 }
@@ -322,12 +317,10 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
       return meta;
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
-      fastMode: false,
-      maxOptimizeIterations: DESKTOP_WEAK_OPTIMIZE_ITERS,
-      stagnantLimit: DESKTOP_WEAK_STAGNANT,
-    });
-    return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+    const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
+    let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
+    stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
+    return pickBetterOmrMeta(meta, stripMeta, rows);
   }
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);
 }
