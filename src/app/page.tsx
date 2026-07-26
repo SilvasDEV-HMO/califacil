@@ -86,7 +86,7 @@ export default function LandingPage() {
                 <Sparkles className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
               </div>
               <h2 className="mt-1.5 text-[clamp(0.7rem,1.4vh,1.05rem)] font-semibold leading-tight text-gray-900 sm:mt-3 sm:text-[1.05rem]">
-                Preguntas con nuestro &quot;DocenteAI&quot;
+                Exámenes con nuestra IA
               </h2>
               <p className="mt-1 text-[clamp(0.62rem,1.2vh,0.9rem)] leading-snug text-gray-600 sm:mt-1.5 sm:leading-relaxed">
                 Genera reactivos a partir de temas y tipos de pregunta con un prompt.
