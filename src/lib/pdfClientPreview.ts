@@ -110,7 +110,7 @@ async function jpegBlobToCanvas(blob: Blob): Promise<HTMLCanvasElement> {
     const canvas = document.createElement('canvas');
     canvas.width = img.naturalWidth || img.width;
     canvas.height = img.naturalHeight || img.height;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error('No se pudo crear el lienzo de vista previa');
     ctx.drawImage(img, 0, 0);
     return canvas;
@@ -258,7 +258,7 @@ export async function renderPdfPreviewPages(
     const canvas = document.createElement('canvas');
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) continue;
     await page.render({ canvasContext: ctx, viewport, canvas }).promise;
     pages.push({
@@ -298,7 +298,7 @@ export async function cropPreviewPageAsync(
   const canvas = document.createElement('canvas');
   canvas.width = sw;
   canvas.height = sh;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
   return canvas.toDataURL('image/jpeg', 0.9);

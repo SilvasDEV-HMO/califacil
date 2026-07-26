@@ -15,7 +15,7 @@ export async function fileToVisionJpegDataUrl(
   const canvas = document.createElement('canvas');
   canvas.width = cw;
   canvas.height = ch;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('No se pudo preparar la imagen');
   ctx.drawImage(bmp, 0, 0, cw, ch);
   bmp.close?.();

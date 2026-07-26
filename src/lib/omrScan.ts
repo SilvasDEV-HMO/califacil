@@ -3633,7 +3633,7 @@ export function prepareAnswerSheetDisplayCanvas(
   const out = document.createElement('canvas');
   out.width = canvas.width;
   out.height = canvas.height;
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
@@ -7178,7 +7178,7 @@ export function cropAnswerSheetNameSnippetDataUrl(
   const scale = Math.min(1, maxWidth / sw);
   out.width = Math.max(1, Math.round(sw * scale));
   out.height = Math.max(1, Math.round(sh * scale));
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
   return out.toDataURL('image/jpeg', 0.9);

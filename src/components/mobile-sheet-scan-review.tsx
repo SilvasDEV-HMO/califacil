@@ -79,7 +79,7 @@ function downscaleCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvas
   const out = document.createElement('canvas');
   out.width = Math.max(1, Math.round(sw * scale));
   out.height = Math.max(1, Math.round(sh * scale));
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return canvas;
   ctx.drawImage(canvas, 0, 0, out.width, out.height);
   return out;
@@ -138,7 +138,7 @@ function applyFilterAndRotation(
   const rotated = rotation === 90 || rotation === 270;
   out.width = rotated ? srcH : srcW;
   out.height = rotated ? srcW : srcH;
-  const ctx = out.getContext('2d');
+  const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return source;
   ctx.save();
   if (rotation === 90) {

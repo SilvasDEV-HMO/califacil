@@ -1127,7 +1127,7 @@ export default function CalificarPage() {
           : Math.max(1, Math.round(source.naturalHeight || source.height));
       canvas.width = w;
       canvas.height = h;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
       ctx.drawImage(source, 0, 0, w, h);
       const blob = await new Promise<Blob | null>((resolve) =>
