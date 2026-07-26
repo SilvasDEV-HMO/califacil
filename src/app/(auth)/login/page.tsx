@@ -84,7 +84,7 @@ export default function LoginPage() {
           <BrandWordmark
             priority
             className="justify-center"
-            imgClassName="h-9 w-auto max-w-[min(100%,16rem)] object-contain sm:h-12 sm:max-w-[24rem] lg:h-14 lg:max-w-[28rem]"
+            imgClassName="h-11 w-auto max-w-[min(100%,18rem)] object-contain sm:h-12 sm:max-w-[24rem] lg:h-14 lg:max-w-[28rem]"
           />
         </div>
       </header>

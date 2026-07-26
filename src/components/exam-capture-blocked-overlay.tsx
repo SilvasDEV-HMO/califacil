@@ -49,7 +49,7 @@ export function ExamCaptureBlockedOverlay({ variant }: Props) {
       </p>
 
       <div className="mt-14 opacity-90">
-        <BrandWordmark href={false} imgClassName="h-8 w-auto" />
+        <BrandWordmark href={false} imgClassName="h-9 w-auto" />
       </div>
     </div>,
     document.body

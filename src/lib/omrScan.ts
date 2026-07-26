@@ -2091,7 +2091,8 @@ function findCornerMarkerPoint(
   regionX: number,
   regionY: number,
   regionW: number,
-  regionH: number
+  regionH: number,
+  opts?: { topCornerGlare?: boolean }
 ): Point | null {
   const x0 = Math.max(0, regionX);
   const y0 = Math.max(0, regionY);
@@ -2101,12 +2102,26 @@ function findCornerMarkerPoint(
   const rh = y1 - y0;
   if (rw < 8 || rh < 8) return null;
 
-  const patchSize = Math.max(4, Math.round(Math.min(rw, rh) * 0.22));
+  const topGlare = Boolean(opts?.topCornerGlare);
+  const patchSize = Math.max(4, Math.round(Math.min(rw, rh) * (topGlare ? 0.18 : 0.22)));
   const step = Math.max(2, Math.floor(patchSize / 2));
   let bestScore = 0;
   let bestCenter: Point | null = null;
   let regionLumSum = 0;
   let regionN = 0;
+
+  // Primera pasada: media de región para umbral adaptativo (glare arriba).
+  for (let py = y0; py <= y1 - 1; py += Math.max(2, step)) {
+    for (let px = x0; px <= x1 - 1; px += Math.max(2, step)) {
+      const i = (py * width + px) * 4;
+      regionLumSum += d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
+      regionN++;
+    }
+  }
+  const regionMean = regionN > 0 ? regionLumSum / regionN : 128;
+  const darkCut = topGlare
+    ? Math.min(120, Math.max(70, regionMean * 0.72 + 8))
+    : 100;
 
   for (let py = y0; py <= y1 - patchSize; py += step) {
     for (let px = x0; px <= x1 - patchSize; px += step) {
@@ -2118,15 +2133,12 @@ function findCornerMarkerPoint(
           const i = ((py + dy) * width + (px + dx)) * 4;
           const lum = d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
           lumSum += lum;
-          regionLumSum += lum;
-          regionN++;
-          // Cámara real: negros impresos a menudo ~70–100 bajo luz cálida.
-          if (lum < 100) dark++;
+          if (lum < darkCut) dark++;
         }
       }
       const mean = lumSum / total;
-      // Preferir núcleos compactos oscuros (no mesa entera).
-      const score = dark / total - mean / 400;
+      // Preferir núcleos compactos más oscuros que la región (no mesa entera).
+      const score = dark / total + (regionMean - mean) / 180;
       if (score > bestScore) {
         bestScore = score;
         bestCenter = { x: px + patchSize / 2, y: py + patchSize / 2 };
@@ -2134,14 +2146,14 @@ function findCornerMarkerPoint(
     }
   }
   if (!bestCenter) return null;
-  const regionMean = regionN > 0 ? regionLumSum / regionN : 128;
-  // Aceptar si el mejor parche es claramente más oscuro que la región o tiene >=22% oscuros.
-  if (bestScore < 0.18) return null;
+  if (bestScore < (topGlare ? 0.14 : 0.18)) return null;
   const bestI =
     (Math.round(bestCenter.y) * width + Math.round(bestCenter.x)) * 4;
   const bestLum =
     d[bestI]! * 0.299 + d[bestI + 1]! * 0.587 + d[bestI + 2]! * 0.114;
-  if (bestLum > regionMean - 8 && bestScore < 0.32) return null;
+  if (bestLum > regionMean - (topGlare ? 5 : 8) && bestScore < (topGlare ? 0.26 : 0.32)) {
+    return null;
+  }
   return bestCenter;
 }
 
@@ -3206,9 +3218,10 @@ function isPrintedCornerFiducialPatch(
   const midMean = midCount > 0 ? midLumSum / midCount : outerMean;
 
   // Umbral adaptativo: en luz cálida/tenue el negro impreso no baja de ~52.
+  // Con glare arriba el cut debe ser más alto.
   const darkCut = Math.min(
-    98,
-    Math.max(48, Math.min(outerMean, midMean) * 0.62 + 10)
+    topCornerGlare ? 118 : 98,
+    Math.max(48, Math.min(outerMean, midMean) * (topCornerGlare ? 0.72 : 0.62) + (topCornerGlare ? 14 : 10))
   );
 
   let innerDark = 0;
@@ -3225,24 +3238,26 @@ function isPrintedCornerFiducialPatch(
 
   const innerDarkFrac = innerDark / innerCount;
 
-  // Defaults pensados para cámara real (mesa oscura + glare); más permisivos que post-warp PDF.
-  const minDarkFrac = topCornerGlare ? 0.38 : nearStripEdge ? 0.4 : 0.42;
+  // Defaults pensados para cámara real (mesa oscura + glare); más permisivos arriba.
+  const minDarkFrac = topCornerGlare ? 0.32 : nearStripEdge ? 0.4 : 0.42;
   if (innerDarkFrac < minDarkFrac) return false;
-  if (innerMean > (topCornerGlare ? 105 : nearStripEdge ? 95 : 92)) return false;
+  if (innerMean > (topCornerGlare ? 120 : nearStripEdge ? 95 : 92)) return false;
 
   const contrastVsOuter = outerMean - innerMean;
   const contrastVsMid = midMean - innerMean;
   const contrast = Math.max(contrastVsOuter, contrastVsMid);
 
   // Mesa oscura: el anillo exterior puede ser más oscuro que el papel; usar mid (papel).
-  if (contrast >= (topCornerGlare ? 10 : nearStripEdge ? 12 : 14)) return true;
+  if (contrast >= (topCornerGlare ? 6 : nearStripEdge ? 12 : 14)) return true;
   if (innerDarkFrac >= 0.55 && innerMean <= 78) return true;
   if (innerDarkFrac >= 0.62 && innerMean <= 68) return true;
   if (innerDarkFrac >= 0.7 && innerMean <= 58) return true;
   if (nearStripEdge && innerDarkFrac >= 0.48 && innerMean <= 85) return true;
-  if (topCornerGlare && innerDarkFrac >= 0.42 && innerMean <= 95) return true;
+  if (topCornerGlare && innerDarkFrac >= 0.32 && innerMean <= 110) return true;
   // Núcleo oscuro vs papel (mid) aunque el borde sea mesa.
-  if (contrastVsMid >= 18 && innerDarkFrac >= 0.4 && innerMean < midMean - 12) return true;
+  if (contrastVsMid >= (topCornerGlare ? 10 : 18) && innerDarkFrac >= 0.32 && innerMean < midMean - (topCornerGlare ? 6 : 12)) {
+    return true;
+  }
 
   return false;
 }
@@ -3284,22 +3299,22 @@ const FIDUCIAL_NORM_PROBE_OFFSETS: Record<
   'tl' | 'tr' | 'bl' | 'br',
   Array<{ dx: number; dy: number }>
 > = {
+  // TL/TR: probes hacia abajo/adentro (evita salir del papel / glare).
   tl: [
     { dx: 0, dy: 0 },
-    { dx: 0.008, dy: 0.012 },
-    { dx: -0.006, dy: 0.018 },
-    { dx: 0.012, dy: 0.006 },
-    { dx: -0.012, dy: 0.008 },
-    { dx: 0.004, dy: -0.004 },
+    { dx: 0.01, dy: 0.014 },
+    { dx: 0.016, dy: 0.022 },
+    { dx: -0.004, dy: 0.02 },
+    { dx: 0.008, dy: 0.028 },
+    { dx: 0.02, dy: 0.01 },
   ],
   tr: [
     { dx: 0, dy: 0 },
-    { dx: -0.012, dy: 0 },
-    { dx: -0.018, dy: 0.004 },
-    { dx: -0.024, dy: 0.008 },
-    { dx: -0.008, dy: 0.014 },
-    { dx: -0.016, dy: 0.012 },
-    { dx: 0.004, dy: -0.004 },
+    { dx: -0.01, dy: 0.014 },
+    { dx: -0.016, dy: 0.022 },
+    { dx: -0.02, dy: 0.01 },
+    { dx: -0.008, dy: 0.028 },
+    { dx: -0.024, dy: 0.016 },
   ],
   bl: [
     { dx: 0, dy: 0 },
@@ -3314,7 +3329,6 @@ const FIDUCIAL_NORM_PROBE_OFFSETS: Record<
     { dx: -0.018, dy: -0.004 },
     { dx: -0.024, dy: -0.008 },
     { dx: -0.008, dy: -0.012 },
-    { dx: 0.004, dy: -0.004 },
   ],
 };
 
@@ -3345,14 +3359,14 @@ function patchHasDarkCornerAt(
   return isPrintedCornerFiducialPatch(id, patch, patch, nearStripEdge, topCornerGlare);
 }
 
-/** Marca la esquina faltante cuando hay 3/4 + franjas y el vértice del stripQuad tiene parche oscuro. */
+/** Completa esquinas faltantes usando el stripQuad (p. ej. TL/TR con glare). */
 function inferMissingFiducialFromStripQuad(
   canvas: HTMLCanvasElement,
   corners: [boolean, boolean, boolean, boolean],
   stripQuad: [Point, Point, Point, Point]
 ): [boolean, boolean, boolean, boolean] {
   const count = corners.filter(Boolean).length;
-  if (count >= 4 || count < 3) return corners;
+  if (count >= 4 || count < 2) return corners;
 
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return corners;
@@ -3370,35 +3384,43 @@ function inferMissingFiducialFromStripQuad(
     const v = vertices[i]!;
     const cx = i === 1 || i === 3 ? v.x - inset : v.x + inset * 0.15;
     const cy = i === 0 || i === 1 ? v.y + inset * 0.15 : v.y - inset;
-    if (patchHasDarkCornerAt(ctx, { x: cx, y: cy }, patch, i === 1 || i === 3)) {
+    const isTop = i === 0 || i === 1;
+    if (patchHasDarkCornerAt(ctx, { x: cx, y: cy }, patch, i === 1 || i === 3, isTop)) {
       result[i] = true;
     }
   }
 
   if (result.filter(Boolean).length >= 4) return result;
 
-  const missingIdx = result.findIndex((v) => !v);
-  if (missingIdx < 0 || result.filter(Boolean).length !== 3) return result;
+  // Con 2–3 detectadas: intentar inferir cada faltante por paralelogramo.
+  for (let missingIdx = 0; missingIdx < 4; missingIdx++) {
+    if (result[missingIdx]) continue;
+    const [tlP, trP, blP, brP] = vertices;
+    const inferred: Point | null =
+      missingIdx === 0
+        ? { x: trP.x + blP.x - brP.x, y: trP.y + blP.y - brP.y }
+        : missingIdx === 1
+          ? { x: tlP.x + brP.x - blP.x, y: tlP.y + brP.y - blP.y }
+          : missingIdx === 2
+            ? { x: tlP.x + brP.x - trP.x, y: tlP.y + brP.y - trP.y }
+            : { x: trP.x + blP.x - tlP.x, y: trP.y + blP.y - tlP.y };
 
-  const [tlP, trP, blP, brP] = vertices;
-  const inferred: Point | null =
-    missingIdx === 0
-      ? { x: trP.x + blP.x - brP.x, y: trP.y + blP.y - brP.y }
-      : missingIdx === 1
-        ? { x: tlP.x + brP.x - blP.x, y: tlP.y + brP.y - blP.y }
-        : missingIdx === 2
-          ? { x: tlP.x + brP.x - trP.x, y: tlP.y + brP.y - trP.y }
-          : { x: trP.x + blP.x - tlP.x, y: trP.y + blP.y - tlP.y };
-
-  if (
-    inferred &&
-    inferred.x >= 0 &&
-    inferred.y >= 0 &&
-    inferred.x < W &&
-    inferred.y < H &&
-    patchHasDarkCornerAt(ctx, inferred, patch, missingIdx === 1 || missingIdx === 3)
-  ) {
-    result[missingIdx] = true;
+    if (
+      inferred &&
+      inferred.x >= 0 &&
+      inferred.y >= 0 &&
+      inferred.x < W &&
+      inferred.y < H &&
+      patchHasDarkCornerAt(
+        ctx,
+        inferred,
+        patch,
+        missingIdx === 1 || missingIdx === 3,
+        missingIdx === 0 || missingIdx === 1
+      )
+    ) {
+      result[missingIdx] = true;
+    }
   }
 
   return result;
@@ -3426,7 +3448,10 @@ export function detectAnswerSheetFiducialsAtQuad(
 
   for (let i = 0; i < 4; i++) {
     const isTopCorner = i === 0 || i === 1;
-    const cornerPatch = isTopCorner ? Math.max(patch, Math.round(patch * 1.28)) : patch;
+    // Parche un poco más chico arriba: menos glare/papel diluye el contraste.
+    const cornerPatch = isTopCorner
+      ? Math.max(8, Math.round(patch * 0.88))
+      : patch;
     for (const center of centerGroups[i]!) {
       if (
         patchHasDarkCornerAt(ctx, center, cornerPatch, nearStripFlags[i]!, isTopCorner)
@@ -3444,11 +3469,14 @@ export function detectAnswerSheetFiducialsAtQuad(
   for (let i = 0; i < 4; i++) {
     if (detected[i]) continue;
     const v = vertices[i]!;
+    const isTopCorner = i === 0 || i === 1;
     const inward = stripAligned && (i === 1 || i === 3) ? region * 0.45 : 0;
     const rx = i === 0 || i === 2 ? v.x : v.x - region - inward;
     const ry = i === 0 || i === 1 ? v.y : v.y - region;
     const rw = i === 0 || i === 2 ? region : region + inward;
-    const found = findCornerMarkerPoint(id.data, W, H, rx, ry, rw, region);
+    const found = findCornerMarkerPoint(id.data, W, H, rx, ry, rw, region, {
+      topCornerGlare: isTopCorner,
+    });
     if (!found) continue;
     const px = Math.max(0, Math.min(W - patch, Math.round(found.x - patch / 2)));
     const py = Math.max(0, Math.min(H - patch, Math.round(found.y - patch / 2)));
@@ -3458,7 +3486,7 @@ export function detectAnswerSheetFiducialsAtQuad(
       patch,
       patch,
       nearStripFlags[i]!,
-      i === 0 || i === 1
+      isTopCorner
     );
   }
   return detected;
@@ -3755,14 +3783,21 @@ export function prepareMobileScannedDocumentCanvasFast(
 /**
  * Hoja enderezada lista para mostrar y calificar como un PDF impreso:
  * recorte a límites de impresión, fondo limpio, proporción carta.
+ * `fast: true` evita deskew ±6° (upload desktop / galería).
  */
 export function prepareMobileGradeDocumentCanvas(
   warped: HTMLCanvasElement,
-  warpAlignment?: WarpAlignmentReport | null
+  warpAlignment?: WarpAlignmentReport | null,
+  opts?: { fast?: boolean }
 ): HTMLCanvasElement {
   if (typeof document === 'undefined') return warped;
   const precise = mobileWarpAlignmentIsPrecise(warpAlignment);
   if (precise && isCalifacilWarpedLetterCanvas(warped)) {
+    if (opts?.fast) {
+      const refined = refineWarpedCalifacilSheet(warped, { fast: true });
+      const trimmed = trimCanvasContentBorders(refined.canvas) ?? refined.canvas;
+      return cropWarpedAnswerSheetToPrintBounds(trimmed) ?? trimmed;
+    }
     const refined = refineWarpedCalifacilSheet(warped, { fast: false });
     const deskewed = deskewWarpedCalifacilSheet(refined.canvas);
     const trimmed = trimCanvasContentBorders(deskewed) ?? deskewed;

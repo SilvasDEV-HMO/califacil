@@ -662,6 +662,9 @@ export default function CalificarPage() {
   >(undefined);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  /** Cancela lecturas desktop JPG/PDF tardías (timeout / nueva subida). */
+  const gradeReadAbortRef = useRef<AbortController | null>(null);
+  const gradeReadGenRef = useRef(0);
   const pendingPdfGradingRef = useRef<{
     handle: PdfGradingHandle;
     nextPage: number;
@@ -2066,7 +2069,10 @@ export default function CalificarPage() {
       toast.error('Entra al escáner o selecciona examen antes de importar.');
       return;
     }
-    if (!file.type.startsWith('image/')) {
+    const nameLower = file.name.toLowerCase();
+    const extOk = /\.(jpe?g|png|webp|heic|heif)$/i.test(nameLower);
+    const typeOk = file.type.startsWith('image/') || (file.type === '' && extOk);
+    if (!typeOk) {
       toast.error('Elige un archivo de imagen (JPG, PNG, etc.).');
       return;
     }
@@ -2074,31 +2080,39 @@ export default function CalificarPage() {
       flushSync(() => setPhase('capturar'));
     }
     clearPendingPdfGrading();
+    gradeReadAbortRef.current?.abort();
+    gradeReadAbortRef.current = null;
+    const gen = ++gradeReadGenRef.current;
     setScanBusy(true);
+    mobileCaptureBusyRef.current = true;
     setLiveStatus('Preparando imagen…');
     await yieldForSpinnerPaint();
     try {
       const img = await fileToImage(file);
+      if (gen !== gradeReadGenRef.current) return;
       if (useLiveCameraUi) {
         const fullCanvas = captureImageFullFrame(img, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
         if (!fullCanvas) {
           toast.error('No se pudo leer la imagen.');
           return;
         }
-        if (!cameraOpen) {
-          await startLiveCamera({ skipPhaseGuard: true });
-          await sleep(200);
-        }
+        // Galería: calificar la imagen directa (no exigir cámara abierta).
         await processMobileCapturedCanvas(fullCanvas, videoRef.current, { fromGallery: true });
       } else {
         setLiveStatus('Leyendo examen…');
         await yieldForSpinnerPaint();
+        if (gen !== gradeReadGenRef.current) return;
         await finalizeCapturedSheet(img, file);
       }
     } catch {
-      toast.error('No se pudo leer la imagen. Prueba otra foto más nítida.');
+      if (gen === gradeReadGenRef.current) {
+        toast.error('No se pudo leer la imagen. Prueba otra foto más nítida.');
+      }
     } finally {
-      setScanBusy(false);
+      if (gen === gradeReadGenRef.current) {
+        mobileCaptureBusyRef.current = false;
+        setScanBusy(false);
+      }
     }
   };
 
@@ -2123,13 +2137,21 @@ export default function CalificarPage() {
     if (phase === 'elegir') {
       setPhase('capturar');
     }
+    gradeReadAbortRef.current?.abort();
+    const abort = new AbortController();
+    gradeReadAbortRef.current = abort;
+    const gen = ++gradeReadGenRef.current;
     setScanBusy(true);
     await yieldForSpinnerPaint();
     try {
       clearPendingPdfGrading();
       flushSync(() => setLiveStatus('Renderizando página 1 del PDF en el servidor…'));
       await yieldForSpinnerPaint();
-      const { canvas: firstCanvas, numPages } = await renderPdfGradingPageCanvas(file, 1);
+      const { canvas: firstCanvas, numPages } = await renderPdfGradingPageCanvas(file, 1, undefined, {
+        signal: abort.signal,
+        timeoutMs: 25000,
+      });
+      if (gen !== gradeReadGenRef.current || abort.signal.aborted) return;
       if (numPages === 0) {
         toast.error('El PDF no tiene páginas legibles.');
         return;
@@ -2149,6 +2171,7 @@ export default function CalificarPage() {
         );
       }
       await finalizePdfPageForGrading(firstCanvas, 1);
+      if (gen !== gradeReadGenRef.current) return;
       if (lastPage > 1) {
         pendingPdfGradingRef.current = { handle, nextPage: 2, lastPage };
         schedulePrefetchNextPdfPage();
@@ -2156,16 +2179,20 @@ export default function CalificarPage() {
         handle.dispose();
       }
     } catch (err) {
+      if (abort.signal.aborted || gen !== gradeReadGenRef.current) return;
       clearPendingPdfGrading();
       const message =
         err instanceof Error ? err.message : 'No se pudo leer el PDF.';
       toast.error(
-        message.includes('Sesión') || message.length < 120
+        message.includes('Sesión') || message.includes('tardó') || message.length < 120
           ? message
           : 'No se pudo leer el PDF. Prueba otro archivo o exporta las páginas como imagen.'
       );
     } finally {
-      setScanBusy(false);
+      if (gen === gradeReadGenRef.current) {
+        setScanBusy(false);
+        if (gradeReadAbortRef.current === abort) gradeReadAbortRef.current = null;
+      }
     }
   };
 
@@ -3974,11 +4001,14 @@ export default function CalificarPage() {
         return;
       }
       if (!isMobile) {
+        gradeReadGenRef.current += 1;
+        gradeReadAbortRef.current?.abort();
+        gradeReadAbortRef.current = null;
         setScanBusy(false);
         setLiveStatus('');
         toast.error('La lectura tardó demasiado. Prueba con un PDF o una foto más nítida.');
       }
-    }, 45000);
+    }, 30000);
     return () => window.clearTimeout(timeout);
   }, [scanBusy, isMobile]);
 
@@ -4680,13 +4710,6 @@ export default function CalificarPage() {
         typeof document !== 'undefined' &&
         createPortal(
           <>
-            <input
-              ref={galleryInputRef}
-              type="file"
-              accept="image/*"
-              className="sr-only"
-              onChange={handleGalleryFile}
-            />
             <ExamScannerScreen
               shellRef={mobileCameraShellRef}
               viewportRef={mobileVideoViewportRef}

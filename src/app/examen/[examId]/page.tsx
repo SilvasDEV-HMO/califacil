@@ -952,7 +952,7 @@ export default function StudentExamPage() {
           <div className="mb-10 flex justify-center px-1">
             <BrandWordmark
               href={false}
-              imgClassName="h-16 w-auto max-w-[min(100%,26rem)] object-contain sm:h-20 sm:max-w-[30rem] lg:h-[5.5rem] lg:max-w-[34rem]"
+              imgClassName="h-[4.5rem] w-auto max-w-[min(100%,28rem)] object-contain sm:h-20 sm:max-w-[30rem] lg:h-[5.5rem] lg:max-w-[34rem]"
             />
           </div>
 

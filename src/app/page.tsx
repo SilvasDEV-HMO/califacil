@@ -14,7 +14,7 @@ export default function LandingPage() {
           <BrandWordmark
             priority
             className="min-w-0 shrink"
-            imgClassName="h-[clamp(1.85rem,5vh,3.25rem)] w-auto max-w-[min(100%,13rem)] object-contain object-left sm:h-14 sm:max-w-[26rem] lg:h-16 lg:max-w-[30rem]"
+            imgClassName="h-[clamp(2.1rem,5.5vh,3.5rem)] w-auto max-w-[min(100%,15rem)] object-contain object-left sm:h-14 sm:max-w-[26rem] lg:h-16 lg:max-w-[30rem]"
           />
           <nav className="flex shrink-0 items-center gap-1 sm:gap-2.5">
             <Button
@@ -86,10 +86,10 @@ export default function LandingPage() {
                 <Sparkles className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
               </div>
               <h2 className="mt-1.5 text-[clamp(0.7rem,1.4vh,1.05rem)] font-semibold leading-tight text-gray-900 sm:mt-3 sm:text-[1.05rem]">
-                Preguntas con IA
+                Preguntas con nuestro &quot;DocenteAI&quot;
               </h2>
               <p className="mt-1 text-[clamp(0.62rem,1.2vh,0.9rem)] leading-snug text-gray-600 sm:mt-1.5 sm:leading-relaxed">
-                Genera reactivos a partir de temas y tipos de pregunta que elijas.
+                Genera reactivos a partir de temas y tipos de pregunta con un prompt.
               </p>
             </article>
             <article className="flex min-w-0 flex-col items-center rounded-lg border border-orange-100/80 bg-white/90 px-2 py-2 text-center shadow-sm backdrop-blur-md sm:rounded-xl sm:px-4 sm:py-5">
@@ -97,7 +97,7 @@ export default function LandingPage() {
                 <QrCode className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
               </div>
               <h2 className="mt-1.5 text-[clamp(0.7rem,1.4vh,1.05rem)] font-semibold leading-tight text-gray-900 sm:mt-3 sm:text-[1.05rem]">
-                Acceso por QR
+                En Línea o Presencial
               </h2>
               <p className="mt-1 text-[clamp(0.62rem,1.2vh,0.9rem)] leading-snug text-gray-600 sm:mt-1.5 sm:leading-relaxed">
                 Publica el examen y aplícalo en línea. O imprímelo y aplícalo en el aula.
@@ -125,7 +125,7 @@ export default function LandingPage() {
           <BrandWordmark
             href={false}
             className="justify-center"
-            imgClassName="mx-auto h-[clamp(1.4rem,3.8vh,2.75rem)] w-auto max-w-[min(100%,12rem)] object-contain sm:h-11 sm:max-w-[22rem]"
+            imgClassName="mx-auto h-[clamp(1.65rem,4.2vh,3rem)] w-auto max-w-[min(100%,13.5rem)] object-contain sm:h-11 sm:max-w-[22rem]"
           />
           <p className="mt-0.5 text-[clamp(0.6rem,1.2vh,0.875rem)] leading-snug text-gray-600 sm:mt-1.5 sm:text-sm">
             Herramienta creada por{' '}

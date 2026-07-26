@@ -161,7 +161,7 @@ export default function DashboardLayout({
             className="flex items-center justify-between gap-2 px-3 pb-2"
             style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.5rem)' }}
           >
-            <span className="inline-flex min-w-0 max-w-[min(100%,18rem)] items-center sm:max-w-[20rem]">
+            <span className="inline-flex min-w-0 max-w-[min(100%,20rem)] items-center sm:max-w-[20rem]">
               <button
                 type="button"
                 onClick={() => router.push('/dashboard')}
@@ -171,7 +171,7 @@ export default function DashboardLayout({
                 <BrandWordmark
                   href={false}
                   priority
-                  imgClassName="h-[50px] w-auto max-w-full object-contain object-left sm:h-[3.25rem] sm:max-w-[16rem]"
+                  imgClassName="h-[58px] w-auto max-w-full object-contain object-left sm:h-[3.25rem] sm:max-w-[16rem]"
                 />
               </button>
             </span>

@@ -137,7 +137,8 @@ export async function canvasToJpegFile(
 async function fetchPdfPageCanvas(
   file: File,
   pageNumber: number,
-  maxSide = PDF_OMR_RENDER_MAX_SIDE
+  maxSide = PDF_OMR_RENDER_MAX_SIDE,
+  signal?: AbortSignal
 ): Promise<{ canvas: HTMLCanvasElement; numPages: number }> {
   const form = new FormData();
   form.append('file', file);
@@ -150,6 +151,7 @@ async function fetchPdfPageCanvas(
     headers: authHeaders,
     credentials: 'include',
     body: form,
+    signal,
   });
 
   if (!res.ok) {
@@ -170,7 +172,7 @@ export type PdfGradingHandle = {
   numPages: number;
   renderPageAsCanvas: (
     pageNumber: number,
-    opts?: { maxSide?: number }
+    opts?: { maxSide?: number; signal?: AbortSignal }
   ) => Promise<HTMLCanvasElement | null>;
   dispose: () => void;
 };
@@ -181,7 +183,12 @@ export function createPdfGradingHandle(file: File, numPages: number): PdfGrading
     async renderPageAsCanvas(pageNumber, opts) {
       if (pageNumber < 1 || pageNumber > numPages) return null;
       await yieldToBrowser();
-      const { canvas } = await fetchPdfPageCanvas(file, pageNumber, opts?.maxSide);
+      const { canvas } = await fetchPdfPageCanvas(
+        file,
+        pageNumber,
+        opts?.maxSide,
+        opts?.signal
+      );
       return canvas;
     },
     dispose() {},
@@ -192,7 +199,8 @@ export function createPdfGradingHandle(file: File, numPages: number): PdfGrading
 export async function renderPdfGradingPageCanvas(
   file: File,
   pageNumber: number,
-  maxSide = PDF_OMR_RENDER_MAX_SIDE
+  maxSide = PDF_OMR_RENDER_MAX_SIDE,
+  opts?: { signal?: AbortSignal; timeoutMs?: number }
 ): Promise<{ canvas: HTMLCanvasElement; numPages: number }> {
   if (typeof window === 'undefined') {
     throw new Error('La calificación con PDF solo está disponible en el navegador');
@@ -203,7 +211,22 @@ export async function renderPdfGradingPageCanvas(
     );
   }
   await yieldToBrowser();
-  return fetchPdfPageCanvas(file, pageNumber, maxSide);
+  const timeoutMs = opts?.timeoutMs ?? 25000;
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  opts?.signal?.addEventListener('abort', onAbort);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchPdfPageCanvas(file, pageNumber, maxSide, controller.signal);
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error('La lectura del PDF tardó demasiado. Prueba un archivo más liviano.');
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeoutId);
+    opts?.signal?.removeEventListener('abort', onAbort);
+  }
 }
 
 /** Abre un PDF y rasteriza páginas bajo demanda vía API (no bloquea el navegador). */

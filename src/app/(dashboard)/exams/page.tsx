@@ -256,15 +256,15 @@ export default function ExamsPage() {
         </div>
       </div>
 
-      {!inSearchMode && (
+      {!inSearchMode && folderPath.length > 0 && (
         <nav className="flex flex-wrap items-center gap-1 text-sm text-gray-600">
           <button
             type="button"
             onClick={() => navigateToFolder(null)}
             className="inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-orange-50 hover:text-orange-700"
+            aria-label="Ir a la raíz de exámenes"
           >
             <Home className="h-4 w-4" />
-            Inicio
           </button>
           {folderPath.map((folder) => (
             <span key={folder.id} className="inline-flex items-center gap-1">

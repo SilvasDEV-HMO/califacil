@@ -323,7 +323,7 @@ export function normalizeCalifacilGradeDocumentCanvas(
   }
 
   if (isMobileWarpedAnswerSheetAcceptable(base)) {
-    const doc = prepareMobileGradeDocumentCanvas(base, null);
+    const doc = prepareMobileGradeDocumentCanvas(base, null, { fast: true });
     return finish(
       doc,
       measureWarpedFiducialAlignment(doc, maxErrorPx),
@@ -331,34 +331,30 @@ export function normalizeCalifacilGradeDocumentCanvas(
     );
   }
 
-  for (const attempt of [
-    () => warpCalifacilMobileCaptureFast(base, { maxErrorPx }),
-    () =>
-      warpCalifacilMobileCapture(base, {
-        maxErrorPx,
-        fallbackMaxErrorPx: maxErrorPx + 12,
-      }),
-  ]) {
-    const result = attempt();
-    if (result.warped && isMobileWarpedAnswerSheetAcceptable(result.warped)) {
-      const doc = prepareMobileGradeDocumentCanvas(result.warped, result.alignment);
-      return finish(doc, result.alignment, true);
-    }
+  // Solo warp ultrarrápido — nunca warpCalifacilMobileCapture (deskew lento ~1 min).
+  const fastWarp = warpCalifacilMobileCaptureFast(base, { maxErrorPx });
+  if (fastWarp.warped && isMobileWarpedAnswerSheetAcceptable(fastWarp.warped)) {
+    const doc = prepareMobileGradeDocumentCanvas(fastWarp.warped, fastWarp.alignment, {
+      fast: true,
+    });
+    return finish(doc, fastWarp.alignment, true);
   }
 
   if (isCalifacilExamSheetLikely(base, columns)) {
     const corner = warpCalifacilSheetFromCornerMarkers(base);
     if (corner && countCalifacilCornerMarkers(corner) >= 3) {
       const alignment = measureWarpedFiducialAlignment(corner, maxErrorPx);
-      const doc = prepareMobileGradeDocumentCanvas(corner, alignment);
+      const refined = refineWarpedCalifacilSheet(corner, { fast: true });
+      const doc = prepareMobileGradeDocumentCanvas(refined.canvas, alignment, { fast: true });
       return finish(doc, alignment, true);
     }
     return finish(base, null, false);
   }
 
+  // Sin tilt ±60°: rechazo rápido si no hay franjas/esquinas.
   const oriented = autoOrientCalifacilSheet(base, columns, {
     useGuideCrop: false,
-    allowTiltSweep: true,
+    allowTiltSweep: false,
   });
   if (oriented && isCalifacilExamSheetLikely(oriented, columns)) {
     return finish(oriented, null, true);
