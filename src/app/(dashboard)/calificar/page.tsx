@@ -2155,7 +2155,7 @@ export default function CalificarPage() {
         if (gen !== gradeReadGenRef.current) return;
         await finalizeCapturedSheet(img, file);
       }
-    } catch {
+    } catch (err) {
       if (gen === gradeReadGenRef.current) {
         toast.error('No se pudo leer la imagen. Prueba otra foto más nítida.');
       }
@@ -3705,7 +3705,6 @@ export default function CalificarPage() {
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
         const warpMeta = califacilFastScan.meta;
         // Siempre override tras el pase móvil (strip recovery ya incluido si era débil).
-        // Preview = scanCanvas (referencia) cuando el align es válido — paridad desktop.
         const resolved = resolveMobileGradeDisplay(
           displayCanvas,
           scanCanvas,

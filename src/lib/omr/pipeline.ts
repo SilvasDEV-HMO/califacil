@@ -258,15 +258,20 @@ export type DesktopUploadClass = 'pdf' | 'flatScan' | 'photoCrop' | 'warpedPhoto
 
 /**
  * Warp de foto aceptable: Acceptable estricto, o carta + franjas + ≥3 esquinas.
- * Nunca la foto completa con mesa.
+ * Además exige que la hoja llene el marco (no foto con mesa a aspect carta).
  */
 function isPhotoSheetWarpAcceptable(canvas: HTMLCanvasElement): boolean {
-  if (isMobileWarpedAnswerSheetAcceptable(canvas)) return true;
-  return (
-    isCalifacilWarpedLetterCanvas(canvas) &&
-    hasCalifacilAlignStrips(canvas) &&
-    countCalifacilCornerMarkers(canvas) >= 3
-  );
+  const cornersOk =
+    isMobileWarpedAnswerSheetAcceptable(canvas) ||
+    (isCalifacilWarpedLetterCanvas(canvas) &&
+      hasCalifacilAlignStrips(canvas) &&
+      countCalifacilCornerMarkers(canvas) >= 3);
+  if (!cornersOk) return false;
+  const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
+  if (stripQuad) {
+    return measureRoiSheetFillRatio(stripQuad, canvas.width, canvas.height) >= 0.78;
+  }
+  return countCalifacilCornerMarkers(canvas) >= 4;
 }
 
 /**
@@ -304,7 +309,13 @@ export function classifyDesktopUploadCanvas(
   opts?: { isServerRenderedPdfPage?: boolean; preWarped?: boolean }
 ): DesktopUploadClass {
   if (opts?.isServerRenderedPdfPage) return 'pdf';
-  if (opts?.preWarped || isCalifacilWarpedLetterCanvas(canvas) || isMobileWarpedAnswerSheetReady(canvas)) {
+  // NUNCA usar solo aspect ratio carta (isCalifacilWarpedLetterCanvas):
+  // una foto 3:4 con mesa se clasificaba como warpedPhoto y se saltaba el warp real.
+  if (
+    opts?.preWarped ||
+    isMobileWarpedAnswerSheetReady(canvas) ||
+    isMobileWarpedAnswerSheetAcceptable(canvas)
+  ) {
     return 'warpedPhoto';
   }
   if (isLikelyFlatCalifacilDocument(canvas, columns)) return 'flatScan';
@@ -437,7 +448,6 @@ export function normalizeCalifacilGradeDocumentCanvas(
       if (ok) return ok;
     }
   }
-
   return finishFail();
 }
 

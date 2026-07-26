@@ -181,27 +181,20 @@ export function pickBetterOmrMeta(
 
 /**
  * Preview móvil: siempre carta (`displayCanvas`) + geometría letter para bolitas/nombre.
- * La lectura OMR sigue en `scanCanvas`; no pintar UI sobre ancla de referencia por tamaño.
+ * Nunca reusar meta.geometry del scan/referencia: syncCalifacilOmrGeometryImageSize
+ * solo cambia imageWidth/Height y deja las bolitas en coords del otro canvas → desalineadas.
+ * La lectura OMR sigue en `scanCanvas`.
  */
 export function resolveMobileGradeDisplay(
   displayCanvas: HTMLCanvasElement,
   _scanCanvas: HTMLCanvasElement,
   columns: number,
   rowCount: number,
-  meta?: OmrScanMetaResult | null
+  _meta?: OmrScanMetaResult | null
 ): { previewCanvas: HTMLCanvasElement; geometry: CalifacilOmrScanGeometry } {
-  const fromMeta =
-    meta?.geometry?.bubbles && meta.geometry.bubbles.length >= Math.min(30, rowCount)
-      ? syncCalifacilOmrGeometryImageSize(
-          meta.geometry,
-          displayCanvas.width,
-          displayCanvas.height
-        )
-      : null;
   return {
     previewCanvas: displayCanvas,
-    geometry:
-      fromMeta ?? buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount),
+    geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount),
   };
 }
 
