@@ -257,26 +257,26 @@ export function warpCalifacilMobileCapture(
 export type DesktopUploadClass = 'pdf' | 'flatScan' | 'photoCrop' | 'warpedPhoto';
 
 /**
- * Warp de foto aceptable: Acceptable estricto, o carta + franjas + ≥3 esquinas.
- * Además exige que la hoja llene el marco (no foto con mesa a aspect carta).
+ * Warp de foto aceptable: Acceptable (3–4 esquinas) gana sin veto de fill.
+ * Fill solo como soft-check cuando no es Acceptable (evita mesa a aspect carta).
  */
 function isPhotoSheetWarpAcceptable(canvas: HTMLCanvasElement): boolean {
-  const cornersOk =
-    isMobileWarpedAnswerSheetAcceptable(canvas) ||
-    (isCalifacilWarpedLetterCanvas(canvas) &&
-      hasCalifacilAlignStrips(canvas) &&
-      countCalifacilCornerMarkers(canvas) >= 3);
-  if (!cornersOk) return false;
+  if (isMobileWarpedAnswerSheetAcceptable(canvas)) return true;
+  const softCorners =
+    isCalifacilWarpedLetterCanvas(canvas) &&
+    hasCalifacilAlignStrips(canvas) &&
+    countCalifacilCornerMarkers(canvas) >= 3;
+  if (!softCorners) return false;
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
   if (stripQuad) {
-    return measureRoiSheetFillRatio(stripQuad, canvas.width, canvas.height) >= 0.78;
+    return measureRoiSheetFillRatio(stripQuad, canvas.width, canvas.height) >= 0.62;
   }
   return countCalifacilCornerMarkers(canvas) >= 4;
 }
 
 /**
  * Escaneo/PDF plano: la hoja llena el marco (sin mesa).
- * Fotos de mesa con márgenes → false (exigir warp).
+ * Escaneos 3:4 (aspect letter) sí pueden ser flat si strips + fill alto.
  */
 function isLikelyFlatCalifacilDocument(
   canvas: HTMLCanvasElement,
@@ -284,7 +284,6 @@ function isLikelyFlatCalifacilDocument(
   opts?: { flatDocument?: boolean }
 ): boolean {
   if (opts?.flatDocument) return true;
-  if (isCalifacilWarpedLetterCanvas(canvas)) return false;
   if (!isCalifacilExamSheetLikely(canvas, columns)) return false;
   if (!hasCalifacilAlignStrips(canvas)) return false;
   const aspect = canvas.width / Math.max(1, canvas.height);
@@ -295,11 +294,13 @@ function isLikelyFlatCalifacilDocument(
     const fill = measureRoiSheetFillRatio(stripQuad, canvas.width, canvas.height);
     // Mesa alrededor: el quad de franjas no llena el frame.
     if (fill < 0.72) return false;
-  } else if (countCalifacilCornerMarkers(canvas) < 3) {
-    return false;
+    return true;
   }
-
-  return true;
+  // Letter aspect sin stripQuad: solo flat si ya hay ≥3 esquinas (escaneo recortado).
+  if (isCalifacilWarpedLetterCanvas(canvas) && countCalifacilCornerMarkers(canvas) >= 3) {
+    return true;
+  }
+  return countCalifacilCornerMarkers(canvas) >= 3;
 }
 
 /** Clasifica subidas desktop para enrutar normalización y escaneo OMR. */
@@ -381,7 +382,8 @@ export function normalizeCalifacilGradeDocumentCanvas(
     if (isPhotoSheetWarpAcceptable(warped)) {
       const cropped =
         prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: false }) ?? warped;
-      if (isPhotoSheetWarpAcceptable(cropped) || isCalifacilWarpedLetterCanvas(cropped)) {
+      // Exigir Acceptable o soft fill; no aceptar solo por aspect carta.
+      if (isPhotoSheetWarpAcceptable(cropped)) {
         return finishOk(
           cropped,
           alignment ?? measureWarpedFiducialAlignment(cropped, maxErrorPx),
@@ -418,6 +420,13 @@ export function normalizeCalifacilGradeDocumentCanvas(
     if (ok) return ok;
   }
 
+  // Fallback más completo antes de rechazar (fotos con perspectiva/luz media).
+  const fullWarp = warpCalifacilMobileCapture(base, { maxErrorPx });
+  if (fullWarp.warped) {
+    const ok = tryPhotoDoc(fullWarp.warped, fullWarp.alignment, true);
+    if (ok) return ok;
+  }
+
   const corner = warpCalifacilSheetFromCornerMarkers(base);
   if (corner) {
     const refined = refineWarpedCalifacilSheet(corner, { fast: true });
@@ -438,6 +447,11 @@ export function normalizeCalifacilGradeDocumentCanvas(
     const orientedWarp = warpCalifacilMobileCaptureFast(oriented, { maxErrorPx });
     if (orientedWarp.warped) {
       const ok = tryPhotoDoc(orientedWarp.warped, orientedWarp.alignment, true);
+      if (ok) return ok;
+    }
+    const orientedFull = warpCalifacilMobileCapture(oriented, { maxErrorPx });
+    if (orientedFull.warped) {
+      const ok = tryPhotoDoc(orientedFull.warped, orientedFull.alignment, true);
       if (ok) return ok;
     }
     const orientedCorner = warpCalifacilSheetFromCornerMarkers(oriented);

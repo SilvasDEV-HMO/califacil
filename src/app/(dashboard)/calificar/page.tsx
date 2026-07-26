@@ -901,6 +901,7 @@ export default function CalificarPage() {
         sheets[sheetIndexRef.current]?.length ?? omrRowCount;
       const meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
         activeRows,
+        letterCanvas: displayCanvas,
       });
       // Marco naranja en coords carta (preview), no en canvas de referencia.
       const orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
@@ -1288,6 +1289,9 @@ export default function CalificarPage() {
         toast.error('Selecciona un examen válido antes de escanear.');
         return { success: false };
       }
+      // Watchdog / nueva subida: si gen cambia, abortar sin abrir revisión.
+      const genAtStart = gradeReadGenRef.current;
+      const isStaleRead = () => genAtStart !== gradeReadGenRef.current;
       const skipReviewUi = opts?.skipReviewUi;
       const preWarped = Boolean(opts?.preWarped);
       const chunk = sheets[sheetIndexRef.current] ?? [];
@@ -1341,6 +1345,7 @@ export default function CalificarPage() {
             rowCount: omrRowCount,
           });
           await yieldForSpinnerPaint();
+          if (isStaleRead()) return { success: false };
           // Foto sin hoja sola: no calificar con mesa/fondo.
           if (!flatDocument && !normalized.sheetDetected) {
             toast.error(
@@ -1479,6 +1484,7 @@ export default function CalificarPage() {
           warpAlignment: gradeWarpAlignment,
           liveLockedAnswers: liveLockedAnswersRef.current,
         }));
+      if (isStaleRead()) return { success: false };
 
       if (isMobileCamera && skipReviewUi && !reading.meta.geometry) {
         const hasPicks = reading.meta.picks.some((p) => p != null);
@@ -1720,6 +1726,7 @@ export default function CalificarPage() {
         } else {
           await setPreviewFromSource(activeScanSource, fallbackFile);
         }
+        if (isStaleRead()) return { success: false };
         // Desktop: overlay anclado a referencia o a carta warpeada (hoja sola).
         let reviewGeom = meta.geometry;
         if (
@@ -2006,7 +2013,10 @@ export default function CalificarPage() {
       const pseudoFile = await canvasToJpegFile(scanCanvas, `pdf-pagina-${pageNumber}.jpg`);
       flushSync(() => setLiveStatus('Leyendo examen…'));
       await yieldForSpinnerPaint();
-      await finalizeCapturedSheet(scanCanvas, pseudoFile);
+      await finalizeCapturedSheet(scanCanvas, pseudoFile, {
+        displaySource: normalized.displayCanvas ?? scanCanvas,
+        skipSheetValidation: true,
+      });
     },
     [finalizeCapturedSheet, omrCols, omrRowCount]
   );
@@ -3515,15 +3525,9 @@ export default function CalificarPage() {
         return;
       }
 
-      // Galería: franjas/fiduciales antes que largest-quad (mesa/borde).
-      // Live: frameQuad de cámara si viene; si no, strips → live → largest.
+      // Galería / live: franjas o frameQuad del gate. Nunca largestQuad (mesa/borde).
       const stripQuad = detectAnswerSheetQuadViaAlignStrips(fullCanvas);
-      const frameQuad = opts?.fromGallery
-        ? (opts?.frameQuad ?? stripQuad)
-        : (opts?.frameQuad ??
-          stripQuad ??
-          detectMobileLiveSheetQuad(fullCanvas) ??
-          detectLargestQuadInRoiCanvas(fullCanvas));
+      const frameQuad = opts?.frameQuad ?? stripQuad;
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
       let sheetKind: ZipGradeSheetKind =
@@ -3762,7 +3766,7 @@ export default function CalificarPage() {
   const processMobileSheetCapture = useCallback(
     async (
       video: HTMLVideoElement,
-      _opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
       playAutoCaptureClickSound();
       // Frame fresco del sensor (sin sleep largo).
@@ -3795,11 +3799,17 @@ export default function CalificarPage() {
       });
       await yieldForSpinnerPaint();
 
-      // Un solo frame: detectar quad sobre el canvas capturado (nunca smoothed del live).
+      // Preferir ROI del gate "Listo" (no redetectar con largestQuad / mesa).
+      const gateQuad =
+        opts?.roiQuad && opts?.roiCapture
+          ? frameQuadOnFullCanvas(opts.roiQuad, opts.roiCapture, fullCanvas)
+          : null;
+      const stripQuad = detectAnswerSheetQuadViaAlignStrips(fullCanvas);
       const frameQuad =
-        detectMobileLiveSheetQuad(fullCanvas) ??
-        detectAnswerSheetQuadViaAlignStrips(fullCanvas) ??
-        detectLargestQuadInRoiCanvas(fullCanvas);
+        gateQuad ??
+        stripQuad ??
+        detectMobileLiveSheetQuad(fullCanvas);
+      // No usar detectLargestQuadInRoiCanvas aquí: suele pillar mesa/borde.
 
       await processMobileCapturedCanvas(fullCanvas, video, { frameQuad });
     },

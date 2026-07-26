@@ -77,9 +77,11 @@ function isDesktopFastPassEnough(
   displayCanvas: HTMLCanvasElement,
   columns: number
 ): boolean {
+  // Blank real por tinta: no hace falta recovery.
   if (isAnswerSheetOmrMostlyBlank(meta, rows)) return true;
   const resolved = countResolvedPicks(meta, rows);
-  if (resolved === 0) return true;
+  // 0 picks con tinta/ruido no es "enough": hay que intentar strip recovery.
+  if (resolved === 0) return false;
   // Foto/PDF: con ≥40% lecturas basta el pase rápido (evita «Leyendo…» eterno).
   if (resolved >= Math.ceil(rows * 0.4)) return true;
   if (isReferenceGradeExam(rows, columns) && isReferenceGradeCanvasAnchor(displayCanvas.width, displayCanvas.height)) {
@@ -323,12 +325,13 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
  * Sin segundo pase de 160/320 iters (evita «Calificando…» eterno).
  * Clave del examen (expectedPicks) se aplica en el popup, no aquí.
  * `activeRows` = preguntas reales cuando la rejilla es plantilla fija 30.
+ * `letterCanvas` = carta warpeada para retry si el canvas de referencia sale débil.
  */
 export async function scanWarpedGradeMobileAsync(
   displayCanvas: HTMLCanvasElement,
   columns: number,
   rows: number,
-  opts?: { activeRows?: number }
+  opts?: { activeRows?: number; letterCanvas?: HTMLCanvasElement }
 ): Promise<OmrScanMetaResult> {
   const activeRows = opts?.activeRows ?? rows;
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_GRADE_SCAN_MAX_SIDE);
@@ -356,7 +359,8 @@ export async function scanWarpedGradeMobileAsync(
     columns,
     { skipBubbleReattach: true }
   );
-  meta = sanitizeAnswerSheetOmrMeta(meta, rows);
+  // Sanitizar con preguntas reales (no plantilla 30) para no blankear hojas parciales.
+  meta = sanitizeAnswerSheetOmrMeta(meta, activeRows);
 
   if (!isWeakMobileOmrMeta(meta, rows, activeRows)) {
     return meta;
@@ -367,8 +371,42 @@ export async function scanWarpedGradeMobileAsync(
   let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns, {
     skipBubbleReattach: true,
   });
-  stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
-  return pickBetterOmrMeta(meta, stripMeta, activeRows);
+  stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, activeRows);
+  meta = pickBetterOmrMeta(meta, stripMeta, activeRows);
+
+  // Si sigue débil y hay carta distinta del canvas de lectura, reintentar OMR en carta.
+  const letter = opts?.letterCanvas;
+  if (
+    letter &&
+    letter !== displayCanvas &&
+    isWeakMobileOmrMeta(meta, rows, activeRows)
+  ) {
+    const letterScan = gradeScanCanvas(letter, OMR_GRADE_SCAN_MAX_SIDE);
+    const letterUnified = runUnifiedOmrPipeline(letterScan, columns, rows, {
+      fastMode: true,
+      maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
+      stagnantLimit: MOBILE_FAST_STAGNANT,
+    });
+    let letterMeta = finalizeUnifiedDisplayMeta(
+      letter,
+      unifiedResultToMeta(letterUnified),
+      rows,
+      columns,
+      { skipBubbleReattach: true }
+    );
+    letterMeta = sanitizeAnswerSheetOmrMeta(letterMeta, activeRows);
+    if (isWeakMobileOmrMeta(letterMeta, rows, activeRows)) {
+      const letterStrip = runStripFallbackFast(letter, columns, rows);
+      let letterStripMeta = finalizeUnifiedDisplayMeta(letter, letterStrip, rows, columns, {
+        skipBubbleReattach: true,
+      });
+      letterStripMeta = sanitizeAnswerSheetOmrMeta(letterStripMeta, activeRows);
+      letterMeta = pickBetterOmrMeta(letterMeta, letterStripMeta, activeRows);
+    }
+    meta = pickBetterOmrMeta(meta, letterMeta, activeRows);
+  }
+
+  return meta;
 }
 
 export function scanLiveOmrUnifiedOrLegacy(

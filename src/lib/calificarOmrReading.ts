@@ -6,6 +6,7 @@ import {
   autoOrientCalifacilSheet,
   califacilImageToJpegDataUrl,
   isAnswerSheetOmrMostlyBlank,
+  isCalifacilWarpedLetterCanvas,
   prepareCalifacilScanInput,
   sanitizeAnswerSheetOmrMeta,
   type OmrScanMetaResult,
@@ -236,6 +237,12 @@ export async function runCalifacilOmrReadingPipeline(
   }
   let activeScanSource: HTMLImageElement | HTMLCanvasElement = scanCanvas ?? oriented;
   let meta: OmrScanMetaResult;
+  const letterRetryCanvas =
+    oriented instanceof HTMLCanvasElement &&
+    isCalifacilWarpedLetterCanvas(oriented) &&
+    oriented !== scanCanvas
+      ? oriented
+      : undefined;
   const useMobileFastPath =
     Boolean(isMobileCamera && preWarped && scanCanvas) ||
     Boolean(isMobile && preWarped && scanCanvas && !fallbackFile) ||
@@ -251,6 +258,7 @@ export async function runCalifacilOmrReadingPipeline(
     // Un solo perfil rápido (nunca 320 iters).
     meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
       activeRows: chunk.length,
+      letterCanvas: letterRetryCanvas,
     });
   } else if (useWarpedScan && scanCanvas) {
     meta = await scanWarpedGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
@@ -259,6 +267,7 @@ export async function runCalifacilOmrReadingPipeline(
   } else if (scanCanvas && isMobile) {
     meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
       activeRows: chunk.length,
+      letterCanvas: letterRetryCanvas,
     });
   } else {
     meta = scanLiveOmrUnifiedOrLegacy(activeScanSource, omrCols, {
@@ -286,18 +295,8 @@ export async function runCalifacilOmrReadingPipeline(
   const minResolved = Math.max(1, Math.ceil(chunk.length * CALIFACIL_MIN_AUTO_READ_RATIO));
   let mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
 
-  // PDF/escaneo plano sin ninguna lectura: tratar como hoja en blanco (0%), sin visión.
-  if (
-    !mostlyBlank &&
-    mapped.resolvedCount === 0 &&
-    (uploadKind === 'pdf' ||
-      uploadKind === 'flatDocument' ||
-      uploadKind === 'flatScan' ||
-      Boolean(fallbackFile && !isMobileCamera))
-  ) {
-    mostlyBlank = true;
-  }
-
+  // Solo forzar blank si la señal de tinta indica hoja vacía real.
+  // No tratar "0 picks por fallo de geometría" como 0% en PDF/flat/foto.
   if (mostlyBlank) {
     raw = raw.map(() => null);
     mapped = mapRawToDraftDetailed(raw, chunk);
@@ -683,11 +682,8 @@ export function buildCalifacilOmrReadingOverride(
   liveLockedAnswers: Record<string, string>,
   warpAlignment: WarpAlignmentReport | null = null
 ): CalifacilOmrReadingResult {
-  // Siempre sanitizar primero (anula tinta débil por fila + blank total).
-  const sanitizedFull = sanitizeAnswerSheetOmrMeta(
-    meta,
-    Math.max(chunk.length, meta.picks.length || chunk.length)
-  );
+  // Sanitizar con preguntas reales del chunk (no plantilla 30).
+  const sanitizedFull = sanitizeAnswerSheetOmrMeta(meta, chunk.length);
   const mostlyBlank = isAnswerSheetOmrMostlyBlank(sanitizedFull, chunk.length);
   const sanitized = mostlyBlank
     ? {
