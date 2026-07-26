@@ -1436,7 +1436,9 @@ export default function CalificarPage() {
             (desktopUploadKind
               ? desktopUploadKind === 'pdf' ||
                 desktopUploadKind === 'flatDocument' ||
-                desktopUploadKind === 'flatScan'
+                desktopUploadKind === 'flatScan' ||
+                desktopUploadKind === 'warpedPhoto' ||
+                desktopUploadKind === 'photoCrop'
               : Boolean(isMobileCamera)),
           skipReviewUi,
           sheetStrict,
@@ -1953,7 +1955,7 @@ export default function CalificarPage() {
         downscaleCanvasForOmrScan(normalized.canvas, PDF_OMR_RENDER_MAX_SIDE) ??
         normalized.canvas;
       const pseudoFile = await canvasToJpegFile(scanCanvas, `pdf-pagina-${pageNumber}.jpg`);
-      flushSync(() => setLiveStatus('Leyendo respuestas…'));
+      flushSync(() => setLiveStatus('Leyendo examen…'));
       await yieldForSpinnerPaint();
       await finalizeCapturedSheet(scanCanvas, pseudoFile);
     },
@@ -2089,7 +2091,7 @@ export default function CalificarPage() {
         }
         await processMobileCapturedCanvas(fullCanvas, videoRef.current, { fromGallery: true });
       } else {
-        setLiveStatus('Leyendo respuestas…');
+        setLiveStatus('Leyendo examen…');
         await yieldForSpinnerPaint();
         await finalizeCapturedSheet(img, file);
       }
@@ -4514,7 +4516,7 @@ export default function CalificarPage() {
                       {scanBusy ? (
                         <>
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-                          Leyendo archivo…
+                          Leyendo examen…
                         </>
                       ) : (
                         'Elegir imagen…'
@@ -4808,7 +4810,7 @@ export default function CalificarPage() {
                               className="mr-2 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
                               aria-hidden
                             />
-                            Leyendo archivo…
+                            Leyendo examen…
                           </>
                         ) : (
                           'Elegir imagen…'

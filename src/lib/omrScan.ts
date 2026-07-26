@@ -2105,26 +2105,43 @@ function findCornerMarkerPoint(
   const step = Math.max(2, Math.floor(patchSize / 2));
   let bestScore = 0;
   let bestCenter: Point | null = null;
+  let regionLumSum = 0;
+  let regionN = 0;
 
   for (let py = y0; py <= y1 - patchSize; py += step) {
     for (let px = x0; px <= x1 - patchSize; px += step) {
       let dark = 0;
+      let lumSum = 0;
       const total = patchSize * patchSize;
       for (let dy = 0; dy < patchSize; dy++) {
         for (let dx = 0; dx < patchSize; dx++) {
           const i = ((py + dy) * width + (px + dx)) * 4;
           const lum = d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
-          if (lum < 85) dark++;
+          lumSum += lum;
+          regionLumSum += lum;
+          regionN++;
+          // Cámara real: negros impresos a menudo ~70–100 bajo luz cálida.
+          if (lum < 100) dark++;
         }
       }
-      const score = dark / total;
+      const mean = lumSum / total;
+      // Preferir núcleos compactos oscuros (no mesa entera).
+      const score = dark / total - mean / 400;
       if (score > bestScore) {
         bestScore = score;
         bestCenter = { x: px + patchSize / 2, y: py + patchSize / 2 };
       }
     }
   }
-  if (bestScore < 0.28) return null;
+  if (!bestCenter) return null;
+  const regionMean = regionN > 0 ? regionLumSum / regionN : 128;
+  // Aceptar si el mejor parche es claramente más oscuro que la región o tiene >=22% oscuros.
+  if (bestScore < 0.18) return null;
+  const bestI =
+    (Math.round(bestCenter.y) * width + Math.round(bestCenter.x)) * 4;
+  const bestLum =
+    d[bestI]! * 0.299 + d[bestI + 1]! * 0.587 + d[bestI + 2]! * 0.114;
+  if (bestLum > regionMean - 8 && bestScore < 0.32) return null;
   return bestCenter;
 }
 
@@ -3146,11 +3163,12 @@ function isPrintedCornerFiducialPatch(
   const h = patchH;
   if (w < 8 || h < 8) return false;
 
-  let innerDark = 0;
-  let innerCount = 0;
   let innerLumSum = 0;
+  let innerCount = 0;
   let outerLumSum = 0;
   let outerCount = 0;
+  let midLumSum = 0;
+  let midCount = 0;
 
   const innerLo = 0.28;
   const innerHi = 0.72;
@@ -3171,37 +3189,65 @@ function isPrintedCornerFiducialPatch(
       if (inInner) {
         innerCount++;
         innerLumSum += lum;
-        if (lum < 52) innerDark++;
       } else if (inOuterBand) {
         outerCount++;
         outerLumSum += lum;
+      } else {
+        midCount++;
+        midLumSum += lum;
       }
     }
   }
 
   if (innerCount < 4 || outerCount < 4) return false;
 
-  const innerDarkFrac = innerDark / innerCount;
   const innerMean = innerLumSum / innerCount;
   const outerMean = outerLumSum / outerCount;
+  const midMean = midCount > 0 ? midLumSum / midCount : outerMean;
 
-  // Defaults más cercanos al gate live (antes 0.65 / 65 / 28 — demasiado estrictos post-warp).
-  const minDarkFrac = topCornerGlare ? 0.5 : nearStripEdge ? 0.54 : 0.55;
+  // Umbral adaptativo: en luz cálida/tenue el negro impreso no baja de ~52.
+  const darkCut = Math.min(
+    98,
+    Math.max(48, Math.min(outerMean, midMean) * 0.62 + 10)
+  );
+
+  let innerDark = 0;
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const nx = px / w;
+      const ny = py / h;
+      if (nx < innerLo || nx > innerHi || ny < innerLo || ny > innerHi) continue;
+      const idx = (py * w + px) * 4;
+      const lum = data[idx]! * 0.299 + data[idx + 1]! * 0.587 + data[idx + 2]! * 0.114;
+      if (lum < darkCut) innerDark++;
+    }
+  }
+
+  const innerDarkFrac = innerDark / innerCount;
+
+  // Defaults pensados para cámara real (mesa oscura + glare); más permisivos que post-warp PDF.
+  const minDarkFrac = topCornerGlare ? 0.38 : nearStripEdge ? 0.4 : 0.42;
   if (innerDarkFrac < minDarkFrac) return false;
-  if (innerMean > (topCornerGlare ? 82 : nearStripEdge ? 74 : 72)) return false;
+  if (innerMean > (topCornerGlare ? 105 : nearStripEdge ? 95 : 92)) return false;
 
-  const contrast = outerMean - innerMean;
-  if (contrast >= (topCornerGlare ? 16 : nearStripEdge ? 18 : 22)) return true;
-  // Junto a franjas negras laterales el anillo exterior también es oscuro.
-  if (innerDarkFrac >= 0.68 && innerMean <= 62) return true;
-  if (innerDarkFrac >= 0.75 && innerMean <= 52) return true;
-  if (nearStripEdge && innerDarkFrac >= 0.62 && innerMean <= 68) return true;
-  if (topCornerGlare && innerDarkFrac >= 0.55 && innerMean <= 76) return true;
+  const contrastVsOuter = outerMean - innerMean;
+  const contrastVsMid = midMean - innerMean;
+  const contrast = Math.max(contrastVsOuter, contrastVsMid);
+
+  // Mesa oscura: el anillo exterior puede ser más oscuro que el papel; usar mid (papel).
+  if (contrast >= (topCornerGlare ? 10 : nearStripEdge ? 12 : 14)) return true;
+  if (innerDarkFrac >= 0.55 && innerMean <= 78) return true;
+  if (innerDarkFrac >= 0.62 && innerMean <= 68) return true;
+  if (innerDarkFrac >= 0.7 && innerMean <= 58) return true;
+  if (nearStripEdge && innerDarkFrac >= 0.48 && innerMean <= 85) return true;
+  if (topCornerGlare && innerDarkFrac >= 0.42 && innerMean <= 95) return true;
+  // Núcleo oscuro vs papel (mid) aunque el borde sea mesa.
+  if (contrastVsMid >= 18 && innerDarkFrac >= 0.4 && innerMean < midMean - 12) return true;
 
   return false;
 }
 
-/** Estado por esquina [TL, TR, BL, BR] de fiduciales negros en parches de esquina. */
+/** Estado por esquina [TL, TR, BL, BR] de fiduciales negros en parches (coords = top-left). */
 function detectFiducialsAtCornerPatches(
   ctx: CanvasRenderingContext2D,
   corners: { x: number; y: number }[],
@@ -3214,13 +3260,15 @@ function detectFiducialsAtCornerPatches(
   const detected: [boolean, boolean, boolean, boolean] = [false, false, false, false];
   for (let i = 0; i < 4; i++) {
     const c = corners[i]!;
-    const px = Math.max(0, Math.min(W - patchW, Math.round(c.x - patchW / 2)));
-    const py = Math.max(0, Math.min(H - patchH, Math.round(c.y - patchH / 2)));
+    // Esquinas vienen como top-left del parche (igual que countDarkCornerPatches).
+    const px = Math.max(0, Math.min(W - patchW, Math.round(c.x)));
+    const py = Math.max(0, Math.min(H - patchH, Math.round(c.y)));
     const id = ctx.getImageData(px, py, patchW, patchH);
     const nearStrip = Array.isArray(nearStripEdge)
       ? nearStripEdge[i] ?? false
       : nearStripEdge ?? false;
-    detected[i] = isPrintedCornerFiducialPatch(id, patchW, patchH, nearStrip);
+    const topGlare = i === 0 || i === 1;
+    detected[i] = isPrintedCornerFiducialPatch(id, patchW, patchH, nearStrip, topGlare);
   }
   return detected;
 }
@@ -3242,6 +3290,7 @@ const FIDUCIAL_NORM_PROBE_OFFSETS: Record<
     { dx: -0.006, dy: 0.018 },
     { dx: 0.012, dy: 0.006 },
     { dx: -0.012, dy: 0.008 },
+    { dx: 0.004, dy: -0.004 },
   ],
   tr: [
     { dx: 0, dy: 0 },
@@ -3250,13 +3299,22 @@ const FIDUCIAL_NORM_PROBE_OFFSETS: Record<
     { dx: -0.024, dy: 0.008 },
     { dx: -0.008, dy: 0.014 },
     { dx: -0.016, dy: 0.012 },
+    { dx: 0.004, dy: -0.004 },
   ],
-  bl: [{ dx: 0, dy: 0 }],
+  bl: [
+    { dx: 0, dy: 0 },
+    { dx: 0.008, dy: -0.01 },
+    { dx: -0.006, dy: -0.014 },
+    { dx: 0.012, dy: -0.006 },
+    { dx: -0.01, dy: -0.008 },
+  ],
   br: [
     { dx: 0, dy: 0 },
     { dx: -0.012, dy: 0 },
     { dx: -0.018, dy: -0.004 },
     { dx: -0.024, dy: -0.008 },
+    { dx: -0.008, dy: -0.012 },
+    { dx: 0.004, dy: -0.004 },
   ],
 };
 
@@ -3423,15 +3481,39 @@ export function detectAnswerSheetFiducialsInRoi(
     );
     merged = inferMissingFiducialFromStripQuad(canvas, merged, stripQuad);
   }
-  if (merged.some(Boolean)) return merged;
+  if (merged.filter(Boolean).length >= 3) return merged;
 
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return [false, false, false, false];
+  if (!ctx) return merged;
   const W = canvas.width;
   const H = canvas.height;
-  if (W < 80 || H < 80) return [false, false, false, false];
+  if (W < 80 || H < 80) return merged;
+
+  // Fallback: parches en esquinas del quad de franjas (página estimada) + ROI.
   const patchW = Math.max(8, Math.round(W * 0.085));
   const patchH = Math.max(8, Math.round(H * 0.085));
+  if (stripQuad) {
+    const [tl, tr, br, bl] = stripQuad;
+    const insetX = Math.max(2, Math.round(patchW * 0.12));
+    const insetY = Math.max(2, Math.round(patchH * 0.12));
+    const stripCorners = [
+      { x: tl.x + insetX, y: tl.y + insetY },
+      { x: tr.x - patchW - insetX, y: tr.y + insetY },
+      { x: bl.x + insetX, y: bl.y - patchH - insetY },
+      { x: br.x - patchW - insetX, y: br.y - patchH - insetY },
+    ];
+    merged = mergeFiducialCornerStates(
+      merged,
+      detectFiducialsAtCornerPatches(ctx, stripCorners, patchW, patchH, [
+        false,
+        true,
+        false,
+        true,
+      ])
+    );
+    if (merged.filter(Boolean).length >= 3) return merged;
+  }
+
   const inset = Math.max(4, Math.round(W * 0.022));
   const corners = [
     { x: inset, y: inset },
@@ -3439,7 +3521,10 @@ export function detectAnswerSheetFiducialsInRoi(
     { x: inset, y: H - patchH - inset },
     { x: W - patchW - inset, y: H - patchH - inset },
   ];
-  return detectFiducialsAtCornerPatches(ctx, corners, patchW, patchH);
+  return mergeFiducialCornerStates(
+    merged,
+    detectFiducialsAtCornerPatches(ctx, corners, patchW, patchH)
+  );
 }
 
 /** Cuenta cuadros negros de esquina impresos visibles en las esquinas del ROI. */

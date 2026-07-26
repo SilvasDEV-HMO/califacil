@@ -332,8 +332,12 @@ export function normalizeCalifacilGradeDocumentCanvas(
   }
 
   for (const attempt of [
-    () => warpCalifacilMobileCapture(base, { maxErrorPx, fallbackMaxErrorPx: maxErrorPx + 12 }),
     () => warpCalifacilMobileCaptureFast(base, { maxErrorPx }),
+    () =>
+      warpCalifacilMobileCapture(base, {
+        maxErrorPx,
+        fallbackMaxErrorPx: maxErrorPx + 12,
+      }),
   ]) {
     const result = attempt();
     if (result.warped && isMobileWarpedAnswerSheetAcceptable(result.warped)) {

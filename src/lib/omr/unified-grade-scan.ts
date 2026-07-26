@@ -32,9 +32,9 @@ const OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE = 1600;
 /** Presupuesto móvil / desktop fast: ~70 iters. */
 const MOBILE_FAST_OPTIMIZE_ITERS = 70;
 const MOBILE_FAST_STAGNANT = 10;
-/** Segundo pase desktop solo si fast fue débil (antes 320). */
-const DESKTOP_WEAK_OPTIMIZE_ITERS = 140;
-const DESKTOP_WEAK_STAGNANT = 16;
+/** Segundo pase desktop solo si fast fue débil (antes 140 / 320). */
+const DESKTOP_WEAK_OPTIMIZE_ITERS = 80;
+const DESKTOP_WEAK_STAGNANT = 12;
 
 function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
   return downscaleCanvasForOmrScan(canvas, maxSide) ?? canvas;
@@ -81,11 +81,12 @@ function isDesktopFastPassEnough(
   columns: number
 ): boolean {
   if (isAnswerSheetOmrMostlyBlank(meta, rows)) return true;
+  const resolved = countResolvedPicks(meta, rows);
+  if (resolved === 0) return true;
+  // Foto/PDF: con ≥40% lecturas basta el pase rápido (evita «Leyendo…» eterno).
+  if (resolved >= Math.ceil(rows * 0.4)) return true;
   if (isReferenceGradeExam(rows, columns) && isReferenceGradeCanvasAnchor(displayCanvas.width, displayCanvas.height)) {
-    // Exact/near ref: con ≥55% lecturas o blank ya limpio basta el pase fast.
-    const resolved = countResolvedPicks(meta, rows);
     if (resolved >= Math.ceil(rows * 0.55)) return true;
-    if (resolved === 0) return true;
   }
   return isStrongMobileOmrMeta(meta, rows);
 }
@@ -276,8 +277,22 @@ export function scanWarpedGradeUnifiedOrLegacy(
 ): OmrScanMetaResult {
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_GRADE_SCAN_MAX_SIDE);
   if (isUnifiedOmrEngineEnabled()) {
-    const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, { fastMode: false });
-    return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+    const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+      fastMode: true,
+      maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
+      stagnantLimit: MOBILE_FAST_STAGNANT,
+    });
+    let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
+    meta = sanitizeAnswerSheetOmrMeta(meta, rows);
+    if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
+      return meta;
+    }
+    const full = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+      fastMode: false,
+      maxOptimizeIterations: DESKTOP_WEAK_OPTIMIZE_ITERS,
+      stagnantLimit: DESKTOP_WEAK_STAGNANT,
+    });
+    return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(full), rows, columns);
   }
   return scanWarpedGradeDocument(displayCanvas, columns, rows);
 }
@@ -289,7 +304,29 @@ export async function scanWarpedGradeUnifiedOrLegacyAsync(
 ): Promise<OmrScanMetaResult> {
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_GRADE_SCAN_MAX_SIDE);
   if (isUnifiedOmrEngineEnabled()) {
-    const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, { fastMode: false });
+    await new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => resolve());
+        return;
+      }
+      setTimeout(resolve, 0);
+    });
+    const fast = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+      fastMode: true,
+      maxOptimizeIterations: MOBILE_FAST_OPTIMIZE_ITERS,
+      stagnantLimit: MOBILE_FAST_STAGNANT,
+    });
+    let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(fast), rows, columns);
+    meta = sanitizeAnswerSheetOmrMeta(meta, rows);
+    if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
+      return meta;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const unified = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
+      fastMode: false,
+      maxOptimizeIterations: DESKTOP_WEAK_OPTIMIZE_ITERS,
+      stagnantLimit: DESKTOP_WEAK_STAGNANT,
+    });
     return finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(unified), rows, columns);
   }
   return scanWarpedGradeDocumentAsync(displayCanvas, columns, rows);

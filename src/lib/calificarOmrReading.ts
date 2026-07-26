@@ -8,7 +8,6 @@ import {
   isAnswerSheetOmrMostlyBlank,
   prepareCalifacilScanInput,
   sanitizeAnswerSheetOmrMeta,
-  scanWarpedMobileCaptureSheetFast,
   type OmrScanMetaResult,
   type WarpAlignmentReport,
 } from '@/lib/omrScan';
@@ -113,7 +112,9 @@ function desktopUploadSkipsVision(uploadKind?: DesktopUploadKind): boolean {
   return (
     uploadKind === 'pdf' ||
     uploadKind === 'flatDocument' ||
-    uploadKind === 'flatScan'
+    uploadKind === 'flatScan' ||
+    uploadKind === 'warpedPhoto' ||
+    uploadKind === 'photoCrop'
   );
 }
 
@@ -237,10 +238,17 @@ export async function runCalifacilOmrReadingPipeline(
   let meta: OmrScanMetaResult;
   const useMobileFastPath =
     Boolean(isMobileCamera && preWarped && scanCanvas) ||
-    Boolean(isMobile && preWarped && scanCanvas && !fallbackFile);
+    Boolean(isMobile && preWarped && scanCanvas && !fallbackFile) ||
+    // Desktop foto: mismo perfil rápido que móvil (antes caía en 320 iters y se colgaba).
+    Boolean(
+      !isMobile &&
+        !isMobileCamera &&
+        scanCanvas &&
+        (uploadKind === 'warpedPhoto' || uploadKind === 'photoCrop')
+    );
 
   if (useMobileFastPath && scanCanvas) {
-    // Cámara móvil: un solo perfil rápido (nunca 320 iters).
+    // Un solo perfil rápido (nunca 320 iters).
     meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
       activeRows: chunk.length,
     });
@@ -343,15 +351,17 @@ export async function runCalifacilOmrReadingPipeline(
   if (shouldRunDesktopRecovery) {
     let recoveryMeta: OmrScanMetaResult | null = null;
     const desktopScanCanvas = scanCanvas;
-    if (uploadKind === 'warpedPhoto') {
+    if (uploadKind === 'warpedPhoto' || uploadKind === 'photoCrop') {
       if (desktopScanCanvas) {
-        recoveryMeta = scanWarpedMobileCaptureSheetFast(desktopScanCanvas, omrCols, omrRowCount);
+        recoveryMeta = await scanWarpedGradeMobileAsync(desktopScanCanvas, omrCols, omrRowCount, {
+          activeRows: chunk.length,
+        });
       }
     } else {
       const recoverySource =
         autoOrientCalifacilSheet(source, omrCols, {
           useGuideCrop: false,
-          allowTiltSweep: true,
+          allowTiltSweep: false,
         }) ?? oriented;
       const recoveryCanvas = resolveScanCanvas(recoverySource);
       if (recoveryCanvas) {
