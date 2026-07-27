@@ -3258,16 +3258,15 @@ export default function CalificarPage() {
     let correctCount = 0;
     let earnedPoints = 0;
     let maxMcPoints = 0;
-    const rows = questions.map((question: Question) => {
+    // Solo MC: no crear/pisar filas de abiertas/pizarrón con score 0 (diluía la nota en Resultados).
+    const rows = mcQuestions.map((question: Question) => {
       const answerText = (merged[question.id] ?? '').trim();
       const { isCorrect, score } = gradeMcQuestionForPersist(question, answerText, virtualKeyMaps);
       const pts = questionPoints(question);
-      if (question.type === 'multiple_choice') {
-        maxMcPoints += pts;
-        if (isCorrect) {
-          correctCount++;
-          earnedPoints += score;
-        }
+      maxMcPoints += pts;
+      if (isCorrect) {
+        correctCount++;
+        earnedPoints += score;
       }
 
       return {
