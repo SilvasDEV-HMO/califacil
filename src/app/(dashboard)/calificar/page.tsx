@@ -1799,12 +1799,12 @@ export default function CalificarPage() {
 
         setDraftSelections(mapped.draft);
         setReviewOmrPicks(raw.slice(0, chunk.length));
-        // Preview = mismo canvas donde se leyeron bolitas (evita overlay torcido en scan crudo).
+        // Desktop/móvil: preview = canvas de lectura (enderezado), nunca el JPG crudo inclinado.
         const previewCanvas =
+          (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null) ??
           (meta.reviewSourceCanvas instanceof HTMLCanvasElement
             ? meta.reviewSourceCanvas
             : null) ??
-          (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null) ??
           (opts?.displaySource instanceof HTMLCanvasElement ? opts.displaySource : null) ??
           gradeDisplaySource;
         if (previewCanvas) {
@@ -1813,65 +1813,41 @@ export default function CalificarPage() {
           await setPreviewFromSource(activeScanSource, fallbackFile);
         }
         if (isStaleRead()) return { success: false };
-        // Overlay siempre en el espacio del preview (reconstruir si geometry viene de otro canvas).
+
+        // Siempre reconstruir overlay + re-leer en el MISMO canvas del preview.
         let reviewGeom = meta.geometry;
-        const hasStudentPicks = raw.slice(0, chunk.length).some((p) => p != null);
-        const geomMatchesPreview =
-          Boolean(meta.geometry?.cells?.length) &&
-          previewCanvas != null &&
-          (meta.geometry!.imageWidth == null ||
-            Math.abs((meta.geometry!.imageWidth ?? previewCanvas.width) - previewCanvas.width) <=
-              2) &&
-          (meta.geometry!.imageHeight == null ||
-            Math.abs((meta.geometry!.imageHeight ?? previewCanvas.height) - previewCanvas.height) <=
-              2);
-        if (previewCanvas && hasStudentPicks && geomMatchesPreview && meta.geometry?.cells?.length) {
-          reviewGeom = syncCalifacilOmrGeometryImageSize(
-            meta.geometry,
-            previewCanvas.width,
-            previewCanvas.height
-          );
-        } else if (
-          previewCanvas &&
-          isReferenceGradeCanvasAnchor(previewCanvas.width, previewCanvas.height)
-        ) {
-          const desktopOverlay = buildDesktopDisplayOverlayGeometry(
-            previewCanvas,
-            omrCols,
-            omrRowCount
-          );
-          if (desktopOverlay) {
+        let picksForUi = raw.slice(0, chunk.length);
+        if (previewCanvas) {
+          if (isReferenceGradeCanvasAnchor(previewCanvas.width, previewCanvas.height)) {
+            const desktopOverlay = buildDesktopDisplayOverlayGeometry(
+              previewCanvas,
+              omrCols,
+              omrRowCount
+            );
+            if (desktopOverlay) {
+              reviewGeom = syncCalifacilOmrGeometryImageSize(
+                desktopOverlay,
+                previewCanvas.width,
+                previewCanvas.height
+              );
+            }
+          } else if (isCalifacilWarpedLetterCanvas(previewCanvas)) {
             reviewGeom = syncCalifacilOmrGeometryImageSize(
-              desktopOverlay,
+              buildLetterDisplayOverlayGeometry(previewCanvas, omrCols, omrRowCount, {
+                skipSnap: false,
+                maxShiftRatio: 0.22,
+              }),
               previewCanvas.width,
               previewCanvas.height
             );
-            if (hasStudentPicks || raw.some((p) => p != null)) {
-              const reread = rereadOmrPicksOnGeometry(
-                previewCanvas,
-                reviewGeom,
-                omrCols,
-                chunk.length,
-                meta
-              );
-              if (
-                countResolvedOmrPicks(reread.picks.slice(0, chunk.length)) >=
-                countResolvedOmrPicks(raw.slice(0, chunk.length))
-              ) {
-                raw.splice(0, raw.length, ...reread.picks);
-                setReviewOmrPicks(raw.slice(0, chunk.length));
-                const remapped = mapRawToDraft(raw, chunk);
-                setDraftSelections(remapped.draft);
-              }
-            }
+          } else if (reviewGeom) {
+            reviewGeom = syncCalifacilOmrGeometryImageSize(
+              reviewGeom,
+              previewCanvas.width,
+              previewCanvas.height
+            );
           }
-        } else if (previewCanvas && isCalifacilWarpedLetterCanvas(previewCanvas)) {
-          reviewGeom = syncCalifacilOmrGeometryImageSize(
-            buildLetterDisplayOverlayGeometry(previewCanvas, omrCols, omrRowCount),
-            previewCanvas.width,
-            previewCanvas.height
-          );
-          if (hasStudentPicks || raw.some((p) => p != null)) {
+          if (reviewGeom?.cells?.length) {
             const reread = rereadOmrPicksOnGeometry(
               previewCanvas,
               reviewGeom,
@@ -1879,22 +1855,16 @@ export default function CalificarPage() {
               chunk.length,
               meta
             );
-            if (
-              countResolvedOmrPicks(reread.picks.slice(0, chunk.length)) >=
-              countResolvedOmrPicks(raw.slice(0, chunk.length))
-            ) {
+            const rereadCount = countResolvedOmrPicks(reread.picks.slice(0, chunk.length));
+            const prevCount = countResolvedOmrPicks(picksForUi);
+            if (rereadCount >= Math.max(1, Math.ceil(chunk.length * 0.4)) || rereadCount >= prevCount) {
+              picksForUi = reread.picks.slice(0, chunk.length);
               raw.splice(0, raw.length, ...reread.picks);
-              setReviewOmrPicks(raw.slice(0, chunk.length));
+              setReviewOmrPicks(picksForUi);
               const remapped = mapRawToDraft(raw, chunk);
               setDraftSelections(remapped.draft);
             }
           }
-        } else if (reviewGeom && previewCanvas) {
-          reviewGeom = syncCalifacilOmrGeometryImageSize(
-            reviewGeom,
-            previewCanvas.width,
-            previewCanvas.height
-          );
         }
         setReviewOmrGeometry(reviewGeom);
         setPhase('revisar_hoja');
@@ -2152,7 +2122,7 @@ export default function CalificarPage() {
       flushSync(() => setLiveStatus('Leyendo examen…'));
       await yieldForSpinnerPaint();
       await finalizeCapturedSheet(scanCanvas, pseudoFile, {
-        displaySource: normalized.displayCanvas ?? scanCanvas,
+        displaySource: scanCanvas,
         skipSheetValidation: true,
       });
     },

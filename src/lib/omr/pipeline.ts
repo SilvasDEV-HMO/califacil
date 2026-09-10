@@ -368,9 +368,10 @@ export function normalizeCalifacilGradeDocumentCanvas(
     if (shouldReferenceAlign) {
       out = prepareReferenceGradeCanvas(display, columns, opts.rowCount!);
     }
+    // Preview = mismo canvas que OMR (enderezado). Evita overlay derecho sobre foto inclinada.
     return {
       canvas: out,
-      displayCanvas: display,
+      displayCanvas: out,
       alignment,
       normalized,
       sheetDetected: true,
@@ -418,9 +419,22 @@ export function normalizeCalifacilGradeDocumentCanvas(
     (opts?.flatDocument === true &&
       isLikelyFlatCalifacilDocument(base, columns, { flatDocument: true }));
 
-  // PDF / escaneo plano real: el documento ya es la hoja.
+  // PDF / escaneo plano: enderezar tilt; preview y OMR comparten el mismo canvas.
   if (useFlatPath) {
-    return finishOk(base, null, false);
+    const oriented =
+      autoOrientCalifacilSheet(base, columns, {
+        useGuideCrop: false,
+        allowTiltSweep: true,
+      }) ?? base;
+    // Foto de hoja inclinada clasificada como flat: warp a carta si hace falta.
+    if (countCalifacilCornerMarkers(oriented) < 3 || !hasCalifacilAlignStrips(oriented)) {
+      const fastWarp = warpCalifacilMobileCaptureFast(oriented, { maxErrorPx });
+      if (fastWarp.warped) {
+        const ok = tryPhotoDoc(fastWarp.warped, fastWarp.alignment, true);
+        if (ok) return ok;
+      }
+    }
+    return finishOk(oriented, null, oriented !== base);
   }
 
   // Foto: exigir hoja sola (nunca finish(base) con mesa).
