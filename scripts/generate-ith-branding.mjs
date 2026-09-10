@@ -10,17 +10,17 @@ const publicDir = path.join(root, 'public');
 
 const ithWordmarkSvg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="480" height="128" viewBox="0 0 480 128">
-  <rect width="480" height="128" fill="#000000"/>
+  <rect width="480" height="128" fill="#FFFFFF"/>
   <text x="240" y="82" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif"
         font-size="72" font-weight="800" fill="#F97316" letter-spacing="4">I.T.H.</text>
 </svg>`;
 
 const printBannerSvg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="220" viewBox="0 0 1400 220">
-  <rect width="1400" height="220" fill="#000000"/>
+  <rect width="1400" height="220" fill="#FFFFFF"/>
   <text x="48" y="130" font-family="Arial Black, Arial, Helvetica, sans-serif"
         font-size="64" font-weight="800" fill="#F97316">CALIFÁCIL</text>
-  <rect x="520" y="40" width="2" height="140" fill="#ffffff" opacity="0.55"/>
+  <rect x="520" y="40" width="2" height="140" fill="#E5E7EB"/>
   <text x="560" y="130" font-family="Arial Black, Arial, Helvetica, sans-serif"
         font-size="72" font-weight="800" fill="#F97316" letter-spacing="6">I.T.H.</text>
 </svg>`;
