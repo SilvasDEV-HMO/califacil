@@ -137,6 +137,8 @@ import {
 import {
   gradeLetterCanvas,
   prepareLetterGradeCanvas,
+  measureLetterGeometryBubbleFit,
+  LETTER_GRADE_MIN_BUBBLE_FIT,
 } from '@/lib/omr/grade-letter-canvas';
 import {
   buildDesktopDisplayOverlayGeometry,
@@ -922,6 +924,7 @@ export default function CalificarPage() {
           docCanvas: displayCanvas,
           displayCanvas,
           rejectedCorners: true as const,
+          bubbleFit: 0,
         };
       }
       if (
@@ -936,6 +939,7 @@ export default function CalificarPage() {
           docCanvas: displayCanvas,
           displayCanvas,
           rejectedCorners: true as const,
+          bubbleFit: 0,
         };
       }
 
@@ -944,9 +948,11 @@ export default function CalificarPage() {
         geometry: prepared.geometry,
       });
       let meta = graded.meta;
+      let bubbleFit = graded.bubbleFit;
 
-      // Recovery solo si bubble-fit / lectura débil en filas activas.
+      // Recovery solo si fit mejora (nunca por más picks inventados).
       if (
+        bubbleFit < LETTER_GRADE_MIN_BUBBLE_FIT ||
         isAnswerSheetOmrMostlyBlank(meta, scoredRows) ||
         isWeakMobileOmrMeta(meta, omrRowCount, scoredRows) ||
         !isStrongMobileOmrMeta(meta, omrRowCount, scoredRows)
@@ -957,16 +963,20 @@ export default function CalificarPage() {
           omrRowCount,
           meta
         );
-        if (isUsableOmrRecoveryMeta(snapMeta, scoredRows)) {
+        const snapGeom = snapMeta.geometry ?? meta.geometry;
+        const snapFit = snapGeom
+          ? measureLetterGeometryBubbleFit(displayCanvas, snapGeom, omrRowCount)
+          : 0;
+        if (
+          snapFit > bubbleFit + 0.02 &&
+          (isUsableOmrRecoveryMeta(snapMeta, scoredRows) ||
+            isAnswerSheetOmrMostlyBlank(snapMeta, scoredRows))
+        ) {
           meta = snapMeta;
+          bubbleFit = snapFit;
         } else if (
           isAnswerSheetOmrMostlyBlank(snapMeta, scoredRows) &&
           isAnswerSheetOmrMostlyBlank(meta, scoredRows)
-        ) {
-          meta = snapMeta;
-        } else if (
-          snapMeta.picks.filter((p) => p != null).length >
-          meta.picks.filter((p) => p != null).length
         ) {
           meta = snapMeta;
         }
@@ -978,6 +988,7 @@ export default function CalificarPage() {
         docCanvas: displayCanvas,
         displayCanvas,
         rejectedCorners: false as const,
+        bubbleFit,
       };
     },
     [omrCols, omrRowCount]
@@ -3929,34 +3940,36 @@ export default function CalificarPage() {
         const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
         const sameColCap = Math.max(5, Math.round(chunkRows * 0.55));
         const noColumnCollapse = (warpMeta.maxSameColumnCount ?? 0) <= sameColCap;
-        // Trusted: ≥70% filas del chunk con pick + sin colapso de columna.
+        const bubbleFit =
+          displayGeom != null
+            ? measureLetterGeometryBubbleFit(
+                resolved.previewCanvas,
+                displayGeom,
+                omrRowCount
+              )
+            : (califacilFastScan.bubbleFit ?? 0);
+        // Trusted: ≥70% + sin colapso + cells alineadas a anillos.
         let trusted =
-          resolvedCount >= Math.ceil(chunkRows * 0.7) && noColumnCollapse;
+          resolvedCount >= Math.ceil(chunkRows * 0.7) &&
+          noColumnCollapse &&
+          bubbleFit >= LETTER_GRADE_MIN_BUBBLE_FIT;
 
         if (!trusted && isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
-          const snappedGeom = buildLetterDisplayOverlayGeometry(
+          const snapped = gradeLetterCanvas(
             resolved.previewCanvas,
             omrCols,
-            omrRowCount,
-            { skipSnap: false, maxShiftRatio: 0.22 }
+            omrRowCount
           );
-          const snappedReread = rereadOmrPicksOnGeometry(
-            resolved.previewCanvas,
-            snappedGeom,
-            omrCols,
-            omrRowCount,
-            warpMeta
-          );
-          if (
-            countResolvedOmrPicks(snappedReread.picks.slice(0, chunkRows)) >
-            resolvedCount
-          ) {
-            warpMeta = snappedReread;
-            displayGeom = snappedGeom;
+          if (snapped.bubbleFit > bubbleFit + 0.02) {
+            warpMeta = snapped.meta;
+            displayGeom = snapped.geometry;
             const n = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
             const noCollapse =
               (warpMeta.maxSameColumnCount ?? 0) <= sameColCap;
-            trusted = n >= Math.ceil(chunkRows * 0.7) && noCollapse;
+            trusted =
+              n >= Math.ceil(chunkRows * 0.7) &&
+              noCollapse &&
+              snapped.bubbleFit >= LETTER_GRADE_MIN_BUBBLE_FIT;
           }
         }
 
@@ -3995,7 +4008,7 @@ export default function CalificarPage() {
             geometry: displayGeom,
           };
         } else {
-          // Lectura débil / colapso de columna: no calificar 2/30 inventado.
+          // Lectura débil / colapso / mal alineada: no calificar % inventado.
           clearPreview();
           toast.error(
             'No se pudo alinear la tabla. Alinea los 4 cuadritos negros con las esquinas naranjas.'
@@ -4303,7 +4316,7 @@ export default function CalificarPage() {
         setReviewStatus('No hay preguntas en esta hoja.');
         return;
       }
-      const { meta, docCanvas, displayCanvas, rejectedCorners } = await runFastWarpedScan(
+      const { meta, docCanvas, displayCanvas, rejectedCorners, bubbleFit } = await runFastWarpedScan(
         mobileReviewAlign.warped,
         mobileReviewAlign.alignment,
         chunk.length
@@ -4327,6 +4340,7 @@ export default function CalificarPage() {
           needsVisionAssist: false,
         };
       } else if (
+        (bubbleFit ?? 0) < LETTER_GRADE_MIN_BUBBLE_FIT ||
         countResolvedOmrPicks(gradeMeta.picks.slice(0, chunk.length)) <
           Math.ceil(chunk.length * 0.7) ||
         isWeakMobileOmrMeta(gradeMeta, chunk.length, chunk.length) ||
@@ -4343,6 +4357,14 @@ export default function CalificarPage() {
         omrRowCount,
         gradeMeta
       );
+      const fitOk =
+        (bubbleFit ?? 0) >= LETTER_GRADE_MIN_BUBBLE_FIT ||
+        (resolved.geometry != null &&
+          measureLetterGeometryBubbleFit(
+            resolved.previewCanvas,
+            resolved.geometry,
+            omrRowCount
+          ) >= LETTER_GRADE_MIN_BUBBLE_FIT);
       const readingOverride = buildCalifacilOmrReadingOverride(
         {
           ...gradeMeta,
@@ -4355,8 +4377,9 @@ export default function CalificarPage() {
         mobileReviewAlign.alignment,
         {
           trustedMobileRead:
+            fitOk &&
             countResolvedOmrPicks(gradeMeta.picks.slice(0, chunk.length)) >=
-            Math.ceil(chunk.length * 0.7),
+              Math.ceil(chunk.length * 0.7),
         }
       );
       const result = await finalizeCapturedSheet(docCanvas, undefined, {

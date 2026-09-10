@@ -19,6 +19,8 @@ export {
 export {
   prepareLetterGradeCanvas,
   gradeLetterCanvas,
+  measureLetterGeometryBubbleFit,
+  LETTER_GRADE_MIN_BUBBLE_FIT,
   type LetterGradePrepareResult,
   type LetterGradeReadResult,
 } from '@/lib/omr/grade-letter-canvas';

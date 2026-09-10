@@ -4009,8 +4009,9 @@ function finishMobileScannedDocumentCanvas(
   src: HTMLCanvasElement,
   opts?: { skipPrintCrop?: boolean }
 ): HTMLCanvasElement {
+  // skipPrintCrop = carta completa: no trim asimétrico (desplaza cells plantilla).
+  if (opts?.skipPrintCrop) return src;
   const trimmed = trimCanvasContentBorders(src) ?? src;
-  if (opts?.skipPrintCrop) return trimmed;
   return cropWarpedAnswerSheetToPrintBounds(trimmed) ?? trimmed;
 }
 
@@ -4646,7 +4647,7 @@ function shiftAnswerSheetGeometry(
 }
 
 /** Busca un desplazamiento global que maximice coincidencia con burbujas impresas. */
-function optimizeAnswerSheetGeometryBubbleFit(
+export function optimizeAnswerSheetGeometryBubbleFit(
   canvas: HTMLCanvasElement,
   geometry: CalifacilOmrScanGeometry,
   rows: number
