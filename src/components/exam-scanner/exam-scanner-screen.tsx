@@ -14,7 +14,6 @@ import {
   deriveDetectionPhase,
   deriveStatusLabel,
 } from '@/components/exam-scanner/document-detector';
-import { documentCameraZoomStyle } from '@/components/exam-scanner/document-camera-zoom';
 import type { ViewfinderGuideRectPx, ViewportPoint } from '@/components/exam-scanner/types';
 import {
   EXAM_PSEUDO_FULLSCREEN_CLASS,
@@ -112,9 +111,14 @@ export function ExamScannerScreen({
 
   const progress = scanBusy ? 1 : stableProgress;
 
+  // Sin zoom CSS: el transform rompe el mapeo marco naranja → píxeles del sensor.
   const cameraZoomStyle = useMemo(
-    () => documentCameraZoomStyle(documentPolygon, phase, progress),
-    [documentPolygon, phase, progress]
+    () =>
+      ({
+        transform: 'translate3d(0,0,0) scale(1)',
+        willChange: 'auto',
+      }) as const,
+    []
   );
 
   if (showPermissionGate) {

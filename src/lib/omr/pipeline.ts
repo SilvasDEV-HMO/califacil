@@ -93,17 +93,31 @@ export function warpCalifacilMobileCaptureFast(
     roiQuad?: RoiQuad | null;
     roiCapture?: MobileGuideRoiCapture | null;
     maxErrorPx?: number;
+    /**
+     * Tras recorte al marco naranja: aceptar carta + franjas aunque falte 1 fiducial
+     * (márgenes del guía / brillo).
+     */
+    softAccept?: boolean;
   }
 ): MobileWarpPipelineResult {
   const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
   const fallbackMaxErrorPx = maxErrorPx + 8;
+  const softAccept = opts?.softAccept === true;
+
+  const isAcceptable = (warped: HTMLCanvasElement): boolean => {
+    if (isMobileWarpedAnswerSheetAcceptable(warped)) return true;
+    if (!softAccept) return false;
+    if (!isCalifacilWarpedLetterCanvas(warped)) return false;
+    if (hasCalifacilAlignStrips(warped)) return true;
+    return countCalifacilCornerMarkers(warped) >= 2;
+  };
 
   const tryAccept = (
     warped: HTMLCanvasElement | null,
     alignment: WarpAlignmentReport | null,
     source: MobileWarpPipelineResult['source']
   ): MobileWarpPipelineResult | null => {
-    if (!warped || !isMobileWarpedAnswerSheetAcceptable(warped)) return null;
+    if (!warped || !isAcceptable(warped)) return null;
     return { warped, alignment, source };
   };
 

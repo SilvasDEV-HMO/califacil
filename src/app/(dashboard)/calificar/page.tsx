@@ -46,9 +46,7 @@ import {
   califacilImageToJpegDataUrl,
   califacilMobileAnswerSheetGuideInViewportPx,
   captureVideoFullFrame,
-  captureCalifacilGuideFrame,
   cropCanvasToViewportGuideRect,
-  cropCanvasToCalifacilGuideOverlay,
   captureImageFullFrame,
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
@@ -77,6 +75,7 @@ import {
   isMobileExamSheetReadyForCapture,
   isCalifacilWarpedLetterCanvas,
   isMobileWarpedAnswerSheetAcceptable,
+  isMobileGuideCroppedSheetGradeable,
   countCalifacilCornerMarkers,
   hasCalifacilAlignStrips,
   mobileRoiQuadsAreStable,
@@ -622,10 +621,11 @@ export default function CalificarPage() {
     mobileStripAlignedRef.current = mobileStripAligned;
   }, [mobileStripAligned]);
 
-  const mobileAlignedForCapture = mobileExamReadyForCapture;
+  const mobileAlignedForCapture = cameraOpen && !scanBusy;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const liveVideoLayoutRef = useRef<LiveVideoLetterbox | null>(null);
+  const staticScannerGuideRectRef = useRef<typeof staticScannerGuideRect>(staticScannerGuideRect);
   const autoShutterEnabledRef = useRef(true);
   const flashModeRef = useRef<FlashMode>('auto');
   const mobileVideoViewportRef = useRef<HTMLDivElement>(null);
@@ -822,23 +822,23 @@ export default function CalificarPage() {
       score: { correct: stats.correct, total: stats.total, pct: stats.pct },
     };
   }, [mobileReviewAlign, expectedChunkPicks, currentChunk, virtualKeyMaps]);
-  const lockStaticScannerGuide = useCallback(() => {
-    setStaticScannerGuideRect((prev) => {
-      if (prev) return prev;
-      const container = mobileVideoViewportRef.current;
-      const measured = container?.getBoundingClientRect();
-      const w =
-        measured && measured.width >= 40 ? measured.width : readScannerViewportPx().w;
-      const h =
-        measured && measured.height >= 40 ? measured.height : readScannerViewportPx().h;
-      return createStaticScannerGuide(w, h);
-    });
+  const syncStaticScannerGuide = useCallback(() => {
+    const container = mobileVideoViewportRef.current;
+    // clientWidth/Height ignora CSS transform (object-cover mapping estable).
+    const cw = container?.clientWidth ?? 0;
+    const ch = container?.clientHeight ?? 0;
+    const w = cw >= 40 ? cw : readScannerViewportPx().w;
+    const h = ch >= 40 ? ch : readScannerViewportPx().h;
+    const next = createStaticScannerGuide(w, h);
+    staticScannerGuideRectRef.current = next;
+    setStaticScannerGuideRect(next);
+    return next;
   }, []);
 
   useLayoutEffect(() => {
     if (!isMobile || phase !== 'capturar') return;
-    lockStaticScannerGuide();
-  }, [isMobile, phase, cameraOpen, cameraPortalReady, lockStaticScannerGuide]);
+    syncStaticScannerGuide();
+  }, [isMobile, phase, cameraOpen, cameraPortalReady, syncStaticScannerGuide]);
 
   /** Comparación borrador vs clave automática (vacío = incorrecto). */
   const chunkKeyComparison = useMemo(() => {
@@ -894,6 +894,7 @@ export default function CalificarPage() {
         if (isMobileWarpedAnswerSheetAcceptable(c) || isMobileLetterGradeCanvasReady(c)) {
           return true;
         }
+        if (isMobileGuideCroppedSheetGradeable(c)) return true;
         // Soft solo en ESTE canvas (no mezclar señales entre warped/display).
         if (!isCalifacilWarpedLetterCanvas(c) || !hasCalifacilAlignStrips(c)) return false;
         if (countCalifacilCornerMarkers(c) < 3) return false;
@@ -920,7 +921,9 @@ export default function CalificarPage() {
         !warpAlignment.ok &&
         !isMobileWarpedAnswerSheetAcceptable(displayCanvas) &&
         !isMobileLetterGradeCanvasReady(displayCanvas) &&
-        !isMobileWarpedAnswerSheetAcceptable(warped)
+        !isMobileWarpedAnswerSheetAcceptable(warped) &&
+        !isMobileGuideCroppedSheetGradeable(displayCanvas) &&
+        !isMobileGuideCroppedSheetGradeable(warped)
       ) {
         return {
           meta: null as OmrScanMetaResult | null,
@@ -1050,13 +1053,15 @@ export default function CalificarPage() {
     const container = mobileVideoViewportRef.current;
     const video = videoRef.current;
     if (!container || !video || video.videoWidth < 40 || video.videoHeight < 40) return;
-    const { width: cw, height: ch } = container.getBoundingClientRect();
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
     if (cw < 20 || ch < 20) return;
-    lockStaticScannerGuide();
-    setLiveVideoLayout(
-      getObjectCoverVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch)
-    );
-  }, [lockStaticScannerGuide]);
+    const guide = syncStaticScannerGuide();
+    const layout = getObjectCoverVideoLetterbox(video.videoWidth, video.videoHeight, cw, ch);
+    liveVideoLayoutRef.current = layout;
+    staticScannerGuideRectRef.current = guide;
+    setLiveVideoLayout(layout);
+  }, [syncStaticScannerGuide]);
 
   const bindVideoElement = useCallback(
     (node: HTMLVideoElement | null) => {
@@ -3554,9 +3559,12 @@ export default function CalificarPage() {
         /** Quad en coordenadas del fotograma completo (mismo canvas). */
         frameQuad?: RoiQuad | null;
         fromGallery?: boolean;
+        /** Captura ya recortada al marco naranja del visor. */
+        guideCropped?: boolean;
       }
     ) => {
       const clearPreview = () => clearMobileScanPreviewState(video);
+      const guideCropped = opts?.guideCropped === true;
 
       if (estimateCanvasMeanLuminance(fullCanvas) < MIN_FRAME_LUMINANCE) {
         clearPreview();
@@ -3567,7 +3575,8 @@ export default function CalificarPage() {
 
       // Galería / live: franjas o frameQuad del gate. Nunca largestQuad (mesa/borde).
       const stripQuad = detectAnswerSheetQuadViaAlignStrips(fullCanvas);
-      const frameQuad = opts?.frameQuad ?? stripQuad;
+      const frameQuad =
+        opts?.frameQuad ?? stripQuad ?? (guideCropped ? defaultDocumentQuad(fullCanvas.width, fullCanvas.height) : null);
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
       let sheetKind: ZipGradeSheetKind =
@@ -3578,10 +3587,13 @@ export default function CalificarPage() {
 
       if (sheetKind !== 'zipgrade') {
         // Solo warp ultrarrápido — nunca warpCalifacilMobileCapture (deskew lento ~1 min).
-        // Sin frameQuad (galería sin franjas), el fast path sigue con strips internos + corners.
+        // Tras marco naranja: softAccept (carta + franjas).
         const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
           frameQuad: frameQuad ?? undefined,
-          maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+          maxErrorPx: guideCropped
+            ? MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 6
+            : MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+          softAccept: guideCropped,
         });
         warped = fastWarp.warped;
         alignment = fastWarp.alignment;
@@ -3589,25 +3601,42 @@ export default function CalificarPage() {
           const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
           if (warpedOnly) {
             const refined = refineWarpedCalifacilSheet(warpedOnly, {
-              maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+              maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + (guideCropped ? 8 : 0),
               fast: true,
             });
             // Soft + fill (paridad desktop isPhotoSheetWarpAcceptable); un solo canvas.
             const cand = refined.canvas;
             const corners = countCalifacilCornerMarkers(cand);
-            const stripQuad = detectAnswerSheetQuadViaAlignStrips(cand);
-            const fillOk = stripQuad
-              ? measureRoiSheetFillRatio(stripQuad, cand.width, cand.height) >= 0.62
+            const stripOnCand = detectAnswerSheetQuadViaAlignStrips(cand);
+            const fillOk = stripOnCand
+              ? measureRoiSheetFillRatio(stripOnCand, cand.width, cand.height) >= 0.55
               : corners >= 4;
             const soft =
               isCalifacilWarpedLetterCanvas(cand) &&
               hasCalifacilAlignStrips(cand) &&
-              corners >= 3 &&
+              corners >= (guideCropped ? 2 : 3) &&
               fillOk;
-            if (isMobileWarpedAnswerSheetAcceptable(cand) || soft) {
+            if (
+              isMobileWarpedAnswerSheetAcceptable(cand) ||
+              soft ||
+              (guideCropped && isMobileGuideCroppedSheetGradeable(cand))
+            ) {
               warped = cand;
               alignment = refined.alignment;
             }
+          }
+        }
+        // Último recurso tras recorte al guía: escalar/refinar el crop como documento plano.
+        if (!warped && guideCropped) {
+          const flat =
+            prepareMobileScannedDocumentCanvasFast(fullCanvas, { skipPrintCrop: false }) ??
+            fullCanvas;
+          if (isMobileGuideCroppedSheetGradeable(flat) || hasCalifacilAlignStrips(flat)) {
+            warped = flat;
+            alignment = measureWarpedFiducialAlignment(
+              flat,
+              MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12
+            );
           }
         }
       }
@@ -3630,7 +3659,10 @@ export default function CalificarPage() {
       }
 
       const warpedSharpness = estimateCanvasSharpness(warped);
-      if (warpedSharpness < MOBILE_MIN_WARPED_SHARPNESS) {
+      const minSharpness = guideCropped
+        ? Math.max(6, MOBILE_MIN_WARPED_SHARPNESS * 0.55)
+        : MOBILE_MIN_WARPED_SHARPNESS;
+      if (warpedSharpness < minSharpness) {
         clearPreview();
         toast.error('Imagen borrosa. Toma otra foto más nítida, con buena luz.');
         setLiveStatus('Mantén el teléfono quieto al escanear.');
@@ -3840,6 +3872,10 @@ export default function CalificarPage() {
         }
         window.requestAnimationFrame(() => resolve());
       });
+
+      // Sincronizar guía + layout (clientWidth) justo antes de recortar.
+      updateLiveVideoLayout();
+
       const sensorW = video.videoWidth;
       const sensorH = video.videoHeight;
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
@@ -3852,15 +3888,33 @@ export default function CalificarPage() {
 
       // Solo lo que está DENTRO del recuadro naranja (4 esquinas); recorta mesa/bisel.
       const layout = liveVideoLayoutRef.current;
-      const guide = staticScannerGuideRect;
-      const guideCrop =
-        (guide && layout
-          ? cropCanvasToViewportGuideRect(fullCanvas, guide, layout, sensorW, sensorH)
-          : null) ??
-        cropCanvasToCalifacilGuideOverlay(fullCanvas) ??
-        captureCalifacilGuideFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
+      const guide = staticScannerGuideRectRef.current;
+      let guideCrop: HTMLCanvasElement | null = null;
+      if (guide && layout) {
+        guideCrop = cropCanvasToViewportGuideRect(fullCanvas, guide, layout, sensorW, sensorH);
+      }
+      // Fallback: recalcular guía desde el contenedor actual si el mapeo falló.
+      if (!guideCrop) {
+        const container = mobileVideoViewportRef.current;
+        const cw = container?.clientWidth ?? 0;
+        const ch = container?.clientHeight ?? 0;
+        if (cw >= 40 && ch >= 40 && sensorW >= 40) {
+          const freshGuide = createStaticScannerGuide(cw, ch);
+          const freshLayout = getObjectCoverVideoLetterbox(sensorW, sensorH, cw, ch);
+          if (freshGuide) {
+            guideCrop = cropCanvasToViewportGuideRect(
+              fullCanvas,
+              freshGuide,
+              freshLayout,
+              sensorW,
+              sensorH
+            );
+          }
+        }
+      }
 
       const gradeCanvas = guideCrop ?? fullCanvas;
+      const usedGuideCrop = Boolean(guideCrop);
 
       // Freeze: hoja recortada al marco naranja (no foto cruda de toda la cámara).
       const freezeUrl = canvasPreviewDataUrl(gradeCanvas, 900, 0.62);
@@ -3880,9 +3934,10 @@ export default function CalificarPage() {
       await processMobileCapturedCanvas(gradeCanvas, video, {
         frameQuad,
         fromGallery: false,
+        guideCropped: usedGuideCrop,
       });
     },
-    [processMobileCapturedCanvas, mobileScanPreviewSetters, staticScannerGuideRect]
+    [processMobileCapturedCanvas, mobileScanPreviewSetters, updateLiveVideoLayout]
   );
 
   const retakeMobileCaptureReview = useCallback(() => {
@@ -4153,22 +4208,9 @@ export default function CalificarPage() {
   }, [scanBusy]);
 
   const captureMobilePhotoManually = useCallback(async () => {
+    // Capturar siempre que la cámara esté lista: el marco naranja define el encuadre.
+    // El gate live (4/4) solo sirve de guía visual, no bloquea el botón.
     const gate = mobileCaptureGateRef.current;
-    if (
-      !isMobileExamSheetReadyForCapture({
-        fiducialCount: gate.fiducialCount,
-        fiducialCorners: gate.fiducialCorners,
-        stripAligned: gate.stripAligned,
-        quad: gate.quad,
-        roiW: gate.roiW,
-        roiH: gate.roiH,
-        fillRatio: gate.fillRatio,
-        roiCanvas: gate.roiCanvas,
-      })
-    ) {
-      toast.error('Encuadra el examen completo (franjas laterales y esquinas negras visibles) antes de capturar.');
-      return;
-    }
 
     let video = videoRef.current;
     if (!video || !streamRef.current) {

@@ -589,6 +589,17 @@ export function isMobileWarpedAnswerSheetAcceptable(canvas: HTMLCanvasElement): 
   );
 }
 
+/**
+ * Tras recorte al marco naranja: carta + franjas basta (las esquinas pueden quedar
+ * parciales por el margen del guía o brillo).
+ */
+export function isMobileGuideCroppedSheetGradeable(canvas: HTMLCanvasElement): boolean {
+  if (isMobileWarpedAnswerSheetAcceptable(canvas)) return true;
+  if (!isCalifacilWarpedLetterCanvas(canvas)) return false;
+  if (hasCalifacilAlignStrips(canvas)) return true;
+  return countCalifacilCornerMarkers(canvas) >= 2;
+}
+
 /** Parches de esquina en coords. de fiduciales impresos (hoja carta enderezada). */
 function printedFiducialCornerPatches(
   W: number,
@@ -2443,6 +2454,9 @@ export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HT
 /**
  * Recorta el fotograma al marco naranja del visor (coords. de pantalla → píxeles del canvas).
  * Así la captura analiza solo lo que el usuario alineó con las 4 esquinas naranjas.
+ *
+ * `guide` y `layout.displayW/H` deben estar en el mismo espacio local del contenedor
+ * (usar clientWidth/clientHeight, no getBoundingClientRect con CSS transform).
  */
 export function cropCanvasToViewportGuideRect(
   canvas: HTMLCanvasElement,
@@ -2455,15 +2469,12 @@ export function cropCanvasToViewportGuideRect(
   if (guide.width < 40 || guide.height < 40) return null;
   const fw = Math.max(1, layout.frameW || sourceFrameW);
   const fh = Math.max(1, layout.frameH || sourceFrameH);
-  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
-    fw,
-    fh,
-    layout.displayW,
-    layout.displayH
-  );
+  const displayW = Math.max(1, layout.displayW);
+  const displayH = Math.max(1, layout.displayH);
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(fw, fh, displayW, displayH);
   if (!(scale > 0)) return null;
 
-  // Pantalla → coords. del sensor.
+  // Pantalla (espacio local del viewport) → coords. del sensor.
   const frameLeft = (guide.left - layout.offsetX + cropX) / scale;
   const frameTop = (guide.top - layout.offsetY + cropY) / scale;
   const frameW = guide.width / scale;
@@ -2482,6 +2493,11 @@ export function cropCanvasToViewportGuideRect(
   rw = Math.max(80, Math.min(rw, canvas.width - left));
   rh = Math.max(80, Math.min(rh, canvas.height - top));
   if (rw < 100 || rh < 80) return null;
+
+  // Si el “recorte” es prácticamente el frame entero, el mapeo falló.
+  if (left <= 2 && top <= 2 && rw >= canvas.width - 4 && rh >= canvas.height - 4) {
+    return null;
+  }
 
   const out = document.createElement('canvas');
   out.width = rw;
