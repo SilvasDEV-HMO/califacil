@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Camera, CheckCircle2, ChevronRight, Images, Loader2, ScanLine } from 'lucide-react';
+import { Camera, CheckCircle2, ChevronRight, Image as ImageIcon, Loader2, ScanLine } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Exam, Student } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -229,7 +229,7 @@ export function CalificarMobileHome({
               {scanBusy ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
-                <Images className="mr-2 h-4 w-4" strokeWidth={2.25} />
+                <ImageIcon className="mr-2 h-4 w-4" strokeWidth={2.25} />
               )}
               Subir fotos
             </Button>
