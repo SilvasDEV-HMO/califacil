@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Camera, CheckCircle2, ChevronRight, Loader2, ScanLine } from 'lucide-react';
+import { Camera, CheckCircle2, ChevronRight, Images, Loader2, ScanLine } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Exam, Student } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -27,6 +27,7 @@ type Props = {
   sheetIndex: number;
   totalSheets: number;
   scanBusy: boolean;
+  busyLabel?: string;
   onSelectExam: (id: string) => void;
   onSelectStudent: (id: string) => void;
   onScan: () => void;
@@ -89,6 +90,7 @@ export function CalificarMobileHome({
   sheetIndex,
   totalSheets,
   scanBusy,
+  busyLabel,
   onSelectExam,
   onSelectStudent,
   onScan,
@@ -124,14 +126,17 @@ export function CalificarMobileHome({
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Calificar</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Escanea la hoja de respuestas con la cámara. Calificación al instante.
+            Toma o sube fotos de las hojas impresas. Se califican igual que un escaneo de
+            escritorio.
           </p>
         </div>
 
         <Card className="shadow-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Configuración</CardTitle>
-            <CardDescription>Solo elige el examen; el alumno se detecta al escanear la hoja.</CardDescription>
+            <CardDescription>
+              Elige el examen; el alumno se detecta por el número de control de la hoja.
+            </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             <ConfigRow
@@ -152,7 +157,7 @@ export function CalificarMobileHome({
               value={studentLabel}
               hint={
                 studentAutoDetect
-                  ? 'Se identifica al escanear la hoja personalizada'
+                  ? 'Se identifica al leer el número de control de la hoja'
                   : 'Alumno fijado manualmente'
               }
               onPress={() => canGradeStudents && setStudentPickerOpen(true)}
@@ -178,8 +183,8 @@ export function CalificarMobileHome({
               <div>
                 <p className="text-sm font-semibold text-gray-900">Listo para calificar</p>
                 <p className="mt-0.5 text-xs leading-snug text-gray-600">
-                  Hoja {sheetIndex + 1} de {totalSheets}. Alinea los 4 cuadros negros de las
-                  esquinas de la hoja impresa.
+                  Hoja {sheetIndex + 1} de {totalSheets}. Encuadra la hoja completa, con buena luz
+                  y las esquinas o franjas negras visibles.
                 </p>
               </div>
             </CardContent>
@@ -211,7 +216,7 @@ export function CalificarMobileHome({
             ) : (
               <Camera className="mr-2 h-5 w-5" strokeWidth={2.25} />
             )}
-            Calificar
+            {scanBusy ? busyLabel || 'Calificando…' : 'Tomar foto'}
           </Button>
           {onImportPhoto ? (
             <Button
@@ -219,9 +224,14 @@ export function CalificarMobileHome({
               variant="outline"
               disabled={!readyToScan || scanBusy}
               onClick={onImportPhoto}
-              className="h-11 w-full bg-white"
+              className="h-11 w-full border-orange-200 bg-white text-orange-900 hover:bg-orange-50"
             >
-              Importar foto de galería
+              {scanBusy ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Images className="mr-2 h-4 w-4" strokeWidth={2.25} />
+              )}
+              Subir fotos
             </Button>
           ) : null}
         </div>

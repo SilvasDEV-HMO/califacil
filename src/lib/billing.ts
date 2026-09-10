@@ -53,6 +53,7 @@ export const PLAN_MONTHLY_EXAM_LIMIT: Record<PlanKey, number> = {
 const CALIFACIL_SUPERUSER_EMAILS = new Set([
   'admin@califacil.com',
   'profeivanith@gmail.com',
+  'docente001@ith.com',
 ]);
 
 export function isCalifacilSuperUserEmail(email: string | null | undefined) {

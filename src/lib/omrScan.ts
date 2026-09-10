@@ -5593,7 +5593,7 @@ function buildAnswerSheetFixedTemplateCandidates(rowCount = CALIFACIL_PRINT_MAX_
 }
 
 function buildLegacyFooterFixedTemplateCandidates(): OmrFixedTemplate[] {
-  // Plantillas calibradas con escaneo real del formato Sonora/CaliFacil enviado por el usuario.
+  // Plantillas calibradas con escaneo real del formato I.T.H./CaliFacil enviado por el usuario.
   // Recuadro detectado aprox: left 0.172, top 0.609, width 0.684, height 0.249.
   return [
     {
@@ -10719,7 +10719,7 @@ export function califacilImageToJpegDataUrl(
   return c.toDataURL('image/jpeg', quality);
 }
 
-export function fileToImage(file: File): Promise<HTMLImageElement> {
+function imageFromObjectUrl(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -10733,4 +10733,30 @@ export function fileToImage(file: File): Promise<HTMLImageElement> {
     };
     img.src = url;
   });
+}
+
+/** Carga una foto (JPG/PNG/WebP; HEIC si el navegador lo decodifica). */
+export async function fileToImage(file: File): Promise<HTMLImageElement> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bmp = await createImageBitmap(file);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, bmp.width);
+      canvas.height = Math.max(1, bmp.height);
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(bmp, 0, 0);
+        bmp.close?.();
+        const blob = await new Promise<Blob | null>((resolve) => {
+          canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.92);
+        });
+        if (blob) return imageFromObjectUrl(blob);
+      } else {
+        bmp.close?.();
+      }
+    } catch {
+      /* HEIC u otro formato: probar <img> nativo */
+    }
+  }
+  return imageFromObjectUrl(file);
 }

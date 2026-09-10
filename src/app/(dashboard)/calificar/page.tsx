@@ -135,7 +135,10 @@ import {
   buildDesktopDisplayOverlayGeometry,
   isReferenceGradeCanvasAnchor,
 } from '@/lib/omr/reference-grade';
-import { scanWarpedGradeMobileAsync, resolveMobileGradeDisplay } from '@/lib/omr/unified-grade-scan';
+import {
+  scanDesktopGradeUnifiedOrLegacyAsync,
+  resolveMobileGradeDisplay,
+} from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
@@ -209,7 +212,9 @@ import {
   CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO,
   CALIFACIL_MIN_AUTO_READ_RATIO,
   buildCalifacilOmrReadingOverride,
+  isAnswerSheetImageFile,
   runCalifacilOmrReadingPipeline,
+  shouldNormalizeUploadedAnswerSheet,
   type CalifacilOmrReadingResult,
   type DesktopUploadKind,
 } from '@/lib/calificarOmrReading';
@@ -222,6 +227,14 @@ import {
 } from '@/lib/scanSounds';
 
 type Phase = 'elegir' | 'capturar' | 'revisar_hoja' | 'guardando' | 'ver_resultados';
+
+type BatchGradeItem = {
+  fileName: string;
+  ok: boolean;
+  studentName?: string;
+  pct?: number;
+  error?: string;
+};
 
 type FlashMode = 'auto' | 'on' | 'off';
 
@@ -663,6 +676,8 @@ export default function CalificarPage() {
     ((opts?: { skipPhaseGuard?: boolean }) => Promise<boolean>) | undefined
   >(undefined);
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const cameraCaptureInputRef = useRef<HTMLInputElement>(null);
+  const [batchSummary, setBatchSummary] = useState<BatchGradeItem[] | null>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   /** Cancela lecturas desktop JPG/PDF tardías (timeout / nueva subida). */
   const gradeReadAbortRef = useRef<AbortController | null>(null);
@@ -864,7 +879,7 @@ export default function CalificarPage() {
 
   const runFastWarpedScan = useCallback(
     async (warped: HTMLCanvasElement, warpAlignment?: WarpAlignmentReport | null) => {
-      // displayCanvas = carta (UI); scanCanvas = referencia (lectura OMR).
+      // displayCanvas = carta (UI); scanCanvas = referencia (lectura OMR) — mismo par que PDF flat.
       const { displayCanvas, scanCanvas } = prepareCalifacilGradeScanCanvases(
         warped,
         omrCols,
@@ -897,12 +912,12 @@ export default function CalificarPage() {
           };
         }
       }
-      const activeRows =
-        sheets[sheetIndexRef.current]?.length ?? omrRowCount;
-      const meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
-        activeRows,
-        letterCanvas: displayCanvas,
-      });
+      // Misma lectura que desktop PDF (1600 + reattach); no inventar con path móvil rápido.
+      const meta = await scanDesktopGradeUnifiedOrLegacyAsync(
+        scanCanvas,
+        omrCols,
+        omrRowCount
+      );
       // Marco naranja en coords carta (preview), no en canvas de referencia.
       const orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
       return {
@@ -913,7 +928,7 @@ export default function CalificarPage() {
         rejectedCorners: false as const,
       };
     },
-    [omrCols, omrRowCount, sheets]
+    [omrCols, omrRowCount]
   );
 
   const mobileScanPreviewSetters = useMemo(
@@ -1283,6 +1298,8 @@ export default function CalificarPage() {
         skipSheetValidation?: boolean;
         displaySource?: HTMLCanvasElement;
         readingOverride?: CalifacilOmrReadingResult;
+        /** Fuerza scanner document/PDF (p. ej. móvil tras warp a carta). */
+        uploadKind?: DesktopUploadKind;
       }
     ): Promise<{ success: boolean; chunkDraft?: Record<string, string> }> => {
       if (!examId || !exam || !supportsCalifacil) {
@@ -1380,12 +1397,17 @@ export default function CalificarPage() {
       }
 
       let desktopUploadKind: DesktopUploadKind | undefined;
-      if (classifiedUploadKind) {
+      if (opts?.uploadKind) {
+        desktopUploadKind = opts.uploadKind;
+      } else if (classifiedUploadKind) {
         desktopUploadKind = classifiedUploadKind;
       } else if (isServerRenderedPdfPage) {
         desktopUploadKind = 'pdf';
+      } else if (gradePreWarped && (isMobileCamera || isMobile)) {
+        // Carta warpeada = documento plano (mismo scanner que PDF).
+        desktopUploadKind = 'flatDocument';
       } else if (!isMobile && gradePreWarped) {
-        desktopUploadKind = 'warpedPhoto';
+        desktopUploadKind = 'flatDocument';
       }
       const preserveCapturedFrame = isMobileCamera
         ? false
@@ -3708,7 +3730,7 @@ export default function CalificarPage() {
         );
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
         const warpMeta = califacilFastScan.meta;
-        // Siempre override tras el pase móvil (strip recovery ya incluido si era débil).
+        // Meta del scanner desktop; overlay en coords carta (preview).
         const resolved = resolveMobileGradeDisplay(
           displayCanvas,
           scanCanvas,
@@ -3737,6 +3759,7 @@ export default function CalificarPage() {
         skipSheetValidation: true,
         displaySource: mobileDisplaySource,
         readingOverride,
+        uploadKind: sheetKind === 'califacil' ? 'flatDocument' : undefined,
       });
       if (result.success) {
         setMobileScanPreviewUrl(null);
@@ -4001,6 +4024,7 @@ export default function CalificarPage() {
         skipSheetValidation: true,
         displaySource: resolved.previewCanvas,
         readingOverride,
+        uploadKind: 'flatDocument',
       });
       if (result.success) {
         playScanCompleteChime();

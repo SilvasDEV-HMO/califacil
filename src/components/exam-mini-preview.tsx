@@ -17,8 +17,8 @@ export function ExamMiniPreview({ title }: ExamMiniPreviewProps) {
         aria-hidden
       >
         <Image
-          src="/gobierno-sonora-logo.png"
-          alt=""
+          src="/ith-wordmark.png"
+          alt="I.T.H."
           width={120}
           height={32}
           className="h-5 w-auto max-w-[55%] object-contain object-left"

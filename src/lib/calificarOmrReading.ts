@@ -6,7 +6,6 @@ import {
   autoOrientCalifacilSheet,
   califacilImageToJpegDataUrl,
   isAnswerSheetOmrMostlyBlank,
-  isCalifacilWarpedLetterCanvas,
   prepareCalifacilScanInput,
   sanitizeAnswerSheetOmrMeta,
   type OmrScanMetaResult,
@@ -15,8 +14,6 @@ import {
 import {
   scanDesktopGradeUnifiedOrLegacyAsync,
   scanLiveOmrUnifiedOrLegacy,
-  scanWarpedGradeMobileAsync,
-  scanWarpedGradeUnifiedOrLegacyAsync,
 } from '@/lib/omr/unified-grade-scan';
 import { prepareCalifacilGradeScanCanvas } from '@/lib/omr/pipeline';
 import {
@@ -31,6 +28,24 @@ export const CALIFACIL_AMBIGUOUS_ROW_WARN_RATIO = 0.35;
 
 /** Clasificación explícita de subida en desktop para enrutar el escaneo OMR. */
 export type DesktopUploadKind = 'pdf' | 'flatDocument' | 'flatScan' | 'photoCrop' | 'warpedPhoto';
+
+/**
+ * Foto o archivo subido (móvil o PC) usa el mismo normalize OMR de desktop.
+ * Un fotograma de cámara en vivo no trae archivo; el PDF rasterizado va por otra ruta.
+ */
+export function shouldNormalizeUploadedAnswerSheet(opts: {
+  hasUploadedFile: boolean;
+  isServerRenderedPdfPage?: boolean;
+}): boolean {
+  if (opts.isServerRenderedPdfPage) return false;
+  return opts.hasUploadedFile;
+}
+
+export function isAnswerSheetImageFile(file: { name: string; type: string }): boolean {
+  const nameLower = file.name.toLowerCase();
+  const extOk = /\.(jpe?g|png|webp|heic|heif)$/i.test(nameLower);
+  return file.type.startsWith('image/') || ((file.type === '' || file.type === 'application/octet-stream') && extOk);
+}
 
 export type CalifacilOmrReadingInput = {
   source: HTMLImageElement | HTMLCanvasElement;
@@ -200,16 +215,6 @@ export async function runCalifacilOmrReadingPipeline(
   const useFixedTemplate =
     preWarped && isMobileCamera ? true : isMobileCamera ? sheetStrict : Boolean(fallbackFile);
 
-  const useDocumentScan =
-    uploadKind === 'pdf' ||
-    uploadKind === 'flatDocument' ||
-    uploadKind === 'flatScan' ||
-    (isMobile && Boolean(fallbackFile) && !isMobileCamera);
-  const useWarpedScan =
-    uploadKind === 'warpedPhoto' ||
-    uploadKind === 'photoCrop' ||
-    (isMobile && preWarped && !fallbackFile);
-
   const resolveScanCanvas = (
     input: HTMLImageElement | HTMLCanvasElement
   ): HTMLCanvasElement | null => {
@@ -226,7 +231,11 @@ export async function runCalifacilOmrReadingPipeline(
       return canvas;
     }
     return prepareCalifacilGradeScanCanvas(canvas, omrCols, omrRowCount, {
-      preWarped: preWarped || useWarpedScan,
+      preWarped:
+        preWarped ||
+        uploadKind === 'warpedPhoto' ||
+        uploadKind === 'photoCrop' ||
+        uploadKind === 'flatDocument',
       warpAlignment: input.warpAlignment ?? null,
     });
   };
@@ -237,38 +246,9 @@ export async function runCalifacilOmrReadingPipeline(
   }
   let activeScanSource: HTMLImageElement | HTMLCanvasElement = scanCanvas ?? oriented;
   let meta: OmrScanMetaResult;
-  const letterRetryCanvas =
-    oriented instanceof HTMLCanvasElement &&
-    isCalifacilWarpedLetterCanvas(oriented) &&
-    oriented !== scanCanvas
-      ? oriented
-      : undefined;
-  const useMobileFastPath =
-    Boolean(isMobileCamera && preWarped && scanCanvas) ||
-    Boolean(isMobile && preWarped && scanCanvas && !fallbackFile) ||
-    // Desktop foto: mismo perfil rápido que móvil (antes caía en 320 iters y se colgaba).
-    Boolean(
-      !isMobile &&
-        !isMobileCamera &&
-        scanCanvas &&
-        (uploadKind === 'warpedPhoto' || uploadKind === 'photoCrop')
-    );
 
-  if (useMobileFastPath && scanCanvas) {
-    // Un solo perfil rápido (nunca 320 iters).
-    meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
-      activeRows: chunk.length,
-      letterCanvas: letterRetryCanvas,
-    });
-  } else if (useWarpedScan && scanCanvas) {
-    meta = await scanWarpedGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
-  } else if (useDocumentScan && scanCanvas) {
+  if (scanCanvas) {
     meta = await scanDesktopGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
-  } else if (scanCanvas && isMobile) {
-    meta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
-      activeRows: chunk.length,
-      letterCanvas: letterRetryCanvas,
-    });
   } else {
     meta = scanLiveOmrUnifiedOrLegacy(activeScanSource, omrCols, {
       skipGuideCrop: true,
@@ -312,12 +292,11 @@ export async function runCalifacilOmrReadingPipeline(
     const recoveryCanvas = resolveScanCanvas(recoverySource);
     if (recoveryCanvas) {
       const preparedRecovery = prepareGradeCanvas(recoveryCanvas);
-      // Móvil: recovery también en perfil rápido (no 320 iters).
-      const recoveryMeta = await scanWarpedGradeMobileAsync(
+      // Recovery con el mismo scanner document (no path móvil que inventa picks).
+      const recoveryMeta = await scanDesktopGradeUnifiedOrLegacyAsync(
         preparedRecovery,
         omrCols,
-        omrRowCount,
-        { activeRows: chunk.length }
+        omrRowCount
       );
       const recoveryRaw = [...recoveryMeta.picks];
       const recoveryMapped = mapRawToDraftDetailed(recoveryRaw, chunk);
@@ -349,12 +328,24 @@ export async function runCalifacilOmrReadingPipeline(
 
   if (shouldRunDesktopRecovery) {
     let recoveryMeta: OmrScanMetaResult | null = null;
-    const desktopScanCanvas = scanCanvas;
     if (uploadKind === 'warpedPhoto' || uploadKind === 'photoCrop') {
-      if (desktopScanCanvas) {
-        recoveryMeta = await scanWarpedGradeMobileAsync(desktopScanCanvas, omrCols, omrRowCount, {
-          activeRows: chunk.length,
-        });
+      if (scanCanvas) {
+        // Ya se leyó con scanner document; reintento con auto-orient en source crudo.
+        const recoverySource =
+          autoOrientCalifacilSheet(source, omrCols, {
+            useGuideCrop: false,
+            allowTiltSweep: false,
+          }) ?? oriented;
+        const recoveryCanvas = resolveScanCanvas(recoverySource);
+        if (recoveryCanvas) {
+          const prepared = prepareGradeCanvas(recoveryCanvas);
+          recoveryMeta = await scanDesktopGradeUnifiedOrLegacyAsync(
+            prepared,
+            omrCols,
+            omrRowCount
+          );
+          activeScanSource = prepared;
+        }
       }
     } else {
       const recoverySource =

@@ -188,11 +188,13 @@ export function buildReferenceAnchoredGeometry(
  * Overlay desktop 30×4: geometría anclada a referencia + anillos (mismo canvas que el JPEG).
  * Nunca usa plantilla carta (nudges UP / qnum 0.09).
  *
- * Pre-nudge solo siembra las celdas para que el snap a anillos encuentre el círculo;
- * el snap es el último paso (no desplazar después).
+ * Pre-nudge siembra celdas para el snap; post-nudge corrige residual arriba-izquierda de calibración.
  */
-const DESKTOP_OVERLAY_PRE_NUDGE_X = -0.003;
+const DESKTOP_OVERLAY_PRE_NUDGE_X = 0;
 const DESKTOP_OVERLAY_PRE_NUDGE_Y = 0.008;
+/** Residual típico chilo.pdf tras snap a anillos (derecha + abajo). */
+const DESKTOP_OVERLAY_POST_NUDGE_X = 0.0075;
+const DESKTOP_OVERLAY_POST_NUDGE_Y = 0.011;
 
 function nudgeDesktopOverlayGeometry(
   geometry: CalifacilOmrScanGeometry,
@@ -257,7 +259,12 @@ export function buildDesktopDisplayOverlayGeometry(
     rows,
     { forceRebuild: true, maxShiftRatio: 0.3 }
   );
-  return attached.geometry ?? seeded;
+  const snapped = attached.geometry ?? seeded;
+  return nudgeDesktopOverlayGeometry(
+    snapped,
+    DESKTOP_OVERLAY_POST_NUDGE_X,
+    DESKTOP_OVERLAY_POST_NUDGE_Y
+  );
 }
 
 /** Alinea (si aplica) y devuelve canvas listo para lectura OMR de 30 filas. */

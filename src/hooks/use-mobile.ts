@@ -26,43 +26,10 @@ export function isDesktopPointerDevice(): boolean {
   return finePointer && hover
 }
 
-const DESKTOP_LAYOUT_BREAKPOINT = 1024
-
 /**
- * Cámara en vivo solo en móvil táctil.
- * En escritorio (ratón, panel lateral lg, o ventana ancha) solo se suben PDF/JPG: nunca getUserMedia.
- * Por defecto false hasta medir en cliente.
+ * Calificar ya no usa getUserMedia: móvil y desktop suben foto/PDF
+ * y se califican con el mismo pipeline OMR de escritorio.
  */
 export function useCalificarLiveCamera(): boolean {
-  const [enabled, setEnabled] = React.useState(false)
-
-  React.useEffect(() => {
-    const update = () => {
-      // Veto absoluto: PC con ratón/trackpad o layout de escritorio del dashboard.
-      if (isDesktopPointerDevice()) {
-        setEnabled(false)
-        return
-      }
-      if (window.matchMedia(`(min-width: ${DESKTOP_LAYOUT_BREAKPOINT}px)`).matches) {
-        setEnabled(false)
-        return
-      }
-      const narrow = window.innerWidth < MOBILE_BREAKPOINT
-      const coarse = window.matchMedia("(pointer: coarse)").matches
-      const touchLike = coarse || navigator.maxTouchPoints > 0
-      setEnabled(narrow && touchLike)
-    }
-
-    update()
-    const narrowMq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-    const desktopMq = window.matchMedia(`(min-width: ${DESKTOP_LAYOUT_BREAKPOINT}px)`)
-    narrowMq.addEventListener("change", update)
-    desktopMq.addEventListener("change", update)
-    return () => {
-      narrowMq.removeEventListener("change", update)
-      desktopMq.removeEventListener("change", update)
-    }
-  }, [])
-
-  return enabled
+  return false
 }

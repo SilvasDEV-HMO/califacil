@@ -8,7 +8,7 @@ import { MathWallpaper } from '@/components/math-wallpaper';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'CaliFácil - SEC Sonora',
+  title: 'CaliFácil - I.T.H.',
   description: 'Crea exámenes personalizados con IA, aplícalos mediante QR y analiza el rendimiento de tus alumnos.',
   applicationName: 'CaliFácil',
   icons: {
