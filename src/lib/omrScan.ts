@@ -2494,11 +2494,6 @@ export function cropCanvasToViewportGuideRect(
   rh = Math.max(80, Math.min(rh, canvas.height - top));
   if (rw < 100 || rh < 80) return null;
 
-  // Si el “recorte” es prácticamente el frame entero, el mapeo falló.
-  if (left <= 2 && top <= 2 && rw >= canvas.width - 4 && rh >= canvas.height - 4) {
-    return null;
-  }
-
   const out = document.createElement('canvas');
   out.width = rw;
   out.height = rh;
@@ -3224,7 +3219,8 @@ export function isMobileExamSheetReadyForCapture(opts: {
     opts.fillRatio ?? measureRoiSheetFillRatio(opts.quad, opts.roiW, opts.roiH);
   if (fill < 0.06) return false;
 
-  if (opts.roiCanvas) {
+  // Con 4/4 no exigir luminancia interior (sombra parcial no debe bloquear el disparo).
+  if (!fourCorners && opts.roiCanvas) {
     const interior = measureRoiQuadInteriorMeanLuminance(opts.roiCanvas, opts.quad);
     if (interior < MOBILE_MIN_QUAD_INTERIOR_LUMINANCE) return false;
   }
@@ -3664,15 +3660,48 @@ export function detectAnswerSheetFiducialsAtQuad(
   return detected;
 }
 
-/** Estado por esquina [TL, TR, BL, BR] de fiduciales negros visibles en el ROI. */
+/** Cuadrilátero = ROI completo (hoja alineada al marco naranja, sin bordes interiores). */
+function fullRoiPageQuad(
+  W: number,
+  H: number
+): [Point, Point, Point, Point] {
+  return [
+    { x: 2, y: 2 },
+    { x: W - 3, y: 2 },
+    { x: W - 3, y: H - 3 },
+    { x: 2, y: H - 3 },
+  ];
+}
+
+/**
+ * Estado por esquina [TL, TR, BL, BR] de fiduciales negros visibles en el ROI.
+ *
+ * Importante: con la hoja llenando el marco naranja no hay contorno interior
+ * (sheetQuad=null). Hay que sondear SIEMPRE los centros de fiduciales impresos
+ * sobre el ROI (misma geometría que las guías naranjas), no solo parches
+ * top-left en las esquinas del canvas (el clasificador exige núcleo oscuro).
+ */
 export function detectAnswerSheetFiducialsInRoi(
   canvas: HTMLCanvasElement,
   sheetQuad: [Point, Point, Point, Point] | null = null
 ): [boolean, boolean, boolean, boolean] {
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return [false, false, false, false];
+
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
-  let merged: [boolean, boolean, boolean, boolean] = [false, false, false, false];
+  const pageAsRoi = fullRoiPageQuad(W, H);
+  // Siempre sondear la página-como-ROI: es el caso “4 negros en guías naranjas”.
+  let merged: [boolean, boolean, boolean, boolean] = detectAnswerSheetFiducialsAtQuad(
+    canvas,
+    pageAsRoi,
+    stripQuad !== null
+  );
   if (sheetQuad) {
-    merged = detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad, stripQuad !== null);
+    merged = mergeFiducialCornerStates(
+      merged,
+      detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad, stripQuad !== null)
+    );
   }
   if (stripQuad) {
     merged = mergeFiducialCornerStates(
@@ -3685,11 +3714,22 @@ export function detectAnswerSheetFiducialsInRoi(
 
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return merged;
-  const W = canvas.width;
-  const H = canvas.height;
-  if (W < 80 || H < 80) return merged;
 
-  // Fallback: parches en esquinas del quad de franjas (página estimada) + ROI.
+  // Parches centrados en CALIFACIL_FIDUCIAL_CENTERS_NORM (no top-left del canvas).
+  const centered = printedFiducialCornerPatches(W, H);
+  merged = mergeFiducialCornerStates(
+    merged,
+    detectFiducialsAtCornerPatches(
+      ctx,
+      centered.corners,
+      centered.patchW,
+      centered.patchH,
+      [true, true, true, true]
+    )
+  );
+  if (merged.filter(Boolean).length >= 3) return merged;
+
+  // Fallback: parches en esquinas del quad de franjas (página estimada).
   const patchW = Math.max(8, Math.round(W * 0.085));
   const patchH = Math.max(8, Math.round(H * 0.085));
   if (stripQuad) {
@@ -3714,26 +3754,7 @@ export function detectAnswerSheetFiducialsInRoi(
     if (merged.filter(Boolean).length >= 3) return merged;
   }
 
-  // ROI ya recortado al marco naranja: las esquinas del canvas ≈ cuadritos impresos.
-  const inset = Math.max(4, Math.round(W * 0.022));
-  const canvasCorners = [
-    { x: inset, y: inset },
-    { x: W - patchW - inset, y: inset },
-    { x: inset, y: H - patchH - inset },
-    { x: W - patchW - inset, y: H - patchH - inset },
-  ];
-  merged = mergeFiducialCornerStates(
-    merged,
-    detectFiducialsAtCornerPatches(ctx, canvasCorners, patchW, patchH, [
-      true,
-      true,
-      true,
-      true,
-    ])
-  );
-  if (merged.filter(Boolean).length >= 3) return merged;
-
-  // Frame completo: probar también el norm del viewfinder carta.
+  // Frame completo sin recorte guía: viewfinder carta en el fotograma.
   const guidePatches = viewfinderGuideCornerPatches(W, H);
   if (guidePatches) {
     merged = mergeFiducialCornerStates(

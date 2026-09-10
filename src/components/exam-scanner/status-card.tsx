@@ -160,7 +160,7 @@ function StatusCardBody({
             captureReady ? 'text-orange-600' : 'text-gray-400'
           )}
         >
-          {captureReady ? 'Toca para capturar' : stripAligned ? '3 esquinas + franjas laterales' : 'Alinea la hoja en el marco naranja'}
+          {captureReady ? 'Toca para capturar' : 'Alinea los 4 cuadritos negros con las esquinas naranjas'}
         </p>
       ) : null}
     </div>
