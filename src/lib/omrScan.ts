@@ -2660,6 +2660,52 @@ export function captureVideoFrameForDocumentDetect(
   };
 }
 
+/**
+ * Recorta un MobileGuideRoiCapture al marco naranja del visor (mismo espacio que el overlay).
+ * Así el live detect ve las esquinas negras donde el usuario las alineó.
+ */
+export function cropMobileGuideRoiCaptureToViewportGuide(
+  capture: MobileGuideRoiCapture,
+  guide: { left: number; top: number; width: number; height: number },
+  layout: CalifacilVideoLetterbox
+): MobileGuideRoiCapture | null {
+  const cropped = cropCanvasToViewportGuideRect(
+    capture.roiCanvas,
+    guide,
+    layout,
+    capture.frameW,
+    capture.frameH
+  );
+  if (!cropped) return null;
+
+  const fw = Math.max(1, layout.frameW || capture.frameW);
+  const fh = Math.max(1, layout.frameH || capture.frameH);
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
+    fw,
+    fh,
+    layout.displayW,
+    layout.displayH
+  );
+  if (!(scale > 0)) return null;
+
+  const frameLeft = (guide.left - layout.offsetX + cropX) / scale;
+  const frameTop = (guide.top - layout.offsetY + cropY) / scale;
+  const frameW = guide.width / scale;
+  const frameH = guide.height / scale;
+
+  return {
+    roiCanvas: cropped,
+    roiRect: {
+      left: Math.max(0, frameLeft),
+      top: Math.max(0, frameTop),
+      width: Math.max(1, frameW),
+      height: Math.max(1, frameH),
+    },
+    frameW: capture.frameW,
+    frameH: capture.frameH,
+  };
+}
+
 function quadShoelaceArea(quad: [Point, Point, Point, Point]): number {
   const [tl, tr, br, bl] = quad;
   return (
@@ -3670,17 +3716,34 @@ export function detectAnswerSheetFiducialsInRoi(
     if (merged.filter(Boolean).length >= 3) return merged;
   }
 
+  // ROI ya recortado al marco naranja: las esquinas del canvas ≈ cuadritos impresos.
   const inset = Math.max(4, Math.round(W * 0.022));
-  const corners = [
+  const canvasCorners = [
     { x: inset, y: inset },
     { x: W - patchW - inset, y: inset },
     { x: inset, y: H - patchH - inset },
     { x: W - patchW - inset, y: H - patchH - inset },
   ];
-  return mergeFiducialCornerStates(
+  merged = mergeFiducialCornerStates(
     merged,
-    detectFiducialsAtCornerPatches(ctx, corners, patchW, patchH)
+    detectFiducialsAtCornerPatches(ctx, canvasCorners, patchW, patchH)
   );
+  if (merged.filter(Boolean).length >= 3) return merged;
+
+  // Frame completo: probar también el norm del viewfinder carta.
+  const guidePatches = viewfinderGuideCornerPatches(W, H);
+  if (guidePatches) {
+    merged = mergeFiducialCornerStates(
+      merged,
+      detectFiducialsAtCornerPatches(
+        ctx,
+        guidePatches.corners,
+        guidePatches.patchW,
+        guidePatches.patchH
+      )
+    );
+  }
+  return merged;
 }
 
 /** Cuenta cuadros negros de esquina impresos visibles en las esquinas del ROI. */
@@ -4827,6 +4890,44 @@ export function buildLetterDisplayOverlayGeometry(
     { forceRebuild: true, maxShiftRatio }
   );
   return attached.geometry ?? base;
+}
+
+/**
+ * Relee OMR con plantilla carta + snap a anillos (recovery cuando el pase unified
+ * devolvió blank por geometría desfasada).
+ */
+export function rereadOmrWithLetterBubbleSnap(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount: number,
+  baseMeta?: OmrScanMetaResult | null
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const letterGeom = buildLetterDisplayOverlayGeometry(canvas, cols, rows, {
+    maxShiftRatio: 0.22,
+  });
+  const reread = readAnswerSheetPicksFromTemplateGeometry(
+    canvas,
+    letterGeom,
+    FRAME_GRID_SCAN_THRESHOLDS,
+    rows,
+    cols
+  );
+  return sanitizeAnswerSheetOmrMeta(
+    {
+      picks: reread.picks,
+      rows: reread.rows,
+      needsVisionAssist: false,
+      maxSameColumnCount: reread.maxSameColumnCount,
+      geometry: letterGeom,
+      reviewSourceCanvas: canvas,
+      controlNumberDigits: baseMeta?.controlNumberDigits ?? [],
+      controlNumber: baseMeta?.controlNumber ?? null,
+      warpAlignment: baseMeta?.warpAlignment ?? null,
+    },
+    rows
+  );
 }
 
 /** Centra celdas en burbujas impresas y relee picks con la geometría ajustada. */

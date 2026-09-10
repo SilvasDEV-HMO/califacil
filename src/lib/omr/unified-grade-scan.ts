@@ -163,22 +163,39 @@ function finalizeUnifiedDisplayMeta(
 
 /**
  * Elige entre pase unified y strip recovery.
- * Si un pase es blank y el otro tiene muchos picks/tinta fuerte, preferir el no-blank
- * (hojas llenas con geometría mediocre). Si ambos son sparse/débiles, preferir blank
- * para no inventar 1/30 en hoja vacía.
+ * Preferir blank solo si el otro pase no tiene tinta fuerte; no preferir “menos picks”
+ * cuando el otro tiene mediana de tinta claramente mayor (hoja llena mal alineada).
  */
 export function pickBetterOmrMeta(
   a: OmrScanMetaResult,
   b: OmrScanMetaResult,
   rows: number
 ): OmrScanMetaResult {
+  const inkScore = (meta: OmrScanMetaResult): number => {
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < rows; i++) {
+      const row = meta.rows[i];
+      if (!row) continue;
+      const fracs = row.inkFractions ?? [];
+      const maxInk = fracs.length > 0 ? Math.max(...fracs) : 0;
+      if (meta.picks[i] != null || maxInk > 0) {
+        sum += maxInk;
+        n++;
+      }
+    }
+    return n > 0 ? sum / n : 0;
+  };
+
   const blankA = isAnswerSheetOmrMostlyBlank(a, rows);
   const blankB = isAnswerSheetOmrMostlyBlank(b, rows);
   if (blankA !== blankB) {
     const nonBlank = blankA ? b : a;
-    // Solo preferir no-blank si es lectura fuerte (no inventos medianos/sesgados).
+    const blank = blankA ? a : b;
     if (isStrongMobileOmrMeta(nonBlank, rows)) return nonBlank;
-    return blankA ? a : b;
+    // Tinta fuerte en el no-blank: preferirlo aunque no llegue a “strong” por conteo.
+    if (inkScore(nonBlank) >= 0.22) return nonBlank;
+    return blank;
   }
 
   const weakA = isWeakMobileOmrMeta(a, rows);
@@ -187,9 +204,12 @@ export function pickBetterOmrMeta(
 
   const ra = countResolvedPicks(a, rows);
   const rb = countResolvedPicks(b, rows);
-  // Con ambos débiles: preferir el de menos picks (menos invento).
+  const ia = inkScore(a);
+  const ib = inkScore(b);
+  // Ambos débiles: preferir más tinta (lectura real parcial), no menos picks.
   if (weakA && weakB) {
-    if (rb !== ra) return rb < ra ? b : a;
+    if (Math.abs(ib - ia) > 0.04) return ib > ia ? b : a;
+    if (rb !== ra) return rb > ra ? b : a;
   } else if (rb !== ra) {
     return rb > ra ? b : a;
   }
@@ -200,10 +220,9 @@ export function pickBetterOmrMeta(
 }
 
 /**
- * Preview móvil: siempre carta (`displayCanvas`) + geometría letter para bolitas/nombre.
- * Nunca reusar meta.geometry del scan/referencia: syncCalifacilOmrGeometryImageSize
- * solo cambia imageWidth/Height y deja las bolitas en coords del otro canvas → desalineadas.
- * La lectura OMR sigue en `scanCanvas`.
+ * Preview móvil: carta (`displayCanvas`) + geometría de lectura cuando es válida.
+ * Si la meta ya trae geometría refinada (mismo espacio letter), reutilizarla para que
+ * naranja/verde/rojo coincidan con el muestreo; si no, plantilla carta con snap.
  */
 export function resolveMobileGradeDisplay(
   displayCanvas: HTMLCanvasElement,
@@ -220,6 +239,26 @@ export function resolveMobileGradeDisplay(
     !meta ||
     isAnswerSheetOmrMostlyBlank(meta, scored) ||
     resolved <= Math.max(2, Math.floor(scored * 0.07));
+
+  const engineGeom = meta?.geometry;
+  const engineMatchesDisplay =
+    Boolean(engineGeom?.cells?.length) &&
+    (engineGeom!.imageWidth == null ||
+      Math.abs((engineGeom!.imageWidth ?? displayCanvas.width) - displayCanvas.width) <= 2) &&
+    (engineGeom!.imageHeight == null ||
+      Math.abs((engineGeom!.imageHeight ?? displayCanvas.height) - displayCanvas.height) <= 2);
+
+  if (engineGeom && (engineMatchesDisplay || resolved > 0) && !blankOrSparse) {
+    return {
+      previewCanvas: displayCanvas,
+      geometry: syncCalifacilOmrGeometryImageSize(
+        engineGeom,
+        displayCanvas.width,
+        displayCanvas.height
+      ),
+    };
+  }
+
   return {
     previewCanvas: displayCanvas,
     geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount, {

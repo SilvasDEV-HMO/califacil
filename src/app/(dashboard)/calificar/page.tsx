@@ -47,6 +47,7 @@ import {
   califacilMobileAnswerSheetGuideInViewportPx,
   captureVideoFullFrame,
   cropCanvasToViewportGuideRect,
+  cropMobileGuideRoiCaptureToViewportGuide,
   captureImageFullFrame,
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
@@ -58,6 +59,7 @@ import {
   estimateCanvasSharpness,
   fileToImage,
   getObjectCoverVideoLetterbox,
+  isAnswerSheetOmrMostlyBlank,
   isCalifacilExamSheetLikely,
   isCalifacilExamSheetStrict,
   isCalifacilAnswerSheetReadyForGrading,
@@ -85,6 +87,7 @@ import {
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
+  rereadOmrWithLetterBubbleSnap,
   scanCalifacilOmrSheetWithMeta,
   scanWarpedMobileAnswerSheetFast,
   scanWarpedWithBestTableFrame,
@@ -93,7 +96,6 @@ import {
   canvasPreviewDataUrl,
   canvasPreviewJpeg,
   cropAnswerSheetNameSnippetDataUrl,
-  isAnswerSheetOmrMostlyBlank,
   sanitizeAnswerSheetOmrMeta,
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
@@ -927,11 +929,26 @@ export default function CalificarPage() {
         };
       }
       // Misma lectura que desktop PDF (1600 + reattach); no inventar con path móvil rápido.
-      const meta = await scanDesktopGradeUnifiedOrLegacyAsync(
+      let meta = await scanDesktopGradeUnifiedOrLegacyAsync(
         scanCanvas,
         omrCols,
         omrRowCount
       );
+      // Recovery: blank por plantilla desfasada → snap carta a anillos.
+      if (isAnswerSheetOmrMostlyBlank(meta, omrRowCount)) {
+        const snapSource = isCalifacilWarpedLetterCanvas(displayCanvas)
+          ? displayCanvas
+          : scanCanvas;
+        const snapMeta = rereadOmrWithLetterBubbleSnap(
+          snapSource,
+          omrCols,
+          omrRowCount,
+          meta
+        );
+        if (!isAnswerSheetOmrMostlyBlank(snapMeta, omrRowCount)) {
+          meta = snapMeta;
+        }
+      }
       // Marco naranja en coords carta (preview), no en canvas de referencia.
       const orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
       return {
@@ -1678,23 +1695,32 @@ export default function CalificarPage() {
         }
         const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
         const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
-        // Overlay sobre el canvas de preview: referencia (paridad desktop) o carta.
+        // Overlay: preferir geometría de lectura si existe; si no, reference/letter.
         let geomClone: CalifacilOmrScanGeometry;
         if (reviewCanvas instanceof HTMLCanvasElement) {
-          const refOverlay = isReferenceGradeCanvasAnchor(reviewCanvas.width, reviewCanvas.height)
-            ? buildDesktopDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
-            : null;
-          const letterOverlay =
-            !refOverlay && isCalifacilWarpedLetterCanvas(reviewCanvas)
-              ? buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
-              : null;
-          const overlayGeom =
-            refOverlay ??
-            letterOverlay ??
-            (geom
+          const readGeom =
+            geom && geom.cells?.length
               ? syncCalifacilOmrGeometryImageSize(geom, previewW, previewH)
-              : buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount));
-          geomClone = syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH);
+              : null;
+          const hasStudentPicks = picksInChunk.some((p) => p != null);
+          // Con picks reales, pintar con la misma geometría que leyó el motor.
+          if (readGeom && hasStudentPicks) {
+            geomClone = readGeom;
+          } else {
+            const refOverlay = isReferenceGradeCanvasAnchor(reviewCanvas.width, reviewCanvas.height)
+              ? buildDesktopDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
+              : null;
+            const letterOverlay =
+              !refOverlay && isCalifacilWarpedLetterCanvas(reviewCanvas)
+                ? buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
+                : null;
+            const overlayGeom =
+              refOverlay ??
+              letterOverlay ??
+              readGeom ??
+              buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount);
+            geomClone = syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH);
+          }
         } else if (geom) {
           try {
             geomClone = structuredClone(geom);
@@ -1765,9 +1791,16 @@ export default function CalificarPage() {
           await setPreviewFromSource(activeScanSource, fallbackFile);
         }
         if (isStaleRead()) return { success: false };
-        // Desktop: overlay anclado a referencia o a carta warpeada (hoja sola).
+        // Desktop: preferir geometría de lectura si hay picks; si no, reference/letter.
         let reviewGeom = meta.geometry;
-        if (
+        const hasStudentPicks = raw.slice(0, chunk.length).some((p) => p != null);
+        if (previewCanvas && hasStudentPicks && meta.geometry?.cells?.length) {
+          reviewGeom = syncCalifacilOmrGeometryImageSize(
+            meta.geometry,
+            previewCanvas.width,
+            previewCanvas.height
+          );
+        } else if (
           previewCanvas &&
           isReferenceGradeCanvasAnchor(previewCanvas.width, previewCanvas.height)
         ) {
@@ -2442,12 +2475,23 @@ export default function CalificarPage() {
           let oriented: HTMLCanvasElement | null = null;
           let sheetLikely = false;
           if (isMobile) {
-            const roiCapture = captureVideoFrameForDocumentDetect(video, {
+            let roiCapture = captureVideoFrameForDocumentDetect(video, {
               maxSide: MOBILE_ROI_DETECT_MAX_SIDE,
             });
             if (!roiCapture) {
               nextDelay = 100;
               return;
+            }
+            // Detectar dentro del marco naranja (misma geometría que el overlay).
+            const guideLayout = liveVideoLayoutRef.current;
+            const guide = staticScannerGuideRectRef.current;
+            if (guide && guideLayout) {
+              const guideRoi = cropMobileGuideRoiCaptureToViewportGuide(
+                roiCapture,
+                guide,
+                guideLayout
+              );
+              if (guideRoi) roiCapture = guideRoi;
             }
             const { roiCanvas } = roiCapture;
             if (estimateCanvasMeanLuminance(roiCanvas) < MIN_FRAME_LUMINANCE) {

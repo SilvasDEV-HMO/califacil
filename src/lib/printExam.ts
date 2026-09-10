@@ -1316,9 +1316,9 @@ function ptToWarpPx(pt: number): number {
  * Calculada desde el layout impreso de la hoja de respuestas (página 2).
  */
 /** Ajuste empírico: compensa warp vs. impreso (valores altos suben la cuadrícula de filas). */
-const ANSWER_SHEET_OMR_ROW_SHIFT_UP_RATIO = 0.014;
-/** Nudge vertical tras warp fiducial (pt negativos = sube el marco naranja). */
-const ANSWER_SHEET_TABLE_TOP_NUDGE_PT = -16;
+const ANSWER_SHEET_OMR_ROW_SHIFT_UP_RATIO = 0;
+/** Nudge vertical tras warp fiducial (pt negativos = sube el marco naranja). Neutralizado: overlay/lectura caían arriba de los anillos. */
+const ANSWER_SHEET_TABLE_TOP_NUDGE_PT = 2;
 const ANSWER_SHEET_TABLE_HEIGHT_NUDGE_PT = 4;
 
 function computeAnswerSheetPageTemplate(rowCount: number): CalifacilAnswerSheetOmrTemplate {
@@ -1577,13 +1577,14 @@ export function getAnswerSheetNameFieldPageRatios(): {
   const nameFieldOuterW = Math.max(1, contentW - 2 * shortFieldW - 2 * metaGapPx);
   const nameLabelPx = ptToWarpPx(52);
   const fieldGapPx = ptToWarpPx(3);
-  // min-height 7pt + borde + margen extra para UI legible
-  const lineHPx = ptToWarpPx(12);
+  // Caja de escritura (~32pt), no solo la raya de 12pt.
+  const lineHPx = ptToWarpPx(32);
+  const ascentPadPx = ptToWarpPx(10);
   const lineW = Math.max(1, nameFieldOuterW - nameLabelPx - fieldGapPx);
 
   return {
     left: (sideMarginPx + nameLabelPx + fieldGapPx) / pageW,
-    top: metaRowTopPx / pageH,
+    top: Math.max(0, (metaRowTopPx - ascentPadPx) / pageH),
     width: lineW / pageW,
     height: lineHPx / pageH,
   };

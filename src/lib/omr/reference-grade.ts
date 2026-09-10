@@ -191,10 +191,11 @@ export function buildReferenceAnchoredGeometry(
  * Pre-nudge siembra celdas para el snap; post-nudge afinado tras feedback desktop (antes quedaban bajo/derecha).
  */
 const DESKTOP_OVERLAY_PRE_NUDGE_X = 0;
-const DESKTOP_OVERLAY_PRE_NUDGE_Y = 0.008;
-/** Post-snap: leve derecha/abajo; valores previos (+0.0075/+0.011) bajaban de más las bolitas. */
+/** Pre-snap: sembrar un poco más abajo (overlay quedaba arriba de anillos). */
+const DESKTOP_OVERLAY_PRE_NUDGE_Y = 0.014;
+/** Post-snap: leve derecha/abajo para centrar bolitas en anillos impresos. */
 const DESKTOP_OVERLAY_POST_NUDGE_X = 0.0035;
-const DESKTOP_OVERLAY_POST_NUDGE_Y = 0.004;
+const DESKTOP_OVERLAY_POST_NUDGE_Y = 0.01;
 
 function nudgeDesktopOverlayGeometry(
   geometry: CalifacilOmrScanGeometry,

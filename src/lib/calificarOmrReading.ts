@@ -5,8 +5,11 @@ import {
 import {
   autoOrientCalifacilSheet,
   califacilImageToJpegDataUrl,
+  hasCalifacilAlignStrips,
   isAnswerSheetOmrMostlyBlank,
+  isCalifacilWarpedLetterCanvas,
   prepareCalifacilScanInput,
+  rereadOmrWithLetterBubbleSnap,
   sanitizeAnswerSheetOmrMeta,
   type OmrScanMetaResult,
   type WarpAlignmentReport,
@@ -276,8 +279,40 @@ export async function runCalifacilOmrReadingPipeline(
   const minResolved = Math.max(1, Math.ceil(chunk.length * CALIFACIL_MIN_AUTO_READ_RATIO));
   let mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
 
+  // Blank por geometría desfasada: intentar snap carta→anillos antes de aceptar 0%.
+  if (mostlyBlank && mapped.resolvedCount === 0) {
+    const snapCanvas =
+      (scanCanvas &&
+      (isCalifacilWarpedLetterCanvas(scanCanvas) || hasCalifacilAlignStrips(scanCanvas))
+        ? scanCanvas
+        : null) ??
+      (activeScanSource instanceof HTMLCanvasElement &&
+      (isCalifacilWarpedLetterCanvas(activeScanSource) ||
+        hasCalifacilAlignStrips(activeScanSource))
+        ? activeScanSource
+        : null);
+    if (snapCanvas) {
+      const snapMeta = rereadOmrWithLetterBubbleSnap(
+        snapCanvas,
+        omrCols,
+        omrRowCount,
+        meta
+      );
+      const snapMapped = mapRawToDraftDetailed([...snapMeta.picks], chunk);
+      if (
+        snapMapped.resolvedCount > mapped.resolvedCount &&
+        !isAnswerSheetOmrMostlyBlank(snapMeta, chunk.length)
+      ) {
+        meta = snapMeta;
+        raw = [...snapMeta.picks];
+        mapped = snapMapped;
+        mostlyBlank = false;
+        activeScanSource = snapCanvas;
+      }
+    }
+  }
+
   // Solo forzar blank si la señal de tinta indica hoja vacía real.
-  // No tratar "0 picks por fallo de geometría" como 0% en PDF/flat/foto.
   if (mostlyBlank) {
     raw = raw.map(() => null);
     mapped = mapRawToDraftDetailed(raw, chunk);
