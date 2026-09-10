@@ -130,17 +130,19 @@ import {
 import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
-  prepareCalifacilGradeScanCanvases,
   isMobileLetterGradeCanvasReady,
   isPhotoSheetWarpAcceptable,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
 import {
+  gradeLetterCanvas,
+  prepareLetterGradeCanvas,
+} from '@/lib/omr/grade-letter-canvas';
+import {
   buildDesktopDisplayOverlayGeometry,
   isReferenceGradeCanvasAnchor,
 } from '@/lib/omr/reference-grade';
 import {
-  scanWarpedGradeMobileAsync,
   resolveMobileGradeDisplay,
   isStrongMobileOmrMeta,
   isWeakMobileOmrMeta,
@@ -894,17 +896,17 @@ export default function CalificarPage() {
       warpAlignment?: WarpAlignmentReport | null,
       activeRows: number = omrRowCount
     ) => {
-      // Carta completa (skipPrintCrop): misma geometría para preview y OMR.
-      const { displayCanvas } = prepareCalifacilGradeScanCanvases(
-        warped,
-        omrCols,
-        omrRowCount,
-        { preWarped: true, warpAlignment, skipPrintCrop: true }
-      );
+      // Un canvas carta: preview === OMR === overlay (rejilla 30).
+      const prepared = prepareLetterGradeCanvas(warped, {
+        columns: omrCols,
+        rowCount: omrRowCount,
+        preWarped: true,
+        warpAlignment,
+      });
+      const displayCanvas = prepared.canvas;
       const scoredRows = Math.max(1, Math.min(omrRowCount, activeRows));
 
       const sheetFillOk = (c: HTMLCanvasElement): boolean => {
-        // Misma barra que desktop foto: no calificar warps blandos que inventan bolitas.
         if (isPhotoSheetWarpAcceptable(c) || isMobileLetterGradeCanvasReady(c)) {
           return true;
         }
@@ -922,7 +924,6 @@ export default function CalificarPage() {
           rejectedCorners: true as const,
         };
       }
-      // Sin alineación fiable: no mandar canvas basura al lector desktop.
       if (
         warpAlignment != null &&
         !warpAlignment.ok &&
@@ -938,12 +939,13 @@ export default function CalificarPage() {
         };
       }
 
-      // Siempre leer en displayCanvas (carta); no fallback silencioso a referencia.
-      let meta = await scanWarpedGradeMobileAsync(displayCanvas, omrCols, omrRowCount, {
-        activeRows: scoredRows,
-        letterCanvas: displayCanvas,
+      // Una geometría + una lectura sobre el mismo LetterCanvas (30 filas).
+      const graded = gradeLetterCanvas(displayCanvas, omrCols, omrRowCount, {
+        geometry: prepared.geometry,
       });
-      // Recovery: re-leer sobre geometría de overlay letter.
+      let meta = graded.meta;
+
+      // Recovery solo si bubble-fit / lectura débil en filas activas.
       if (
         isAnswerSheetOmrMostlyBlank(meta, scoredRows) ||
         isWeakMobileOmrMeta(meta, omrRowCount, scoredRows) ||
@@ -952,7 +954,7 @@ export default function CalificarPage() {
         const snapMeta = rereadOmrWithDisplayOverlayGeometry(
           displayCanvas,
           omrCols,
-          scoredRows,
+          omrRowCount,
           meta
         );
         if (isUsableOmrRecoveryMeta(snapMeta, scoredRows)) {
@@ -1415,8 +1417,11 @@ export default function CalificarPage() {
           });
           await yieldForSpinnerPaint();
           if (isStaleRead()) return { success: false };
-          // Foto sin hoja sola: no calificar con mesa/fondo.
-          if (!flatDocument && !normalized.sheetDetected) {
+          // Foto / flat dudoso sin hoja sola: no calificar con mesa/fondo.
+          if (
+            (!flatDocument || uploadClass === 'flatScan') &&
+            !normalized.sheetDetected
+          ) {
             toast.error(
               'No se detectó la hoja. Encuadra franjas laterales y esquinas negras, con buena luz.'
             );
@@ -3832,7 +3837,7 @@ export default function CalificarPage() {
         displayCanvas = warped;
       }
 
-      const minResolvedForGrade = Math.ceil(chunkRows * 0.4);
+      const minResolvedForGrade = Math.ceil(chunkRows * 0.7);
       const resolvedFast = califacilFastScan?.meta
         ? countResolvedOmrPicks(califacilFastScan.meta.picks.slice(0, chunkRows))
         : 0;
@@ -3893,47 +3898,53 @@ export default function CalificarPage() {
           rows: califacilFastScan.meta.rows.slice(0, Math.max(chunkRows, omrRowCount)),
         };
 
-        // Siempre overlay letter + snap + reread en el mismo displayCanvas.
+        // Overlay = misma geometría de la lectura (LetterCanvas único).
         const resolved = resolveMobileGradeDisplay(
           displayCanvas,
           displayCanvas,
           omrCols,
-          chunkRows,
+          omrRowCount,
           warpMeta
         );
         mobileDisplaySource = resolved.previewCanvas;
         let displayGeom = resolved.geometry;
-        const geomReread = rereadOmrPicksOnGeometry(
-          resolved.previewCanvas,
-          displayGeom,
-          omrCols,
-          chunkRows,
-          warpMeta
-        );
-        warpMeta = pickBetterOmrMeta(warpMeta, geomReread, chunkRows);
+        // Preferir geometry ya leída si coincide con el canvas.
+        if (
+          warpMeta.geometry?.cells?.length &&
+          warpMeta.reviewSourceCanvas === displayCanvas
+        ) {
+          displayGeom = warpMeta.geometry;
+        } else {
+          const geomReread = rereadOmrPicksOnGeometry(
+            resolved.previewCanvas,
+            displayGeom,
+            omrCols,
+            omrRowCount,
+            warpMeta
+          );
+          warpMeta = pickBetterOmrMeta(warpMeta, geomReread, chunkRows);
+          displayGeom = geomReread.geometry ?? displayGeom;
+        }
 
         const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
         const sameColCap = Math.max(5, Math.round(chunkRows * 0.55));
         const noColumnCollapse = (warpMeta.maxSameColumnCount ?? 0) <= sameColCap;
+        // Trusted: ≥70% filas del chunk con pick + sin colapso de columna.
         let trusted =
-          resolvedCount >= Math.ceil(chunkRows * 0.4) &&
-          noColumnCollapse &&
-          (isUsableOmrRecoveryMeta(warpMeta, chunkRows) ||
-            isStrongMobileOmrMeta(warpMeta, chunkRows, chunkRows) ||
-            resolvedCount >= Math.ceil(chunkRows * 0.7));
+          resolvedCount >= Math.ceil(chunkRows * 0.7) && noColumnCollapse;
 
         if (!trusted && isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
           const snappedGeom = buildLetterDisplayOverlayGeometry(
             resolved.previewCanvas,
             omrCols,
-            chunkRows,
+            omrRowCount,
             { skipSnap: false, maxShiftRatio: 0.22 }
           );
           const snappedReread = rereadOmrPicksOnGeometry(
             resolved.previewCanvas,
             snappedGeom,
             omrCols,
-            chunkRows,
+            omrRowCount,
             warpMeta
           );
           if (
@@ -3945,10 +3956,7 @@ export default function CalificarPage() {
             const n = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
             const noCollapse =
               (warpMeta.maxSameColumnCount ?? 0) <= sameColCap;
-            trusted =
-              n >= Math.ceil(chunkRows * 0.4) &&
-              noCollapse &&
-              (isUsableOmrRecoveryMeta(warpMeta, chunkRows) || n >= Math.ceil(chunkRows * 0.7));
+            trusted = n >= Math.ceil(chunkRows * 0.7) && noCollapse;
           }
         }
 
@@ -4048,7 +4056,7 @@ export default function CalificarPage() {
   const processMobileSheetCapture = useCallback(
     async (
       video: HTMLVideoElement,
-      _opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
       playAutoCaptureClickSound();
       // Frame fresco del sensor (sin sleep largo).
@@ -4117,14 +4125,24 @@ export default function CalificarPage() {
       });
       await yieldForSpinnerPaint();
 
-      // Dentro del marco: franjas/esquinas, o casi el canvas completo (hoja ya encuadrada).
-      const stripQuad = detectAnswerSheetQuadViaAlignStrips(gradeCanvas);
-      const frameQuad = stripQuad ?? defaultDocumentQuad(gradeCanvas.width, gradeCanvas.height);
+      // P0: usar el roiQuad live que disparó 4/4 (no re-detectar strips/page y descartarlo).
+      let warpSource: HTMLCanvasElement = gradeCanvas;
+      let frameQuad: RoiQuad | null = null;
+      let guideCropped = usedGuideCrop;
+      if (opts?.roiQuad && opts?.roiCapture) {
+        warpSource = fullCanvas;
+        frameQuad = frameQuadOnFullCanvas(opts.roiQuad, opts.roiCapture, fullCanvas);
+        // Quad live ya en espacio del sensor: no softAccept de crop naranja.
+        guideCropped = false;
+      } else {
+        const stripQuad = detectAnswerSheetQuadViaAlignStrips(gradeCanvas);
+        frameQuad = stripQuad ?? defaultDocumentQuad(gradeCanvas.width, gradeCanvas.height);
+      }
 
-      await processMobileCapturedCanvas(gradeCanvas, video, {
+      await processMobileCapturedCanvas(warpSource, video, {
         frameQuad,
         fromGallery: false,
-        guideCropped: usedGuideCrop,
+        guideCropped,
       });
     },
     [processMobileCapturedCanvas, mobileScanPreviewSetters, updateLiveVideoLayout]
@@ -4309,6 +4327,8 @@ export default function CalificarPage() {
           needsVisionAssist: false,
         };
       } else if (
+        countResolvedOmrPicks(gradeMeta.picks.slice(0, chunk.length)) <
+          Math.ceil(chunk.length * 0.7) ||
         isWeakMobileOmrMeta(gradeMeta, chunk.length, chunk.length) ||
         !isStrongMobileOmrMeta(gradeMeta, chunk.length, chunk.length)
       ) {
@@ -4336,7 +4356,7 @@ export default function CalificarPage() {
         {
           trustedMobileRead:
             countResolvedOmrPicks(gradeMeta.picks.slice(0, chunk.length)) >=
-            Math.ceil(chunk.length * 0.4),
+            Math.ceil(chunk.length * 0.7),
         }
       );
       const result = await finalizeCapturedSheet(docCanvas, undefined, {

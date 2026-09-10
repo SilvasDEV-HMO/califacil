@@ -17,6 +17,12 @@ export {
   type RoiQuad,
 } from '@/lib/omr/pipeline';
 export {
+  prepareLetterGradeCanvas,
+  gradeLetterCanvas,
+  type LetterGradePrepareResult,
+  type LetterGradeReadResult,
+} from '@/lib/omr/grade-letter-canvas';
+export {
   alignCanvasToReferenceGrade,
   buildReferenceAnchoredGeometry,
   buildDesktopDisplayOverlayGeometry,

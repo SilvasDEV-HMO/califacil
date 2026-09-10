@@ -281,8 +281,8 @@ export function pickBetterOmrMeta(
 }
 
 /**
- * Preview móvil: siempre geometría letter + snap a anillos sobre `displayCanvas`.
- * Nunca reutilizar geometry de otro canvas (referencia) solo sincronizando width/height.
+ * Preview móvil: misma geometría que la lectura cuando coincide el canvas.
+ * Solo reconstruye letter+snap si no hay geometry fiable del read.
  */
 export function resolveMobileGradeDisplay(
   displayCanvas: HTMLCanvasElement,
@@ -316,8 +316,18 @@ export function resolveMobileGradeDisplay(
     (engineGeom!.imageHeight == null ||
       Math.abs((engineGeom!.imageHeight ?? displayCanvas.height) - displayCanvas.height) <= 2);
 
-  // Móvil: siempre reconstruir overlay letter con snap (salvo blank real sin tinta).
-  if (!blankOrSparse || !engineMatchesDisplay) {
+  if (engineMatchesDisplay && engineGeom) {
+    return {
+      previewCanvas: displayCanvas,
+      geometry: syncCalifacilOmrGeometryImageSize(
+        engineGeom,
+        displayCanvas.width,
+        displayCanvas.height
+      ),
+    };
+  }
+
+  if (!blankOrSparse) {
     return {
       previewCanvas: displayCanvas,
       geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount, {

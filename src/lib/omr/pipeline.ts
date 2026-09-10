@@ -363,15 +363,10 @@ export function normalizeCalifacilGradeDocumentCanvas(
     normalized: boolean
   ): NormalizeGradeDocumentResult => {
     const display = scaleCanvasToMaxSide(canvas, maxSide);
-    let out = display;
-    const shouldReferenceAlign = opts?.rowCount != null && opts.rowCount > 0;
-    if (shouldReferenceAlign) {
-      out = prepareReferenceGradeCanvas(display, columns, opts.rowCount!);
-    }
-    // Preview = mismo canvas que OMR (enderezado). Evita overlay derecho sobre foto inclinada.
+    // Un solo canvas carta (sin prepareReferenceGrade): preview = OMR = overlay.
     return {
-      canvas: out,
-      displayCanvas: out,
+      canvas: display,
+      displayCanvas: display,
       alignment,
       normalized,
       sheetDetected: true,
@@ -426,12 +421,43 @@ export function normalizeCalifacilGradeDocumentCanvas(
         useGuideCrop: false,
         allowTiltSweep: true,
       }) ?? base;
-    // Foto de hoja inclinada clasificada como flat: warp a carta si hace falta.
-    if (countCalifacilCornerMarkers(oriented) < 3 || !hasCalifacilAlignStrips(oriented)) {
+
+    const stripQuadOriented = detectAnswerSheetQuadViaAlignStrips(oriented);
+    const fillOriented = stripQuadOriented
+      ? measureRoiSheetFillRatio(stripQuadOriented, oriented.width, oriented.height)
+      : 0;
+    const cornersOriented = countCalifacilCornerMarkers(oriented);
+    const stripsOriented = hasCalifacilAlignStrips(oriented);
+    // flatScan dudoso (tilt/mesa/fill): tratar como foto y warp real.
+    const dubiousFlat =
+      uploadClass === 'flatScan' &&
+      (cornersOriented < 3 ||
+        !stripsOriented ||
+        fillOriented < 0.72 ||
+        !isLikelyFlatCalifacilDocument(oriented, columns));
+
+    if (
+      dubiousFlat ||
+      cornersOriented < 3 ||
+      !stripsOriented ||
+      !isPhotoSheetWarpAcceptable(oriented)
+    ) {
       const fastWarp = warpCalifacilMobileCaptureFast(oriented, { maxErrorPx });
       if (fastWarp.warped) {
         const ok = tryPhotoDoc(fastWarp.warped, fastWarp.alignment, true);
         if (ok) return ok;
+      }
+      const fullWarp = warpCalifacilMobileCapture(oriented, { maxErrorPx });
+      if (fullWarp.warped) {
+        const ok = tryPhotoDoc(fullWarp.warped, fullWarp.alignment, true);
+        if (ok) return ok;
+      }
+      // PDF: permitir orientado aunque el warp falle; foto flat dudosa → no inventar score.
+      if (uploadClass !== 'pdf') {
+        if (isPhotoSheetWarpAcceptable(oriented) || isLikelyFlatCalifacilDocument(oriented, columns)) {
+          return finishOk(oriented, null, oriented !== base);
+        }
+        return finishFail();
       }
     }
     return finishOk(oriented, null, oriented !== base);
@@ -528,7 +554,8 @@ export function prepareCalifacilGradeScanCanvases(
           skipPrintCrop: opts?.skipPrintCrop ?? false,
         }) ?? canvas
       : canvas;
-  if (opts?.skipReferenceAlign) {
+  // Carta móvil / unificado: scan === display (sin canvas de referencia aparte).
+  if (opts?.skipReferenceAlign || opts?.skipPrintCrop) {
     return { displayCanvas, scanCanvas: displayCanvas };
   }
   const scanCanvas = prepareReferenceGradeCanvas(displayCanvas, columns, rowCount);

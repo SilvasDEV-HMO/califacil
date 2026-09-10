@@ -733,7 +733,7 @@ export function buildCalifacilOmrReadingOverride(
   const trusted =
     Boolean(opts?.trustedMobileRead) ||
     meta.picks.slice(0, chunk.length).filter((p) => p != null).length >=
-      Math.ceil(chunk.length * 0.4);
+      Math.ceil(chunk.length * 0.7);
 
   // Trusted: conservar picks (solo recortar al chunk). Else: sanitize + blank/weak wipe.
   const sanitizedFull = trusted

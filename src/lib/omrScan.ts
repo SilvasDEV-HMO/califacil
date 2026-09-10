@@ -10892,8 +10892,8 @@ export function scanCalifacilOmrSheetWithMeta(
 }
 
 /**
- * Auto-orienta la foto para que la banda CaliFacil quede en la posición esperada.
- * Prueba 0/90/180/270 y se queda con la orientación con mayor evidencia de marcas válidas.
+ * Auto-orienta la foto para que fiduciales/franjas queden en posición carta.
+ * Objetivo: minimizar error de fiduciales (no maximizar picks inventados).
  */
 export function autoOrientCalifacilSheet(
   source: HTMLImageElement | HTMLCanvasElement,
@@ -10904,6 +10904,30 @@ export function autoOrientCalifacilSheet(
   const base = prepareCalifacilScanInput(source, opts);
   if (!base) return null;
 
+  const scoreOrientation = (canvas: HTMLCanvasElement): number => {
+    const corners = countCalifacilCornerMarkers(canvas);
+    const strips = hasCalifacilAlignStrips(canvas) ? 1 : 0;
+    const alignment = measureWarpedFiducialAlignment(canvas, 99);
+    const meanErr = Number.isFinite(alignment.meanErrorPx) ? alignment.meanErrorPx : 400;
+    const maxErr = Number.isFinite(alignment.maxErrorPx) ? alignment.maxErrorPx : 400;
+    // Fiduciales bien colocados + franjas; picks OMR solo como desempate débil.
+    const detail = scanCalifacilOmrCanvasDetailed(canvas, columns, {
+      minMarkDarkness: 0.04,
+      minBestVsSecondGap: 0.02,
+    });
+    const bandInk = estimateBottomBandInk(canvas);
+    return (
+      corners * 800 +
+      strips * 1200 +
+      (alignment.ok ? 2000 : 0) +
+      Math.max(0, 250 - meanErr) * 8 +
+      Math.max(0, 250 - maxErr) * 4 +
+      bandInk * 400 +
+      detail.resolvedCount * 8 +
+      detail.clarityStripGapSum * 5
+    );
+  };
+
   const candidates: Array<0 | 90 | 180 | 270> = [0, 90, 180, 270];
   let bestCanvas: HTMLCanvasElement = base;
   let bestScore = Number.NEGATIVE_INFINITY;
@@ -10911,16 +10935,7 @@ export function autoOrientCalifacilSheet(
 
   for (const angle of candidates) {
     const rotated = rotateCanvas(base, angle);
-    const detail = scanCalifacilOmrCanvasDetailed(rotated, columns, {
-      minMarkDarkness: 0.04,
-      minBestVsSecondGap: 0.02,
-    });
-    const bandInk = estimateBottomBandInk(rotated);
-    const score =
-      bandInk * 2000 +
-      detail.resolvedCount * 100 +
-      detail.confidenceSum * 10 +
-      detail.clarityStripGapSum * 40;
+    const score = scoreOrientation(rotated);
     if (score > bestScore) {
       bestScore = score;
       bestCanvas = rotated;
@@ -10931,28 +10946,12 @@ export function autoOrientCalifacilSheet(
   /** Base ya en 0/90/180/270; todo giro fino se aplica sobre esta copia (no encadenado). */
   const cardinalBest = bestCanvas;
 
-  const scoreTilted = (tilted: HTMLCanvasElement) => {
-    const detail = scanCalifacilOmrCanvasDetailed(tilted, columns, {
-      minMarkDarkness: 0.04,
-      minBestVsSecondGap: 0.02,
-    });
-    const bandInk = estimateBottomBandInk(tilted);
-    return (
-      bandInk * 2000 +
-      detail.resolvedCount * 100 +
-      detail.confidenceSum * 10 +
-      detail.clarityStripGapSum * 40
-    );
-  };
-
   if (opts?.allowTiltSweep !== false) {
-    // Inclinaciones fuertes (p. ej. ~45°): el barrido anterior ±38° dejaba la hoja torcida y la rejilla desfasada.
-    // Paso grueso 3° hasta ±60° y luego afinación de 1° (con paso 3° el óptimo puede quedar a ±1.5° del mejor).
     let bestDeltaDeg = 0;
     for (let delta = -60; delta <= 60; delta += 3) {
       if (delta === 0) continue;
       const tilted = rotateCanvasByDegrees(cardinalBest, delta);
-      const score = scoreTilted(tilted);
+      const score = scoreOrientation(tilted);
       if (score > bestScore) {
         bestScore = score;
         bestCanvas = tilted;
@@ -10965,7 +10964,7 @@ export function autoOrientCalifacilSheet(
       const total = bestDeltaDeg + fine;
       if (total < -65 || total > 65) continue;
       const tilted = rotateCanvasByDegrees(cardinalBest, total);
-      const score = scoreTilted(tilted);
+      const score = scoreOrientation(tilted);
       if (score > bestScore) {
         bestScore = score;
         bestCanvas = tilted;
@@ -10976,19 +10975,18 @@ export function autoOrientCalifacilSheet(
 
   let deskewed = applyPerspectiveCorrection(bestCanvas);
 
-  /** Tras el warp, a veces queda 2–8° de sesgo residual; un barrido corto encaja la rejilla con la tabla. */
-  let bestPostScore = scoreTilted(deskewed);
+  /** Tras el warp, a veces queda 2–8° de sesgo residual; minimizar error fiducial. */
+  let bestPostScore = scoreOrientation(deskewed);
   for (let post = -10; post <= 10; post += 2) {
     if (post === 0) continue;
     const t = rotateCanvasByDegrees(deskewed, post);
-    const sc = scoreTilted(t);
+    const sc = scoreOrientation(t);
     if (sc > bestPostScore) {
       bestPostScore = sc;
       deskewed = t;
     }
   }
 
-  // Evita variable no usada cuando el compilador endurece reglas.
   void bestCardinal;
   return deskewed;
 }
