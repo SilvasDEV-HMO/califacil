@@ -46,6 +46,9 @@ import {
   califacilImageToJpegDataUrl,
   califacilMobileAnswerSheetGuideInViewportPx,
   captureVideoFullFrame,
+  captureCalifacilGuideFrame,
+  cropCanvasToViewportGuideRect,
+  cropCanvasToCalifacilGuideOverlay,
   captureImageFullFrame,
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
@@ -902,7 +905,23 @@ export default function CalificarPage() {
       };
 
       const acceptable = sheetFillOk(displayCanvas) || sheetFillOk(warped);
-      if (!acceptable || (warpAlignment != null && !warpAlignment.ok)) {
+      if (!acceptable) {
+        return {
+          meta: null as OmrScanMetaResult | null,
+          orangeFrameNorm: null as OmrNormRect | null,
+          docCanvas: scanCanvas,
+          displayCanvas,
+          rejectedCorners: true as const,
+        };
+      }
+      // Tras recorte al marco naranja, permitir warp con error de alineación si el canvas ya es hoja.
+      if (
+        warpAlignment != null &&
+        !warpAlignment.ok &&
+        !isMobileWarpedAnswerSheetAcceptable(displayCanvas) &&
+        !isMobileLetterGradeCanvasReady(displayCanvas) &&
+        !isMobileWarpedAnswerSheetAcceptable(warped)
+      ) {
         return {
           meta: null as OmrScanMetaResult | null,
           orangeFrameNorm: null as OmrNormRect | null,
@@ -3807,7 +3826,7 @@ export default function CalificarPage() {
   const processMobileSheetCapture = useCallback(
     async (
       video: HTMLVideoElement,
-      opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
+      _opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
       playAutoCaptureClickSound();
       // Frame fresco del sensor (sin sleep largo).
@@ -3821,6 +3840,8 @@ export default function CalificarPage() {
         }
         window.requestAnimationFrame(() => resolve());
       });
+      const sensorW = video.videoWidth;
+      const sensorH = video.videoHeight;
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
         clearMobileScanPreview(video, mobileScanPreviewSetters);
@@ -3829,8 +3850,20 @@ export default function CalificarPage() {
         return;
       }
 
-      // Freeze inmediato: evita pantalla negra mientras califica.
-      const freezeUrl = canvasPreviewDataUrl(fullCanvas, 900, 0.62);
+      // Solo lo que está DENTRO del recuadro naranja (4 esquinas); recorta mesa/bisel.
+      const layout = liveVideoLayoutRef.current;
+      const guide = staticScannerGuideRect;
+      const guideCrop =
+        (guide && layout
+          ? cropCanvasToViewportGuideRect(fullCanvas, guide, layout, sensorW, sensorH)
+          : null) ??
+        cropCanvasToCalifacilGuideOverlay(fullCanvas) ??
+        captureCalifacilGuideFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
+
+      const gradeCanvas = guideCrop ?? fullCanvas;
+
+      // Freeze: hoja recortada al marco naranja (no foto cruda de toda la cámara).
+      const freezeUrl = canvasPreviewDataUrl(gradeCanvas, 900, 0.62);
       flushSync(() => {
         if (freezeUrl) setMobileScanPreviewUrl(freezeUrl);
         setMobileScanPreviewGeometry(null);
@@ -3840,19 +3873,16 @@ export default function CalificarPage() {
       });
       await yieldForSpinnerPaint();
 
-      // Preferir ROI del gate "Listo" o franjas. Nunca largestQuad (mesa/bisel).
-      const gateQuad =
-        opts?.roiQuad && opts?.roiCapture
-          ? frameQuadOnFullCanvas(opts.roiQuad, opts.roiCapture, fullCanvas)
-          : null;
-      const stripQuad = detectAnswerSheetQuadViaAlignStrips(fullCanvas);
-      const frameQuad = gateQuad ?? stripQuad ?? null;
+      // Dentro del marco: franjas/esquinas, o casi el canvas completo (hoja ya encuadrada).
+      const stripQuad = detectAnswerSheetQuadViaAlignStrips(gradeCanvas);
+      const frameQuad = stripQuad ?? defaultDocumentQuad(gradeCanvas.width, gradeCanvas.height);
 
-      await processMobileCapturedCanvas(fullCanvas, video, {
-        frameQuad: frameQuad ?? undefined,
+      await processMobileCapturedCanvas(gradeCanvas, video, {
+        frameQuad,
+        fromGallery: false,
       });
     },
-    [processMobileCapturedCanvas, mobileScanPreviewSetters]
+    [processMobileCapturedCanvas, mobileScanPreviewSetters, staticScannerGuideRect]
   );
 
   const retakeMobileCaptureReview = useCallback(() => {

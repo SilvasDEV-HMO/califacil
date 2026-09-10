@@ -2440,6 +2440,60 @@ export function cropCanvasToCalifacilGuideOverlay(canvas: HTMLCanvasElement): HT
   return out;
 }
 
+/**
+ * Recorta el fotograma al marco naranja del visor (coords. de pantalla → píxeles del canvas).
+ * Así la captura analiza solo lo que el usuario alineó con las 4 esquinas naranjas.
+ */
+export function cropCanvasToViewportGuideRect(
+  canvas: HTMLCanvasElement,
+  guide: { left: number; top: number; width: number; height: number },
+  layout: CalifacilVideoLetterbox,
+  sourceFrameW: number,
+  sourceFrameH: number
+): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  if (guide.width < 40 || guide.height < 40) return null;
+  const fw = Math.max(1, layout.frameW || sourceFrameW);
+  const fh = Math.max(1, layout.frameH || sourceFrameH);
+  const { scale, cropX, cropY } = getObjectCoverVideoMapping(
+    fw,
+    fh,
+    layout.displayW,
+    layout.displayH
+  );
+  if (!(scale > 0)) return null;
+
+  // Pantalla → coords. del sensor.
+  const frameLeft = (guide.left - layout.offsetX + cropX) / scale;
+  const frameTop = (guide.top - layout.offsetY + cropY) / scale;
+  const frameW = guide.width / scale;
+  const frameH = guide.height / scale;
+
+  // Sensor → canvas (puede estar downscaleado).
+  const sxCanvas = canvas.width / Math.max(1, sourceFrameW);
+  const syCanvas = canvas.height / Math.max(1, sourceFrameH);
+  let left = Math.round(frameLeft * sxCanvas);
+  let top = Math.round(frameTop * syCanvas);
+  let rw = Math.round(frameW * sxCanvas);
+  let rh = Math.round(frameH * syCanvas);
+
+  left = Math.max(0, Math.min(left, canvas.width - 1));
+  top = Math.max(0, Math.min(top, canvas.height - 1));
+  rw = Math.max(80, Math.min(rw, canvas.width - left));
+  rh = Math.max(80, Math.min(rh, canvas.height - top));
+  if (rw < 100 || rh < 80) return null;
+
+  const out = document.createElement('canvas');
+  out.width = rw;
+  out.height = rh;
+  const ctx = out.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvas, left, top, rw, rh, 0, 0, rw, rh);
+  return out;
+}
+
 export type CaptureCalifacilGuideFrameOptions = {
   /** Escala el recorte guía para que el lado largo no supere este valor (p. ej. 720 en vivo). */
   maxSide?: number;
