@@ -126,8 +126,8 @@ export function CalificarMobileHome({
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Calificar</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Toma o sube fotos de las hojas impresas. Se califican igual que un escaneo de
-            escritorio.
+            Toma la foto con la cámara alineando las esquinas naranjas a los cuadros negros.
+            Se procesa como un escaneo de escritorio.
           </p>
         </div>
 
@@ -183,8 +183,8 @@ export function CalificarMobileHome({
               <div>
                 <p className="text-sm font-semibold text-gray-900">Listo para calificar</p>
                 <p className="mt-0.5 text-xs leading-snug text-gray-600">
-                  Hoja {sheetIndex + 1} de {totalSheets}. Encuadra la hoja completa, con buena luz
-                  y las esquinas o franjas negras visibles.
+                  Hoja {sheetIndex + 1} de {totalSheets}. Alinea los 4 recuadros naranjas con las
+                  esquinas negras de la hoja impresa, con buena luz.
                 </p>
               </div>
             </CardContent>
