@@ -1,3 +1,5 @@
+import { isCalifacilIthEmail, normalizeAuthEmail } from '@/lib/ithAuth';
+
 export type PlanKey = 'basic' | 'pro';
 
 export type BillingAccessRow = {
@@ -48,7 +50,7 @@ export const PLAN_MONTHLY_EXAM_LIMIT: Record<PlanKey, number> = {
 
 /**
  * Cuentas con acceso completo sin suscripción Stripe ni límites de plan en la app.
- * (Login/dashboard, generación de preguntas con IA, etc.)
+ * Incluye whitelist fija + todo correo @ith.com.
  */
 const CALIFACIL_SUPERUSER_EMAILS = new Set([
   'admin@califacil.com',
@@ -57,8 +59,10 @@ const CALIFACIL_SUPERUSER_EMAILS = new Set([
 ]);
 
 export function isCalifacilSuperUserEmail(email: string | null | undefined) {
-  if (!email) return false;
-  return CALIFACIL_SUPERUSER_EMAILS.has(email.trim().toLowerCase());
+  const normalized = normalizeAuthEmail(email);
+  if (!normalized) return false;
+  if (CALIFACIL_SUPERUSER_EMAILS.has(normalized)) return true;
+  return isCalifacilIthEmail(normalized);
 }
 
 export function resolvePlanKey(raw: string | null | undefined): PlanKey {

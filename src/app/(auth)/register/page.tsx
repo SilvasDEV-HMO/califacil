@@ -13,6 +13,7 @@ import { BrandWordmark } from '@/components/brand-wordmark';
 import { Mail, Lock, User, Loader2, Eye, EyeOff } from 'lucide-react';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { supabase } from '@/lib/supabase';
+import { isCalifacilSuperUserEmail } from '@/lib/billing';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -50,8 +51,13 @@ export default function RegisterPage() {
         });
       } else {
         if (data.session?.user) {
-          toast.success('¡Registro exitoso! Ahora elige tu plan para activar tu acceso.');
-          router.push('/billing');
+          if (isCalifacilSuperUserEmail(data.session.user.email)) {
+            toast.success('¡Registro exitoso! Bienvenido.');
+            router.push('/dashboard');
+          } else {
+            toast.success('¡Registro exitoso! Ahora elige tu plan para activar tu acceso.');
+            router.push('/billing');
+          }
         } else {
           setPendingVerification(true);
           toast.success('Te enviamos un codigo de verificacion a tu correo.');
