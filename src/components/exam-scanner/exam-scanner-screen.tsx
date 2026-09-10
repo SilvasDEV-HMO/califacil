@@ -51,6 +51,7 @@ export type ExamScannerScreenProps = {
   fiducialCount?: number;
   fiducialCorners?: [boolean, boolean, boolean, boolean];
   stripAligned?: boolean;
+  autoShutterEnabled?: boolean;
   scanPreviewUrl?: string | null;
   scanPreviewOverlay?: ReactNode;
   scanPreviewOrangeFrame?: { x: number; y: number; w: number; h: number } | null;
@@ -83,6 +84,7 @@ export function ExamScannerScreen({
   fiducialCount = 0,
   fiducialCorners = [false, false, false, false],
   stripAligned = false,
+  autoShutterEnabled = true,
   scanPreviewUrl = null,
   scanPreviewOverlay = null,
   scanPreviewOrangeFrame = null,
@@ -234,6 +236,7 @@ export function ExamScannerScreen({
                   fiducialCount={fiducialCount}
                   stripAligned={stripAligned}
                   captureReady={captureReady}
+                  autoShutterEnabled={autoShutterEnabled}
                   onTapCapture={
                     captureReady && !scanBusy
                       ? () => runScannerAction(actionsRef.current, 'capture')

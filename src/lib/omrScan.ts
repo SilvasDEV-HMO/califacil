@@ -8813,7 +8813,7 @@ export function countAnswerSheetMarkedRows(
 }
 
 /** Mediana de maxInk por fila (todas las filas, con o sin pick). */
-function answerSheetRowInkMedian(meta: OmrScanMetaResult, rows: number): number {
+export function answerSheetRowInkMedian(meta: OmrScanMetaResult, rows: number): number {
   const inks: number[] = [];
   for (let i = 0; i < rows; i++) {
     const row = meta.rows[i];

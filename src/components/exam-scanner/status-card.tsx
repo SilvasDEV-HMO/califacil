@@ -13,6 +13,7 @@ type Props = {
   fiducialCount?: number;
   stripAligned?: boolean;
   captureReady?: boolean;
+  autoShutterEnabled?: boolean;
 };
 
 export function StatusCard({
@@ -25,6 +26,7 @@ export function StatusCard({
   fiducialCount = 0,
   stripAligned = false,
   captureReady = false,
+  autoShutterEnabled = true,
 }: Props) {
   const pct = Math.round(Math.min(1, Math.max(0, stableProgress)) * 100);
   const showBar = phase === 'searching' || phase === 'stable';
@@ -41,6 +43,7 @@ export function StatusCard({
           fiducialCount={fiducialCount}
           stripAligned={stripAligned}
           captureReady={captureReady}
+          autoShutterEnabled={autoShutterEnabled}
         />
       </div>
     );
@@ -79,6 +82,7 @@ export function StatusCard({
         fiducialCount={fiducialCount}
         stripAligned={stripAligned}
         captureReady={captureReady}
+        autoShutterEnabled={autoShutterEnabled}
       />
     </button>
   );
@@ -94,6 +98,7 @@ function StatusCardBody({
   fiducialCount = 0,
   stripAligned = false,
   captureReady = false,
+  autoShutterEnabled = true,
 }: {
   examTitle: string;
   statusLabel: string;
@@ -104,6 +109,7 @@ function StatusCardBody({
   fiducialCount?: number;
   stripAligned?: boolean;
   captureReady?: boolean;
+  autoShutterEnabled?: boolean;
 }) {
   return (
     <div
@@ -160,7 +166,13 @@ function StatusCardBody({
             captureReady ? 'text-orange-600' : 'text-gray-400'
           )}
         >
-          {captureReady ? 'Toca para capturar' : 'Alinea los 4 cuadritos negros con las esquinas naranjas'}
+          {captureReady
+            ? autoShutterEnabled
+              ? fiducialCount >= 4
+                ? 'Captura automática al 4/4…'
+                : 'Captura automática al 4/4 · o toca Capturar'
+              : 'Toca para capturar'
+            : 'Alinea los 4 cuadritos negros con las esquinas naranjas'}
         </p>
       ) : null}
     </div>
