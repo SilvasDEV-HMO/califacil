@@ -6,7 +6,10 @@ import {
   CALIFACIL_ANSWER_SHEET_ALIGN_FRAME_NORM,
   CALIFACIL_ALIGN_STRIPS_NORM,
 } from '@/lib/printExam';
-import { mapPageNormToAlignGuideViewport } from '@/lib/omrScan';
+import {
+  califacilStaticFiducialCornerGuidesInViewportPx,
+  mapPageNormToAlignGuideViewport,
+} from '@/lib/omrScan';
 import type { MobileGuideRectPx } from '@/components/mobile-scan-viewfinder-overlay';
 
 type Props = {
@@ -50,18 +53,10 @@ export function MobileAnswerSheetAlignGuideOverlay({
     [guideRect]
   );
 
-  const cornerSize = Math.max(40, Math.min(guideRect.width, guideRect.height) * 0.12);
-  const cornerPositions = useMemo(
-    () => [
-      { left: guideRect.left, top: guideRect.top },
-      { left: guideRect.left + guideRect.width - cornerSize, top: guideRect.top },
-      { left: guideRect.left, top: guideRect.top + guideRect.height - cornerSize },
-      {
-        left: guideRect.left + guideRect.width - cornerSize,
-        top: guideRect.top + guideRect.height - cornerSize,
-      },
-    ],
-    [cornerSize, guideRect]
+  // Misma posición que detectAnswerSheetFiducialsInRoi (CALIFACIL_FIDUCIAL_CENTERS_NORM).
+  const cornerGuides = useMemo(
+    () => califacilStaticFiducialCornerGuidesInViewportPx(guideRect),
+    [guideRect]
   );
 
   const frameStroke = aligned ? 'rgba(251,146,60,0.98)' : 'rgba(251,146,60,0.72)';
@@ -98,15 +93,15 @@ export function MobileAnswerSheetAlignGuideOverlay({
           vectorEffect="non-scaling-stroke"
         />
       ))}
-      {cornerPositions.map((pos, index) => {
+      {cornerGuides.map((guide, index) => {
         const detected = fiducialCorners[index] ?? false;
         return (
           <rect
             key={index}
-            x={pos.left}
-            y={pos.top}
-            width={cornerSize}
-            height={cornerSize}
+            x={guide.left}
+            y={guide.top}
+            width={guide.size}
+            height={guide.size}
             fill={detected ? 'rgba(251,146,60,0.28)' : 'rgba(255,255,255,0.06)'}
             stroke={detected ? 'rgba(251,146,60,0.98)' : 'rgba(255,255,255,0.5)'}
             strokeWidth={detected ? 2.75 : 2}

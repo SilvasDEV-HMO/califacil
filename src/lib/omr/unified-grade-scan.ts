@@ -281,9 +281,8 @@ export function pickBetterOmrMeta(
 }
 
 /**
- * Preview móvil: carta (`displayCanvas`) + geometría de lectura cuando es válida.
- * Si la meta ya trae geometría refinada (mismo espacio letter), reutilizarla para que
- * naranja/verde/rojo coincidan con el muestreo; si no, plantilla carta con snap.
+ * Preview móvil: siempre geometría letter + snap a anillos sobre `displayCanvas`.
+ * Nunca reutilizar geometry de otro canvas (referencia) solo sincronizando width/height.
  */
 export function resolveMobileGradeDisplay(
   displayCanvas: HTMLCanvasElement,
@@ -301,30 +300,37 @@ export function resolveMobileGradeDisplay(
     isAnswerSheetOmrMostlyBlank(meta, scored) ||
     resolved <= Math.max(2, Math.floor(scored * 0.07));
 
+  const reviewSource = meta?.reviewSourceCanvas;
+  const readMatchesDisplay =
+    reviewSource == null ||
+    (reviewSource instanceof HTMLCanvasElement &&
+      Math.abs(reviewSource.width - displayCanvas.width) <= 2 &&
+      Math.abs(reviewSource.height - displayCanvas.height) <= 2);
+
   const engineGeom = meta?.geometry;
   const engineMatchesDisplay =
+    readMatchesDisplay &&
     Boolean(engineGeom?.cells?.length) &&
     (engineGeom!.imageWidth == null ||
       Math.abs((engineGeom!.imageWidth ?? displayCanvas.width) - displayCanvas.width) <= 2) &&
     (engineGeom!.imageHeight == null ||
       Math.abs((engineGeom!.imageHeight ?? displayCanvas.height) - displayCanvas.height) <= 2);
 
-  if (engineGeom && (engineMatchesDisplay || resolved > 0) && !blankOrSparse) {
+  // Móvil: siempre reconstruir overlay letter con snap (salvo blank real sin tinta).
+  if (!blankOrSparse || !engineMatchesDisplay) {
     return {
       previewCanvas: displayCanvas,
-      geometry: syncCalifacilOmrGeometryImageSize(
-        engineGeom,
-        displayCanvas.width,
-        displayCanvas.height
-      ),
+      geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount, {
+        skipSnap: false,
+        maxShiftRatio: 0.22,
+      }),
     };
   }
 
   return {
     previewCanvas: displayCanvas,
     geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount, {
-      // Blank/sparse: sin snap agresivo a franjas/moiré (evita cluster en margen derecho).
-      skipSnap: blankOrSparse,
+      skipSnap: true,
       maxShiftRatio: 0.12,
     }),
   };
@@ -487,7 +493,7 @@ export async function scanWarpedGradeMobileAsync(
     unifiedResultToMeta(unified),
     rows,
     columns,
-    { skipBubbleReattach: true }
+    { skipBubbleReattach: false }
   );
   // Sanitizar con preguntas reales (no plantilla 30) para no blankear hojas parciales.
   meta = sanitizeAnswerSheetOmrMeta(meta, activeRows);
@@ -499,7 +505,7 @@ export async function scanWarpedGradeMobileAsync(
   // Recovery barato: solo strip live sweeps (sin optimize 160/320).
   const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
   let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns, {
-    skipBubbleReattach: true,
+    skipBubbleReattach: false,
   });
   stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, activeRows);
   meta = pickBetterOmrMeta(meta, stripMeta, activeRows);
@@ -522,13 +528,13 @@ export async function scanWarpedGradeMobileAsync(
       unifiedResultToMeta(letterUnified),
       rows,
       columns,
-      { skipBubbleReattach: true }
+      { skipBubbleReattach: false }
     );
     letterMeta = sanitizeAnswerSheetOmrMeta(letterMeta, activeRows);
     if (isWeakMobileOmrMeta(letterMeta, rows, activeRows)) {
       const letterStrip = runStripFallbackFast(letter, columns, rows);
       let letterStripMeta = finalizeUnifiedDisplayMeta(letter, letterStrip, rows, columns, {
-        skipBubbleReattach: true,
+        skipBubbleReattach: false,
       });
       letterStripMeta = sanitizeAnswerSheetOmrMeta(letterStripMeta, activeRows);
       letterMeta = pickBetterOmrMeta(letterMeta, letterStripMeta, activeRows);

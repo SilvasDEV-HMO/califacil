@@ -494,6 +494,8 @@ type PrepareGradeScanOpts = {
    * Solo preview/debug: crop impresión sin alineación a referencia 30×4.
    */
   skipReferenceAlign?: boolean;
+  /** Móvil: conservar carta completa 850×1100 (sin crop a franjas). */
+  skipPrintCrop?: boolean;
 };
 
 /**
@@ -508,7 +510,9 @@ export function prepareCalifacilGradeScanCanvases(
 ): CalifacilGradeScanCanvases {
   const displayCanvas =
     opts?.preWarped || opts?.skipReferenceAlign
-      ? prepareMobileScannedDocumentCanvasFast(canvas, { skipPrintCrop: false }) ?? canvas
+      ? prepareMobileScannedDocumentCanvasFast(canvas, {
+          skipPrintCrop: opts?.skipPrintCrop ?? false,
+        }) ?? canvas
       : canvas;
   if (opts?.skipReferenceAlign) {
     return { displayCanvas, scanCanvas: displayCanvas };

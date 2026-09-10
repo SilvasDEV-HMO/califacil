@@ -605,9 +605,10 @@ function printedFiducialCornerPatches(
   W: number,
   H: number
 ): { corners: { x: number; y: number }[]; patchW: number; patchH: number } {
-  // Parches un poco más grandes: mejor con brillo / foto de monitor.
-  const patchW = Math.max(10, Math.round(W * 0.082));
-  const patchH = Math.max(10, Math.round(H * 0.082));
+  // ~2.5× el cuadrito impreso (14pt ≈ 2.2% de 850); parches grandes diluyen el núcleo oscuro.
+  const frac = (19 / 850) * 2.5;
+  const patchW = Math.max(8, Math.min(28, Math.round(W * frac)));
+  const patchH = Math.max(8, Math.min(28, Math.round(H * frac)));
   const ids = ['tl', 'tr', 'bl', 'br'] as const;
   const corners = ids.map((id) => {
     const c = CALIFACIL_FIDUCIAL_CENTERS_NORM[id];
@@ -617,6 +618,27 @@ function printedFiducialCornerPatches(
     };
   });
   return { corners, patchW, patchH };
+}
+
+/** Parches chicos en las 4 esquinas del canvas (ROI = marco naranja lleno). */
+function canvasCornerFiducialPatches(
+  W: number,
+  H: number
+): { corners: { x: number; y: number }[]; patchW: number; patchH: number } {
+  const frac = (19 / 850) * 2.5;
+  const patchW = Math.max(8, Math.min(24, Math.round(Math.min(W, H) * frac)));
+  const patchH = patchW;
+  const inset = 2;
+  return {
+    patchW,
+    patchH,
+    corners: [
+      { x: inset, y: inset },
+      { x: W - patchW - inset, y: inset },
+      { x: inset, y: H - patchH - inset },
+      { x: W - patchW - inset, y: H - patchH - inset },
+    ],
+  };
 }
 
 function cornerMarkerPatchesForCanvas(
@@ -640,17 +662,18 @@ export function countCalifacilCornerMarkers(canvas: HTMLCanvasElement): number {
   const patches = cornerMarkerPatchesForCanvas(W, H);
   if (patches) {
     const letter = isWarpedLetterCanvas(W, H);
-    // Misma tolerancia que el gate live: glare arriba + franjas L/R en las 4.
+    // Misma tolerancia que el gate live: glare arriba; nearStripEdge=false en page/letter.
     return countDarkCornerPatches(ctx, patches.corners, patches.patchW, patches.patchH, {
-      nearStripEdge: letter ? [true, true, true, true] : undefined,
+      nearStripEdge: letter ? [false, false, false, false] : undefined,
       topCornerGlare: letter ? [true, true, false, false] : undefined,
     });
   }
 
-  const patchW = Math.max(5, Math.round(W * 0.06));
-  const patchH = Math.max(5, Math.round(H * 0.06));
-  const ix = Math.round(W * 0.028);
-  const iy = Math.round(H * 0.028);
+  const frac = (19 / 850) * 2.5;
+  const patchW = Math.max(8, Math.round(W * frac));
+  const patchH = Math.max(8, Math.round(H * frac));
+  const ix = Math.round(W * 0.011);
+  const iy = Math.round(H * 0.009);
   const corners = [
     { x: ix, y: iy },
     { x: W - patchW - ix, y: iy },
@@ -658,7 +681,7 @@ export function countCalifacilCornerMarkers(canvas: HTMLCanvasElement): number {
     { x: W - patchW - ix, y: H - patchH - iy },
   ];
   return countDarkCornerPatches(ctx, corners, patchW, patchH, {
-    nearStripEdge: [true, true, true, true],
+    nearStripEdge: [false, false, false, false],
     topCornerGlare: [true, true, false, false],
   });
 }
@@ -2488,6 +2511,14 @@ export function cropCanvasToViewportGuideRect(
   let rw = Math.round(frameW * sxCanvas);
   let rh = Math.round(frameH * syCanvas);
 
+  // 2% hacia afuera: no cortar cuadritos negros en el borde del marco naranja.
+  const padX = Math.max(2, Math.round(rw * 0.02));
+  const padY = Math.max(2, Math.round(rh * 0.02));
+  left -= padX;
+  top -= padY;
+  rw += padX * 2;
+  rh += padY * 2;
+
   left = Math.max(0, Math.min(left, canvas.width - 1));
   top = Math.max(0, Math.min(top, canvas.height - 1));
   rw = Math.max(80, Math.min(rw, canvas.width - left));
@@ -3533,7 +3564,7 @@ function inferMissingFiducialFromStripQuad(
   const result: [boolean, boolean, boolean, boolean] = [...corners];
   const W = canvas.width;
   const H = canvas.height;
-  const patch = Math.max(8, Math.round(Math.min(W, H) * 0.068));
+  const patch = Math.max(8, Math.round(Math.min(W, H) * ((19 / 850) * 2.5)));
   const [tl, tr, br, bl] = stripQuad;
   const vertices: [Point, Point, Point, Point] = [tl, tr, bl, br];
   const inset = patch * 0.38;
@@ -3592,7 +3623,7 @@ export function detectAnswerSheetFiducialsAtQuad(
   if (!ctx) return [false, false, false, false];
   const W = canvas.width;
   const H = canvas.height;
-  const patch = Math.max(8, Math.round(Math.min(W, H) * 0.068));
+  const patch = Math.max(8, Math.round(Math.min(W, H) * ((19 / 850) * 2.5)));
   const centerGroups = fiducialCentersAtQuadWithOffsets(quad);
   // Con franjas, las 4 esquinas tocan barra L/R (antes solo TR/BR).
   const nearStripFlags: [boolean, boolean, boolean, boolean] = [
@@ -3689,21 +3720,39 @@ export function detectAnswerSheetFiducialsInRoi(
   const H = canvas.height;
   if (W < 80 || H < 80) return [false, false, false, false];
 
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return [false, false, false, false];
+
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
   const pageAsRoi = fullRoiPageQuad(W, H);
-  // Siempre sondear la página-como-ROI: es el caso “4 negros en guías naranjas”.
-  let merged: [boolean, boolean, boolean, boolean] = detectAnswerSheetFiducialsAtQuad(
-    canvas,
-    pageAsRoi,
-    stripQuad !== null
+
+  // Path temprano: hoja llena el ROI → sondear esquinas del canvas con parches chicos
+  // (nearStripEdge=false: franjas no deben endurecer el clasificador del cuadrito).
+  const canvasCorners = canvasCornerFiducialPatches(W, H);
+  let merged: [boolean, boolean, boolean, boolean] = detectFiducialsAtCornerPatches(
+    ctx,
+    canvasCorners.corners,
+    canvasCorners.patchW,
+    canvasCorners.patchH,
+    [false, false, false, false]
   );
+  if (merged.filter(Boolean).length >= 4) return merged;
+
+  // Página-como-ROI: siempre nearStripEdge=false (centros impresos, no vértices de franja).
+  merged = mergeFiducialCornerStates(
+    merged,
+    detectAnswerSheetFiducialsAtQuad(canvas, pageAsRoi, false)
+  );
+  if (merged.filter(Boolean).length >= 4) return merged;
+
   if (sheetQuad) {
     merged = mergeFiducialCornerStates(
       merged,
-      detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad, stripQuad !== null)
+      detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad, false)
     );
   }
   if (stripQuad) {
+    // Solo en vértices del stripQuad usar nearStripEdge=true.
     merged = mergeFiducialCornerStates(
       merged,
       detectAnswerSheetFiducialsAtQuad(canvas, stripQuad, true)
@@ -3711,9 +3760,6 @@ export function detectAnswerSheetFiducialsInRoi(
     merged = inferMissingFiducialFromStripQuad(canvas, merged, stripQuad);
   }
   if (merged.filter(Boolean).length >= 3) return merged;
-
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return merged;
 
   // Parches centrados en CALIFACIL_FIDUCIAL_CENTERS_NORM (no top-left del canvas).
   const centered = printedFiducialCornerPatches(W, H);
@@ -3724,14 +3770,14 @@ export function detectAnswerSheetFiducialsInRoi(
       centered.corners,
       centered.patchW,
       centered.patchH,
-      [true, true, true, true]
+      [false, false, false, false]
     )
   );
   if (merged.filter(Boolean).length >= 3) return merged;
 
   // Fallback: parches en esquinas del quad de franjas (página estimada).
-  const patchW = Math.max(8, Math.round(W * 0.085));
-  const patchH = Math.max(8, Math.round(H * 0.085));
+  const patchW = Math.max(8, Math.round(Math.min(W, H) * ((19 / 850) * 2.5)));
+  const patchH = patchW;
   if (stripQuad) {
     const [tl, tr, br, bl] = stripQuad;
     const insetX = Math.max(2, Math.round(patchW * 0.12));
@@ -3755,17 +3801,21 @@ export function detectAnswerSheetFiducialsInRoi(
   }
 
   // Frame completo sin recorte guía: viewfinder carta en el fotograma.
-  const guidePatches = viewfinderGuideCornerPatches(W, H);
-  if (guidePatches) {
-    merged = mergeFiducialCornerStates(
-      merged,
-      detectFiducialsAtCornerPatches(
-        ctx,
-        guidePatches.corners,
-        guidePatches.patchW,
-        guidePatches.patchH
-      )
-    );
+  // Si el ROI ya es carta (aspecto letter), preferir printedFiducial (ya sondeado).
+  if (!isWarpedLetterCanvas(W, H)) {
+    const guidePatches = viewfinderGuideCornerPatches(W, H);
+    if (guidePatches) {
+      merged = mergeFiducialCornerStates(
+        merged,
+        detectFiducialsAtCornerPatches(
+          ctx,
+          guidePatches.corners,
+          guidePatches.patchW,
+          guidePatches.patchH,
+          [false, false, false, false]
+        )
+      );
+    }
   }
   return merged;
 }
