@@ -18,6 +18,8 @@ import {
   scanDesktopGradeUnifiedOrLegacyAsync,
   scanLiveOmrUnifiedOrLegacy,
   isWeakMobileOmrMeta,
+  rereadOmrWithDisplayOverlayGeometry,
+  isUsableOmrRecoveryMeta,
 } from '@/lib/omr/unified-grade-scan';
 import { prepareCalifacilGradeScanCanvas } from '@/lib/omr/pipeline';
 import {
@@ -279,8 +281,11 @@ export async function runCalifacilOmrReadingPipeline(
   const minResolved = Math.max(1, Math.ceil(chunk.length * CALIFACIL_MIN_AUTO_READ_RATIO));
   let mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
 
-  // Blank por geometría desfasada: intentar snap carta→anillos antes de aceptar 0%.
-  if (mostlyBlank && mapped.resolvedCount === 0) {
+  // Blank / lectura débil: re-leer sobre geometría de overlay antes de aceptar 0%.
+  if (
+    (mostlyBlank && mapped.resolvedCount === 0) ||
+    isWeakMobileOmrMeta(meta, chunk.length, chunk.length)
+  ) {
     const snapCanvas =
       (scanCanvas &&
       (isCalifacilWarpedLetterCanvas(scanCanvas) || hasCalifacilAlignStrips(scanCanvas))
@@ -292,28 +297,43 @@ export async function runCalifacilOmrReadingPipeline(
         ? activeScanSource
         : null);
     if (snapCanvas) {
-      const snapMeta = rereadOmrWithLetterBubbleSnap(
+      let snapMeta = rereadOmrWithDisplayOverlayGeometry(
         snapCanvas,
         omrCols,
         omrRowCount,
         meta
       );
+      if (!isUsableOmrRecoveryMeta(snapMeta, chunk.length)) {
+        const letterSnap = rereadOmrWithLetterBubbleSnap(
+          snapCanvas,
+          omrCols,
+          omrRowCount,
+          meta
+        );
+        if (
+          letterSnap.picks.filter((p) => p != null).length >
+          snapMeta.picks.filter((p) => p != null).length
+        ) {
+          snapMeta = letterSnap;
+        }
+      }
       const snapMapped = mapRawToDraftDetailed([...snapMeta.picks], chunk);
       if (
-        snapMapped.resolvedCount > mapped.resolvedCount &&
-        !isAnswerSheetOmrMostlyBlank(snapMeta, chunk.length)
+        isUsableOmrRecoveryMeta(snapMeta, chunk.length) ||
+        (snapMapped.resolvedCount > mapped.resolvedCount &&
+          !isAnswerSheetOmrMostlyBlank(snapMeta, chunk.length))
       ) {
         meta = snapMeta;
         raw = [...snapMeta.picks];
         mapped = snapMapped;
-        mostlyBlank = false;
+        mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
         activeScanSource = snapCanvas;
       }
     }
   }
 
-  // Solo forzar blank si la señal de tinta indica hoja vacía real.
-  if (mostlyBlank) {
+  // Solo forzar blank si sigue vacío tras recovery (hoja vacía real).
+  if (mostlyBlank && !isUsableOmrRecoveryMeta(meta, chunk.length)) {
     raw = raw.map(() => null);
     mapped = mapRawToDraftDetailed(raw, chunk);
   }

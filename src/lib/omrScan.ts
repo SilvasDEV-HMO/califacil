@@ -3197,8 +3197,8 @@ export function measureRoiQuadInteriorMeanLuminance(
 
 /**
  * Gate de captura móvil: franjas laterales + esquinas negras.
- * - Ideal: 4 esquinas + franjas (contrato producto).
- * - Mínimo: 3 esquinas + franjas (aula real / 4.ª parcial).
+ * - Ideal: 4 esquinas en el marco naranja (sin exigir strips).
+ * - Relajado: 3 esquinas + franjas (aula real / 4.ª parcial).
  * Luminancia interior relajada (0.28) para no bloquear por sombra parcial.
  */
 export function isMobileExamSheetReadyForCapture(opts: {
@@ -3213,12 +3213,10 @@ export function isMobileExamSheetReadyForCapture(opts: {
 }): boolean {
   const corners = opts.fiducialCorners;
   const count = corners ? corners.filter(Boolean).length : opts.fiducialCount;
-  if (!opts.stripAligned) return false;
-  const minCorners =
-    count >= MOBILE_MIN_FIDUCIAL_CORNERS
-      ? MOBILE_MIN_FIDUCIAL_CORNERS
-      : MOBILE_LIVE_MIN_FIDUCIAL_CORNERS;
-  if (count < minCorners) return false;
+  const fourCorners = count >= MOBILE_MIN_FIDUCIAL_CORNERS;
+  // 4/4 en marco naranja = listo sin strips; 3 esquinas siguen exigiendo franjas.
+  if (!fourCorners && !opts.stripAligned) return false;
+  if (!fourCorners && count < MOBILE_LIVE_MIN_FIDUCIAL_CORNERS) return false;
   if (!opts.quad || !opts.roiW || !opts.roiH) return false;
   if (!isValidMobileRoiQuad(opts.quad, opts.roiW, opts.roiH)) return false;
 
@@ -3726,7 +3724,12 @@ export function detectAnswerSheetFiducialsInRoi(
   ];
   merged = mergeFiducialCornerStates(
     merged,
-    detectFiducialsAtCornerPatches(ctx, canvasCorners, patchW, patchH)
+    detectFiducialsAtCornerPatches(ctx, canvasCorners, patchW, patchH, [
+      true,
+      true,
+      true,
+      true,
+    ])
   );
   if (merged.filter(Boolean).length >= 3) return merged;
 
@@ -4907,9 +4910,23 @@ export function rereadOmrWithLetterBubbleSnap(
   const letterGeom = buildLetterDisplayOverlayGeometry(canvas, cols, rows, {
     maxShiftRatio: 0.22,
   });
+  return rereadOmrPicksOnGeometry(canvas, letterGeom, cols, rows, baseMeta);
+}
+
+/** Relee picks sobre una geometría ya construida (overlay display / letter). */
+export function rereadOmrPicksOnGeometry(
+  canvas: HTMLCanvasElement,
+  geometry: CalifacilOmrScanGeometry,
+  columns: number,
+  rowCount: number,
+  baseMeta?: OmrScanMetaResult | null
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const synced = syncCalifacilOmrGeometryImageSize(geometry, canvas.width, canvas.height);
   const reread = readAnswerSheetPicksFromTemplateGeometry(
     canvas,
-    letterGeom,
+    synced,
     FRAME_GRID_SCAN_THRESHOLDS,
     rows,
     cols
@@ -4920,7 +4937,7 @@ export function rereadOmrWithLetterBubbleSnap(
       rows: reread.rows,
       needsVisionAssist: false,
       maxSameColumnCount: reread.maxSameColumnCount,
-      geometry: letterGeom,
+      geometry: synced,
       reviewSourceCanvas: canvas,
       controlNumberDigits: baseMeta?.controlNumberDigits ?? [],
       controlNumber: baseMeta?.controlNumber ?? null,

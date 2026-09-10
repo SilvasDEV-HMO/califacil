@@ -36,6 +36,8 @@ export {
   resolveMobileGradeDisplay,
   isWeakMobileOmrMeta,
   isStrongMobileOmrMeta,
+  rereadOmrWithDisplayOverlayGeometry,
+  isUsableOmrRecoveryMeta,
 } from '@/lib/omr/unified-grade-scan';
 export {
   runUnifiedOmrPipeline,

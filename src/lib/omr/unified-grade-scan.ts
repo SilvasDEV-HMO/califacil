@@ -10,6 +10,7 @@ import {
   downscaleCanvasForOmrScan,
   isAnswerSheetOmrMostlyBlank,
   buildLetterDisplayOverlayGeometry,
+  rereadOmrPicksOnGeometry,
   type CalifacilOmrScanGeometry,
   type CalifacilScanOptions,
   type OmrScanMetaResult,
@@ -114,7 +115,7 @@ function finalizeUnifiedDisplayMeta(
   ) {
     const desktopGeom = buildDesktopDisplayOverlayGeometry(displayCanvas, columns, rows);
     if (desktopGeom) {
-      return {
+      const withGeom: OmrScanMetaResult = {
         ...meta,
         geometry: syncCalifacilOmrGeometryImageSize(
           desktopGeom,
@@ -123,6 +124,15 @@ function finalizeUnifiedDisplayMeta(
         ),
         reviewSourceCanvas: displayCanvas,
       };
+      // Re-leer tinta sobre la misma geometría que se pinta (verde/rojo reales).
+      const reread = rereadOmrPicksOnGeometry(
+        displayCanvas,
+        withGeom.geometry!,
+        columns,
+        rows,
+        withGeom
+      );
+      return pickBetterOmrMeta(withGeom, reread, rows);
     }
   }
 
@@ -141,11 +151,16 @@ function finalizeUnifiedDisplayMeta(
     );
 
   if (opts?.skipBubbleReattach && hasSaneEngineBubbles) {
-    return {
+    const base = {
       ...meta,
       geometry,
       reviewSourceCanvas: displayCanvas,
     };
+    if (geometry) {
+      const reread = rereadOmrPicksOnGeometry(displayCanvas, geometry, columns, rows, base);
+      return pickBetterOmrMeta(base, reread, rows);
+    }
+    return base;
   }
 
   const withOverlay = attachAnswerSheetReviewBubbleOverlay(
@@ -154,11 +169,57 @@ function finalizeUnifiedDisplayMeta(
     columns,
     rows
   );
-  return {
+  const finalized = {
     ...withOverlay,
     geometry: withOverlay.geometry,
     reviewSourceCanvas: displayCanvas,
   };
+  if (finalized.geometry) {
+    const reread = rereadOmrPicksOnGeometry(
+      displayCanvas,
+      finalized.geometry,
+      columns,
+      rows,
+      finalized
+    );
+    return pickBetterOmrMeta(finalized, reread, rows);
+  }
+  return finalized;
+}
+
+/**
+ * Recovery: relee sobre la geometría de overlay que ve el usuario
+ * (desktop nudges o letter snap). Aceptar si ≥40% resolved.
+ */
+export function rereadOmrWithDisplayOverlayGeometry(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount: number,
+  baseMeta?: OmrScanMetaResult | null
+): OmrScanMetaResult {
+  const rows = Math.max(1, rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  let geom =
+    isReferenceGradeExam(rows, cols) &&
+    isReferenceGradeCanvasAnchor(canvas.width, canvas.height)
+      ? buildDesktopDisplayOverlayGeometry(canvas, cols, rows)
+      : null;
+  if (!geom) {
+    geom = buildLetterDisplayOverlayGeometry(canvas, cols, rows, {
+      maxShiftRatio: 0.22,
+    });
+  }
+  return rereadOmrPicksOnGeometry(canvas, geom, cols, rows, baseMeta);
+}
+
+/** True si la meta tiene lectura usable (≥40% resolved, no mostly-blank). */
+export function isUsableOmrRecoveryMeta(
+  meta: OmrScanMetaResult,
+  rows: number
+): boolean {
+  if (isAnswerSheetOmrMostlyBlank(meta, rows)) return false;
+  const resolved = countResolvedPicks(meta, rows);
+  return resolved >= Math.ceil(rows * 0.4);
 }
 
 /**

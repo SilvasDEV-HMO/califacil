@@ -87,7 +87,6 @@ import {
   prepareCalifacilScanInput,
   probeCalifacilSheetQuality,
   refineWarpedCalifacilSheet,
-  rereadOmrWithLetterBubbleSnap,
   scanCalifacilOmrSheetWithMeta,
   scanWarpedMobileAnswerSheetFast,
   scanWarpedWithBestTableFrame,
@@ -144,6 +143,8 @@ import {
   resolveMobileGradeDisplay,
   isStrongMobileOmrMeta,
   isWeakMobileOmrMeta,
+  rereadOmrWithDisplayOverlayGeometry,
+  isUsableOmrRecoveryMeta,
 } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
@@ -934,18 +935,27 @@ export default function CalificarPage() {
         omrCols,
         omrRowCount
       );
-      // Recovery: blank por plantilla desfasada → snap carta a anillos.
-      if (isAnswerSheetOmrMostlyBlank(meta, omrRowCount)) {
+      // Recovery: re-leer sobre geometría de overlay (desktop nudges / letter).
+      if (
+        isAnswerSheetOmrMostlyBlank(meta, omrRowCount) ||
+        isWeakMobileOmrMeta(meta, omrRowCount, omrRowCount)
+      ) {
         const snapSource = isCalifacilWarpedLetterCanvas(displayCanvas)
           ? displayCanvas
           : scanCanvas;
-        const snapMeta = rereadOmrWithLetterBubbleSnap(
+        const snapMeta = rereadOmrWithDisplayOverlayGeometry(
           snapSource,
           omrCols,
           omrRowCount,
           meta
         );
-        if (!isAnswerSheetOmrMostlyBlank(snapMeta, omrRowCount)) {
+        if (isUsableOmrRecoveryMeta(snapMeta, omrRowCount)) {
+          meta = snapMeta;
+        } else if (
+          !isAnswerSheetOmrMostlyBlank(snapMeta, omrRowCount) &&
+          snapMeta.picks.filter((p) => p != null).length >
+            meta.picks.filter((p) => p != null).length
+        ) {
           meta = snapMeta;
         }
       }
@@ -2530,7 +2540,17 @@ export default function CalificarPage() {
             let fiducialCount = fiducialCorners.filter(Boolean).length;
 
             if (!roiQuadRaw && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
-              roiQuadRaw = detectLargestQuadInRoiCanvas(roiCanvas);
+              // Hoja llena el marco naranja: no hay bordes interiores → sintetizar quad del ROI.
+              roiQuadRaw = [
+                { x: 2, y: 2 },
+                { x: roiW - 3, y: 2 },
+                { x: roiW - 3, y: roiH - 3 },
+                { x: 2, y: roiH - 3 },
+              ];
+              const largest = detectLargestQuadInRoiCanvas(roiCanvas);
+              if (largest && isValidMobileRoiQuad(largest, roiW, roiH)) {
+                roiQuadRaw = largest;
+              }
               fiducialCorners = detectAnswerSheetFiducialsInRoi(
                 roiCanvas,
                 roiQuadRaw ?? stripQuad
