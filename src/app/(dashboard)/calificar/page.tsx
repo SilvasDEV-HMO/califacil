@@ -140,7 +140,7 @@ import {
   isReferenceGradeCanvasAnchor,
 } from '@/lib/omr/reference-grade';
 import {
-  scanDesktopGradeUnifiedOrLegacyAsync,
+  scanWarpedGradeMobileAsync,
   resolveMobileGradeDisplay,
   isStrongMobileOmrMeta,
   isWeakMobileOmrMeta,
@@ -733,6 +733,7 @@ export default function CalificarPage() {
   const [reviewScanning, setReviewScanning] = useState(false);
   const [reviewStatus, setReviewStatus] = useState<string | null>(null);
   const mobileCaptureBusyRef = useRef(false);
+  const mobileCaptureBusySinceRef = useRef(0);
   const autoCaptureTriggeredRef = useRef(false);
   const mobileReviewOpenRef = useRef(false);
   const reviewScanGenRef = useRef(0);
@@ -888,7 +889,11 @@ export default function CalificarPage() {
   );
 
   const runFastWarpedScan = useCallback(
-    async (warped: HTMLCanvasElement, warpAlignment?: WarpAlignmentReport | null) => {
+    async (
+      warped: HTMLCanvasElement,
+      warpAlignment?: WarpAlignmentReport | null,
+      activeRows: number = omrRowCount
+    ) => {
       // displayCanvas = carta (UI + lectura móvil); scanCanvas = referencia (fallback).
       const { displayCanvas, scanCanvas } = prepareCalifacilGradeScanCanvases(
         warped,
@@ -896,6 +901,7 @@ export default function CalificarPage() {
         omrRowCount,
         { preWarped: true, warpAlignment }
       );
+      const scoredRows = Math.max(1, Math.min(omrRowCount, activeRows));
 
       const sheetFillOk = (c: HTMLCanvasElement): boolean => {
         // Misma barra que desktop foto: no calificar warps blandos que inventan bolitas.
@@ -933,43 +939,46 @@ export default function CalificarPage() {
       }
 
       const letterReady = isCalifacilWarpedLetterCanvas(displayCanvas);
-      // Móvil: leer primero en coords carta (misma geometría del overlay). Referencia = fallback.
-      let meta = await scanDesktopGradeUnifiedOrLegacyAsync(
+      // Path móvil real: activeRows = preguntas del chunk (no blankear plantilla 30).
+      let meta = await scanWarpedGradeMobileAsync(
         letterReady ? displayCanvas : scanCanvas,
         omrCols,
-        omrRowCount
+        omrRowCount,
+        {
+          activeRows: scoredRows,
+          letterCanvas: letterReady ? displayCanvas : undefined,
+        }
       );
       if (
         letterReady &&
-        (isAnswerSheetOmrMostlyBlank(meta, omrRowCount) ||
-          isWeakMobileOmrMeta(meta, omrRowCount, omrRowCount) ||
-          !isStrongMobileOmrMeta(meta, omrRowCount, omrRowCount))
+        (isAnswerSheetOmrMostlyBlank(meta, scoredRows) ||
+          isWeakMobileOmrMeta(meta, omrRowCount, scoredRows) ||
+          !isStrongMobileOmrMeta(meta, omrRowCount, scoredRows))
       ) {
-        const refMeta = await scanDesktopGradeUnifiedOrLegacyAsync(
-          scanCanvas,
-          omrCols,
-          omrRowCount
-        );
-        meta = pickBetterOmrMeta(meta, refMeta, omrRowCount);
+        const refMeta = await scanWarpedGradeMobileAsync(scanCanvas, omrCols, omrRowCount, {
+          activeRows: scoredRows,
+          letterCanvas: displayCanvas,
+        });
+        meta = pickBetterOmrMeta(meta, refMeta, scoredRows);
       }
       // Recovery: re-leer sobre geometría de overlay (desktop nudges / letter).
       if (
-        isAnswerSheetOmrMostlyBlank(meta, omrRowCount) ||
-        isWeakMobileOmrMeta(meta, omrRowCount, omrRowCount) ||
-        !isStrongMobileOmrMeta(meta, omrRowCount, omrRowCount)
+        isAnswerSheetOmrMostlyBlank(meta, scoredRows) ||
+        isWeakMobileOmrMeta(meta, omrRowCount, scoredRows) ||
+        !isStrongMobileOmrMeta(meta, omrRowCount, scoredRows)
       ) {
         const snapSource = letterReady ? displayCanvas : scanCanvas;
         const snapMeta = rereadOmrWithDisplayOverlayGeometry(
           snapSource,
           omrCols,
-          omrRowCount,
+          scoredRows,
           meta
         );
-        if (isUsableOmrRecoveryMeta(snapMeta, omrRowCount)) {
+        if (isUsableOmrRecoveryMeta(snapMeta, scoredRows)) {
           meta = snapMeta;
         } else if (
-          isAnswerSheetOmrMostlyBlank(snapMeta, omrRowCount) &&
-          isAnswerSheetOmrMostlyBlank(meta, omrRowCount)
+          isAnswerSheetOmrMostlyBlank(snapMeta, scoredRows) &&
+          isAnswerSheetOmrMostlyBlank(meta, scoredRows)
         ) {
           // Ambos blank: hoja vacía real.
           meta = snapMeta;
@@ -1485,7 +1494,10 @@ export default function CalificarPage() {
                 allowTiltSweep: true,
               }) ?? gradeSource)
             : isDesktopFileUpload
-              ? gradeSource
+              ? (autoOrientCalifacilSheet(gradeSource, omrCols, {
+                  useGuideCrop: false,
+                  allowTiltSweep: true,
+                }) ?? gradeSource)
               : preserveCapturedFrame
                 ? gradeSource
                 : (autoOrientCalifacilSheet(gradeSource, omrCols, {
@@ -1808,24 +1820,33 @@ export default function CalificarPage() {
 
         setDraftSelections(mapped.draft);
         setReviewOmrPicks(raw.slice(0, chunk.length));
-        // Preview: preferir hoja sola (displaySource / reviewSource), nunca fallback a archivo crudo si hay canvas.
+        // Preview = mismo canvas donde se leyeron bolitas (evita overlay torcido en scan crudo).
         const previewCanvas =
-          gradeDisplaySource ??
-          (opts?.displaySource instanceof HTMLCanvasElement ? opts.displaySource : null) ??
           (meta.reviewSourceCanvas instanceof HTMLCanvasElement
             ? meta.reviewSourceCanvas
             : null) ??
-          (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null);
+          (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null) ??
+          (opts?.displaySource instanceof HTMLCanvasElement ? opts.displaySource : null) ??
+          gradeDisplaySource;
         if (previewCanvas) {
           await setPreviewFromSource(previewCanvas, undefined);
         } else {
           await setPreviewFromSource(activeScanSource, fallbackFile);
         }
         if (isStaleRead()) return { success: false };
-        // Desktop: preferir geometría de lectura si hay picks; si no, reference/letter.
+        // Overlay siempre en el espacio del preview (reconstruir si geometry viene de otro canvas).
         let reviewGeom = meta.geometry;
         const hasStudentPicks = raw.slice(0, chunk.length).some((p) => p != null);
-        if (previewCanvas && hasStudentPicks && meta.geometry?.cells?.length) {
+        const geomMatchesPreview =
+          Boolean(meta.geometry?.cells?.length) &&
+          previewCanvas != null &&
+          (meta.geometry!.imageWidth == null ||
+            Math.abs((meta.geometry!.imageWidth ?? previewCanvas.width) - previewCanvas.width) <=
+              2) &&
+          (meta.geometry!.imageHeight == null ||
+            Math.abs((meta.geometry!.imageHeight ?? previewCanvas.height) - previewCanvas.height) <=
+              2);
+        if (previewCanvas && hasStudentPicks && geomMatchesPreview && meta.geometry?.cells?.length) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
             meta.geometry,
             previewCanvas.width,
@@ -1846,6 +1867,24 @@ export default function CalificarPage() {
               previewCanvas.width,
               previewCanvas.height
             );
+            if (hasStudentPicks || raw.some((p) => p != null)) {
+              const reread = rereadOmrPicksOnGeometry(
+                previewCanvas,
+                reviewGeom,
+                omrCols,
+                chunk.length,
+                meta
+              );
+              if (
+                countResolvedOmrPicks(reread.picks.slice(0, chunk.length)) >=
+                countResolvedOmrPicks(raw.slice(0, chunk.length))
+              ) {
+                raw.splice(0, raw.length, ...reread.picks);
+                setReviewOmrPicks(raw.slice(0, chunk.length));
+                const remapped = mapRawToDraft(raw, chunk);
+                setDraftSelections(remapped.draft);
+              }
+            }
           }
         } else if (previewCanvas && isCalifacilWarpedLetterCanvas(previewCanvas)) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
@@ -1853,6 +1892,24 @@ export default function CalificarPage() {
             previewCanvas.width,
             previewCanvas.height
           );
+          if (hasStudentPicks || raw.some((p) => p != null)) {
+            const reread = rereadOmrPicksOnGeometry(
+              previewCanvas,
+              reviewGeom,
+              omrCols,
+              chunk.length,
+              meta
+            );
+            if (
+              countResolvedOmrPicks(reread.picks.slice(0, chunk.length)) >=
+              countResolvedOmrPicks(raw.slice(0, chunk.length))
+            ) {
+              raw.splice(0, raw.length, ...reread.picks);
+              setReviewOmrPicks(raw.slice(0, chunk.length));
+              const remapped = mapRawToDraft(raw, chunk);
+              setDraftSelections(remapped.draft);
+            }
+          }
         } else if (reviewGeom && previewCanvas) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
             reviewGeom,
@@ -2648,35 +2705,47 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            // Contrato: 4/4 → foto inmediata (sin fill/stability/sharpness).
-            if (
-              fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS &&
-              roiQuad &&
-              quadValid
-            ) {
-              lastRawRoiQuadRef.current = roiQuadRaw!;
-              lastRoiQuadRef.current = roiQuad;
+            // Contrato: 4/4 → foto inmediata (sin fill/stability/sharpness/quadValid).
+            if (fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
+              const pageQuadRaw: RoiQuad = [
+                { x: 2, y: 2 },
+                { x: roiW - 3, y: 2 },
+                { x: roiW - 3, y: roiH - 3 },
+                { x: 2, y: roiH - 3 },
+              ];
+              const snapQuad =
+                roiQuad ??
+                smoothMobileRoiQuad(smoothedRoiQuadRef.current, pageQuadRaw, 0.38);
+              smoothedRoiQuadRef.current = snapQuad;
+              lastRawRoiQuadRef.current = pageQuadRaw;
+              lastRoiQuadRef.current = snapQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
               cornerStableTicksRef.current = MOBILE_CAPTURE_STABLE_TICKS_REQUIRED;
               setMobileStableTicks(MOBILE_CAPTURE_STABLE_TICKS_REQUIRED);
               setCornersAlignedView(true);
               setMobileExamReadyForCapture(true);
+              setMobileSheetFillRatio(measureRoiSheetFillRatio(snapQuad, roiW, roiH));
+              mobileCaptureGateRef.current = {
+                fiducialCount,
+                fiducialCorners,
+                stripAligned,
+                quad: snapQuad,
+                roiW,
+                roiH,
+                fillRatio: measureRoiSheetFillRatio(snapQuad, roiW, roiH),
+                roiCanvas,
+              };
               lowVisibilityTicksRef.current = 0;
-              if (
-                autoShutterEnabledRef.current &&
-                !mobileCaptureBusyRef.current
-              ) {
+              if (autoShutterEnabledRef.current) {
                 setShutterFlash(true);
                 window.setTimeout(() => setShutterFlash(false), 160);
                 triggerMobileSheetCaptureRef.current(video, {
-                  roiQuad,
+                  roiQuad: snapQuad,
                   roiCapture,
                 });
                 setLiveStatus('Capturando…');
-              } else if (mobileCaptureBusyRef.current) {
-                setLiveStatus('Calificando…');
               } else {
-                setLiveStatus('Cuadros 4/4 — toca Capturar o espera auto.');
+                setLiveStatus('Cuadros 4/4 — toca Capturar.');
               }
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -3776,7 +3845,7 @@ export default function CalificarPage() {
       let displayCanvas: HTMLCanvasElement = warped;
 
       if (sheetKind === 'califacil') {
-        califacilFastScan = await runFastWarpedScan(warped, alignment);
+        califacilFastScan = await runFastWarpedScan(warped, alignment, chunkRows);
         scanCanvas = califacilFastScan.docCanvas;
         displayCanvas = califacilFastScan.displayCanvas;
         // Preview debe ser hoja carta enderezada (no foto cruda del monitor/mesa).
@@ -3868,7 +3937,12 @@ export default function CalificarPage() {
           alignment
         );
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
-        let warpMeta = sanitizeAnswerSheetOmrMeta(califacilFastScan.meta, chunkRows);
+        // Conservar picks del fast scan; no sanitize-wipe hasta decidir trusted.
+        let warpMeta = {
+          ...califacilFastScan.meta,
+          picks: califacilFastScan.meta.picks.slice(0, Math.max(chunkRows, omrRowCount)),
+          rows: califacilFastScan.meta.rows.slice(0, Math.max(chunkRows, omrRowCount)),
+        };
         const letterSource = isCalifacilWarpedLetterCanvas(displayCanvas)
           ? displayCanvas
           : scanCanvas;
@@ -3912,17 +3986,23 @@ export default function CalificarPage() {
           warpMeta
         );
         mobileDisplaySource = resolved.previewCanvas;
+        let displayGeom = resolved.geometry;
         const geomReread = rereadOmrPicksOnGeometry(
           resolved.previewCanvas,
-          resolved.geometry,
+          displayGeom,
           omrCols,
           chunkRows,
           warpMeta
         );
         warpMeta = pickBetterOmrMeta(warpMeta, geomReread, chunkRows);
-        warpMeta = sanitizeAnswerSheetOmrMeta(warpMeta, chunkRows);
 
-        if (isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
+        let trusted =
+          countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows)) >=
+            Math.ceil(chunkRows * 0.4) ||
+          isUsableOmrRecoveryMeta(warpMeta, chunkRows) ||
+          isStrongMobileOmrMeta(warpMeta, chunkRows, chunkRows);
+
+        if (!trusted && isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
           // Segunda geometría con snap (blank path usa skipSnap) por si hay marcas reales.
           const snappedGeom = buildLetterDisplayOverlayGeometry(
             resolved.previewCanvas,
@@ -3942,12 +4022,24 @@ export default function CalificarPage() {
             countResolvedOmrPicks(snappedReread.picks.slice(0, chunkRows)) >
               countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows))
           ) {
-            warpMeta = sanitizeAnswerSheetOmrMeta(snappedReread, chunkRows);
-            resolved.geometry = snappedGeom;
+            warpMeta = snappedReread;
+            displayGeom = snappedGeom;
+            trusted =
+              countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows)) >=
+                Math.ceil(chunkRows * 0.4) || isUsableOmrRecoveryMeta(warpMeta, chunkRows);
           }
         }
 
-        if (isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
+        if (trusted) {
+          // Conservar picks: sanitize suave solo recorta al chunk (sin wipe blank).
+          warpMeta = {
+            ...warpMeta,
+            picks: warpMeta.picks.slice(0, chunkRows),
+            rows: warpMeta.rows.slice(0, chunkRows),
+            reviewSourceCanvas: resolved.previewCanvas,
+            geometry: displayGeom,
+          };
+        } else if (isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
           const inkMid = answerSheetRowInkMedian(warpMeta, chunkRows);
           // Tinta residual clara sin picks = hoja marcada mal leída → rechazar, no 0% falso.
           const falseBlank =
@@ -3972,11 +4064,10 @@ export default function CalificarPage() {
             })),
             maxSameColumnCount: 0,
             needsVisionAssist: false,
+            reviewSourceCanvas: resolved.previewCanvas,
+            geometry: displayGeom,
           };
-        } else if (
-          isWeakMobileOmrMeta(warpMeta, chunkRows, chunkRows) &&
-          !isUsableOmrRecoveryMeta(warpMeta, chunkRows)
-        ) {
+        } else {
           clearPreview();
           toast.error(
             'No se pudo leer bien las respuestas. Alinea los 4 cuadritos negros con las esquinas naranjas.'
@@ -3990,12 +4081,13 @@ export default function CalificarPage() {
           {
             ...warpMeta,
             reviewSourceCanvas: resolved.previewCanvas,
-            geometry: resolved.geometry,
+            geometry: displayGeom,
           },
           chunk,
           scanCanvas,
           liveLockedAnswersRef.current,
-          alignment
+          alignment,
+          { trustedMobileRead: trusted }
         );
       }
 
@@ -4160,7 +4252,7 @@ export default function CalificarPage() {
         const controlRead = readAnswerSheetControlNumberFromCanvas(warped, omrRowCount);
         applyControlNumberFromRead(controlRead, { silent: true });
         const { meta, orangeFrameNorm, displayCanvas, docCanvas, rejectedCorners } =
-          await runFastWarpedScan(warped, alignment);
+          await runFastWarpedScan(warped, alignment, chunk.length);
         if (scanGen !== reviewScanGenRef.current) return;
         if (rejectedCorners || !meta) {
           setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
@@ -4221,7 +4313,11 @@ export default function CalificarPage() {
       try {
         if (scanGen !== reviewScanGenRef.current) return;
         const { meta, orangeFrameNorm, displayCanvas, docCanvas, rejectedCorners } =
-          await runFastWarpedScan(mobileReviewAlign.warped, mobileReviewAlign.alignment);
+          await runFastWarpedScan(
+            mobileReviewAlign.warped,
+            mobileReviewAlign.alignment,
+            chunk.length
+          );
         if (scanGen !== reviewScanGenRef.current) return;
         if (rejectedCorners || !meta) {
           setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
@@ -4271,7 +4367,8 @@ export default function CalificarPage() {
       }
       const { meta, docCanvas, displayCanvas, rejectedCorners } = await runFastWarpedScan(
         mobileReviewAlign.warped,
-        mobileReviewAlign.alignment
+        mobileReviewAlign.alignment,
+        chunk.length
       );
       if (rejectedCorners || !meta) {
         setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
@@ -4315,7 +4412,12 @@ export default function CalificarPage() {
         chunk,
         docCanvas,
         liveLockedAnswersRef.current,
-        mobileReviewAlign.alignment
+        mobileReviewAlign.alignment,
+        {
+          trustedMobileRead:
+            countResolvedOmrPicks(gradeMeta.picks.slice(0, chunk.length)) >=
+            Math.ceil(chunk.length * 0.4),
+        }
       );
       const result = await finalizeCapturedSheet(docCanvas, undefined, {
         preWarped: true,
@@ -4355,8 +4457,19 @@ export default function CalificarPage() {
       video: HTMLVideoElement,
       opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
+      const now = performance.now();
+      // Si busy quedó colgado (>2.5s), desbloquear como el botón Capturar.
+      if (
+        mobileCaptureBusyRef.current &&
+        mobileCaptureBusySinceRef.current > 0 &&
+        now - mobileCaptureBusySinceRef.current > 2500
+      ) {
+        mobileCaptureBusyRef.current = false;
+        autoCaptureTriggeredRef.current = false;
+      }
       if (mobileCaptureBusyRef.current) return;
       mobileCaptureBusyRef.current = true;
+      mobileCaptureBusySinceRef.current = now;
       flushSync(() => {
         setScanBusy(true);
         setLiveStatus('Calificando…');
@@ -4371,6 +4484,7 @@ export default function CalificarPage() {
           clearMobileScanPreview(video, mobileScanPreviewSetters);
         } finally {
           mobileCaptureBusyRef.current = false;
+          mobileCaptureBusySinceRef.current = 0;
           autoCaptureTriggeredRef.current = false;
           setScanBusy(false);
         }
@@ -4386,6 +4500,7 @@ export default function CalificarPage() {
     const timeout = window.setTimeout(() => {
       if (mobileCaptureBusyRef.current) {
         mobileCaptureBusyRef.current = false;
+        mobileCaptureBusySinceRef.current = 0;
         autoCaptureTriggeredRef.current = false;
         gradeReadGenRef.current += 1;
         gradeReadAbortRef.current?.abort();
@@ -4405,6 +4520,24 @@ export default function CalificarPage() {
     }, 30000);
     return () => window.clearTimeout(timeout);
   }, [scanBusy]);
+
+  // Busy huérfano: ref true con scanBusy false (auto nunca recupera sin esto).
+  useEffect(() => {
+    if (!cameraOpen || !useLiveCameraUi) return;
+    const id = window.setInterval(() => {
+      if (
+        mobileCaptureBusyRef.current &&
+        !scanBusy &&
+        mobileCaptureBusySinceRef.current > 0 &&
+        performance.now() - mobileCaptureBusySinceRef.current > 2500
+      ) {
+        mobileCaptureBusyRef.current = false;
+        mobileCaptureBusySinceRef.current = 0;
+        autoCaptureTriggeredRef.current = false;
+      }
+    }, 800);
+    return () => window.clearInterval(id);
+  }, [cameraOpen, useLiveCameraUi, scanBusy]);
 
   const captureMobilePhotoManually = useCallback(async () => {
     // Capturar siempre que la cámara esté lista: el marco naranja define el encuadre.
@@ -4433,6 +4566,7 @@ export default function CalificarPage() {
 
     autoCaptureTriggeredRef.current = false;
     mobileCaptureBusyRef.current = false;
+    mobileCaptureBusySinceRef.current = 0;
     setShutterFlash(true);
     window.setTimeout(() => setShutterFlash(false), 220);
     try {

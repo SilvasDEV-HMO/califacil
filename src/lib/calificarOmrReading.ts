@@ -379,8 +379,8 @@ export async function runCalifacilOmrReadingPipeline(
     scanCanvas &&
     mapped.resolvedCount < Math.max(1, Math.ceil(omrRowCount * 0.45)) &&
     uploadKind !== 'pdf' &&
-    uploadKind !== 'flatDocument' &&
-    uploadKind !== 'flatScan';
+    uploadKind !== 'flatDocument';
+  // flatScan: permitir recovery local (antes se saltaba y quedaba 4/30 mal alineado).
 
   if (shouldRunDesktopRecovery) {
     let recoveryMeta: OmrScanMetaResult | null = null;
@@ -727,14 +727,30 @@ export function buildCalifacilOmrReadingOverride(
   chunk: Question[],
   activeScanSource: HTMLImageElement | HTMLCanvasElement,
   liveLockedAnswers: Record<string, string>,
-  warpAlignment: WarpAlignmentReport | null = null
+  warpAlignment: WarpAlignmentReport | null = null,
+  opts?: { trustedMobileRead?: boolean }
 ): CalifacilOmrReadingResult {
-  // Sanitizar con preguntas reales del chunk (no plantilla 30).
-  const sanitizedFull = sanitizeAnswerSheetOmrMeta(meta, chunk.length);
-  const mostlyBlank = isAnswerSheetOmrMostlyBlank(sanitizedFull, chunk.length);
+  const trusted =
+    Boolean(opts?.trustedMobileRead) ||
+    meta.picks.slice(0, chunk.length).filter((p) => p != null).length >=
+      Math.ceil(chunk.length * 0.4);
+
+  // Trusted: conservar picks (solo recortar al chunk). Else: sanitize + blank/weak wipe.
+  const sanitizedFull = trusted
+    ? {
+        ...meta,
+        picks: meta.picks.slice(0, chunk.length),
+        rows: meta.rows.slice(0, chunk.length),
+      }
+    : sanitizeAnswerSheetOmrMeta(meta, chunk.length);
+  const mostlyBlank = trusted
+    ? false
+    : isAnswerSheetOmrMostlyBlank(sanitizedFull, chunk.length);
   // Lectura débil/sesgada: anular picks inventados y marcar insuficiente (el caller rechaza).
   const weakInvent =
-    !mostlyBlank && isWeakMobileOmrMeta(sanitizedFull, chunk.length, chunk.length);
+    !trusted &&
+    !mostlyBlank &&
+    isWeakMobileOmrMeta(sanitizedFull, chunk.length, chunk.length);
   const sanitized =
     mostlyBlank || weakInvent
       ? {
@@ -803,7 +819,7 @@ export function buildCalifacilOmrReadingOverride(
     minResolved,
     ambiguousIdx,
     insufficientForReview:
-      weakInvent || (!mostlyBlank && mergedResolved < minResolved),
+      weakInvent || (!mostlyBlank && !trusted && mergedResolved < minResolved),
     updatedLiveLocks,
   };
 }
