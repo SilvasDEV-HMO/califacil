@@ -8723,6 +8723,30 @@ export function isAnswerSheetOmrMostlyBlank(
     }
   }
 
+  // Invento medio (p. ej. 8–12/30) con tinta débil o colapso a una columna (tabla desalineada).
+  const mediumCap = Math.max(sparseCap + 1, Math.ceil(rows * 0.45));
+  if (resolved > sparseCap && resolved < Math.ceil(rows * 0.4)) {
+    let inkSum = 0;
+    let n = 0;
+    for (let i = 0; i < rows; i++) {
+      if (meta.picks[i] == null) continue;
+      const row = meta.rows[i];
+      inkSum += row ? rowMaxInkFraction(row) : 0;
+      n++;
+    }
+    const avgInk = n > 0 ? inkSum / n : 0;
+    if (avgInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 2.8) {
+      return true;
+    }
+  }
+  if (
+    resolved >= 3 &&
+    resolved <= mediumCap &&
+    meta.maxSameColumnCount >= Math.max(3, Math.ceil(resolved * 0.65))
+  ) {
+    return true;
+  }
+
   if (marked > markedCap) return false;
 
   // Mediana de maxInk por fila: hoja vacía / ruido debe quedar bajo blankMaxInk.

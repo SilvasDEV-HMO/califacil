@@ -10,6 +10,7 @@ export {
   prepareCalifacilGradeScanCanvas,
   prepareCalifacilGradeScanCanvases,
   isMobileLetterGradeCanvasReady,
+  isPhotoSheetWarpAcceptable,
   type CalifacilGradeScanCanvases,
   type MobileWarpPipelineResult,
   type NormalizeGradeDocumentResult,
@@ -33,6 +34,8 @@ export {
   scanLiveOmrUnifiedOrLegacy,
   pickBetterOmrMeta,
   resolveMobileGradeDisplay,
+  isWeakMobileOmrMeta,
+  isStrongMobileOmrMeta,
 } from '@/lib/omr/unified-grade-scan';
 export {
   runUnifiedOmrPipeline,

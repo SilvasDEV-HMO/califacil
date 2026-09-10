@@ -273,8 +273,9 @@ export type DesktopUploadClass = 'pdf' | 'flatScan' | 'photoCrop' | 'warpedPhoto
 /**
  * Warp de foto aceptable: Acceptable (3–4 esquinas) gana sin veto de fill.
  * Fill solo como soft-check cuando no es Acceptable (evita mesa a aspect carta).
+ * Exportado para que móvil califique solo con la misma barra que desktop foto.
  */
-function isPhotoSheetWarpAcceptable(canvas: HTMLCanvasElement): boolean {
+export function isPhotoSheetWarpAcceptable(canvas: HTMLCanvasElement): boolean {
   if (isMobileWarpedAnswerSheetAcceptable(canvas)) return true;
   const softCorners =
     isCalifacilWarpedLetterCanvas(canvas) &&

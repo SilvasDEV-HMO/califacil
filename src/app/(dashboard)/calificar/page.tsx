@@ -75,7 +75,6 @@ import {
   isMobileExamSheetReadyForCapture,
   isCalifacilWarpedLetterCanvas,
   isMobileWarpedAnswerSheetAcceptable,
-  isMobileGuideCroppedSheetGradeable,
   countCalifacilCornerMarkers,
   hasCalifacilAlignStrips,
   mobileRoiQuadsAreStable,
@@ -131,6 +130,7 @@ import {
   normalizeCalifacilGradeDocumentCanvas,
   prepareCalifacilGradeScanCanvases,
   isMobileLetterGradeCanvasReady,
+  isPhotoSheetWarpAcceptable,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
 import {
@@ -140,6 +140,8 @@ import {
 import {
   scanDesktopGradeUnifiedOrLegacyAsync,
   resolveMobileGradeDisplay,
+  isStrongMobileOmrMeta,
+  isWeakMobileOmrMeta,
 } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
@@ -891,18 +893,12 @@ export default function CalificarPage() {
       );
 
       const sheetFillOk = (c: HTMLCanvasElement): boolean => {
-        if (isMobileWarpedAnswerSheetAcceptable(c) || isMobileLetterGradeCanvasReady(c)) {
+        // Misma barra que desktop foto: no calificar warps blandos que inventan bolitas.
+        if (isPhotoSheetWarpAcceptable(c) || isMobileLetterGradeCanvasReady(c)) {
           return true;
         }
-        if (isMobileGuideCroppedSheetGradeable(c)) return true;
-        // Soft solo en ESTE canvas (no mezclar señales entre warped/display).
-        if (!isCalifacilWarpedLetterCanvas(c) || !hasCalifacilAlignStrips(c)) return false;
-        if (countCalifacilCornerMarkers(c) < 3) return false;
-        const stripQuad = detectAnswerSheetQuadViaAlignStrips(c);
-        if (stripQuad) {
-          return measureRoiSheetFillRatio(stripQuad, c.width, c.height) >= 0.62;
-        }
-        return countCalifacilCornerMarkers(c) >= 4;
+        if (isMobileWarpedAnswerSheetAcceptable(c)) return true;
+        return false;
       };
 
       const acceptable = sheetFillOk(displayCanvas) || sheetFillOk(warped);
@@ -915,15 +911,12 @@ export default function CalificarPage() {
           rejectedCorners: true as const,
         };
       }
-      // Tras recorte al marco naranja, permitir warp con error de alineación si el canvas ya es hoja.
+      // Sin alineación fiable: no mandar canvas basura al lector desktop.
       if (
         warpAlignment != null &&
         !warpAlignment.ok &&
-        !isMobileWarpedAnswerSheetAcceptable(displayCanvas) &&
-        !isMobileLetterGradeCanvasReady(displayCanvas) &&
-        !isMobileWarpedAnswerSheetAcceptable(warped) &&
-        !isMobileGuideCroppedSheetGradeable(displayCanvas) &&
-        !isMobileGuideCroppedSheetGradeable(warped)
+        !isPhotoSheetWarpAcceptable(displayCanvas) &&
+        !isPhotoSheetWarpAcceptable(warped)
       ) {
         return {
           meta: null as OmrScanMetaResult | null,
@@ -1583,8 +1576,8 @@ export default function CalificarPage() {
       }
 
       if (insufficientForReview) {
-        // Hoja en blanco (0 lecturas): no abortar; mostrar revisión 0% con burbujas de la clave.
-        if (mergedResolved === 0 || mostlyBlank) {
+        // Hoja en blanco real: calificar 0%. Lecturas débiles/inventadas: rechazar.
+        if (mostlyBlank) {
           toast.message('Hoja sin respuestas marcadas — calificación 0%.');
         } else {
           setDraftSelections({});
@@ -1595,6 +1588,13 @@ export default function CalificarPage() {
               ? 'Lectura insuficiente: alinea las esquinas negras, mejora la luz y evita sombras.'
               : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
           );
+          // Móvil auto-grade: NUNCA calificar lecturas parciales/inventadas.
+          if (skipReviewUi && isMobileCamera) {
+            toast.error(
+              `No se pudo leer bien las respuestas (${mergedResolved}/${chunk.length}). Encuadra de nuevo con buena luz.`
+            );
+            return { success: false };
+          }
           if (!skipReviewUi) {
             toast.error(
               isMobile
@@ -1603,16 +1603,9 @@ export default function CalificarPage() {
             );
             return { success: false };
           }
-          // skipReviewUi: no abrir revisión; en móvil cámara se califica con parciales = incorrectas.
-          if (isMobileCamera) {
-            toast.message(
-              `Lectura parcial (${mergedResolved}/${chunk.length}). Las casillas vacías se calificarán como incorrectas.`
-            );
-          } else {
-            toast.message(
-              `Lectura parcial (${mergedResolved}/${chunk.length}). Revisa las respuestas en el overlay antes de guardar.`
-            );
-          }
+          toast.message(
+            `Lectura parcial (${mergedResolved}/${chunk.length}). Revisa las respuestas en el overlay antes de guardar.`
+          );
         }
       } else if (!isMobileCamera && mergedResolved < minResolved) {
         toast.message(
@@ -3586,8 +3579,7 @@ export default function CalificarPage() {
       let alignment: WarpAlignmentReport | null = null;
 
       if (sheetKind !== 'zipgrade') {
-        // Solo warp ultrarrápido — nunca warpCalifacilMobileCapture (deskew lento ~1 min).
-        // Tras marco naranja: softAccept (carta + franjas).
+        // Warp rápido; softAccept solo intenta encuadrar, luego exigimos barra desktop foto.
         const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
           frameQuad: frameQuad ?? undefined,
           maxErrorPx: guideCropped
@@ -3604,40 +3596,17 @@ export default function CalificarPage() {
               maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + (guideCropped ? 8 : 0),
               fast: true,
             });
-            // Soft + fill (paridad desktop isPhotoSheetWarpAcceptable); un solo canvas.
             const cand = refined.canvas;
-            const corners = countCalifacilCornerMarkers(cand);
-            const stripOnCand = detectAnswerSheetQuadViaAlignStrips(cand);
-            const fillOk = stripOnCand
-              ? measureRoiSheetFillRatio(stripOnCand, cand.width, cand.height) >= 0.55
-              : corners >= 4;
-            const soft =
-              isCalifacilWarpedLetterCanvas(cand) &&
-              hasCalifacilAlignStrips(cand) &&
-              corners >= (guideCropped ? 2 : 3) &&
-              fillOk;
-            if (
-              isMobileWarpedAnswerSheetAcceptable(cand) ||
-              soft ||
-              (guideCropped && isMobileGuideCroppedSheetGradeable(cand))
-            ) {
+            if (isPhotoSheetWarpAcceptable(cand) || isMobileWarpedAnswerSheetAcceptable(cand)) {
               warped = cand;
               alignment = refined.alignment;
             }
           }
         }
-        // Último recurso tras recorte al guía: escalar/refinar el crop como documento plano.
-        if (!warped && guideCropped) {
-          const flat =
-            prepareMobileScannedDocumentCanvasFast(fullCanvas, { skipPrintCrop: false }) ??
-            fullCanvas;
-          if (isMobileGuideCroppedSheetGradeable(flat) || hasCalifacilAlignStrips(flat)) {
-            warped = flat;
-            alignment = measureWarpedFiducialAlignment(
-              flat,
-              MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 12
-            );
-          }
+        // Tras softAccept: solo calificar si pasa la misma barra que desktop foto.
+        if (warped && !isPhotoSheetWarpAcceptable(warped) && !isMobileWarpedAnswerSheetAcceptable(warped)) {
+          warped = null;
+          alignment = null;
         }
       }
 
@@ -3784,8 +3753,8 @@ export default function CalificarPage() {
           alignment
         );
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
-        let warpMeta = califacilFastScan.meta;
-        // No auto-grade 1–2 picks de moiré/warp flojo: forzar blank (0%).
+        let warpMeta = sanitizeAnswerSheetOmrMeta(califacilFastScan.meta, chunkRows);
+        // Blank real → 0%. Lectura débil/inventada → rechazar (no auto-calificar basura).
         if (isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
           warpMeta = {
             ...warpMeta,
@@ -3798,8 +3767,24 @@ export default function CalificarPage() {
             maxSameColumnCount: 0,
             needsVisionAssist: false,
           };
+        } else if (isWeakMobileOmrMeta(warpMeta, chunkRows, chunkRows)) {
+          clearPreview();
+          toast.error(
+            'No se pudo leer bien las respuestas. Encuadra la hoja completa (esquinas + franjas) con buena luz.'
+          );
+          setLiveStatus('Lectura poco fiable — vuelve a capturar.');
+          if (video) resumeLiveVideoAfterScan(video);
+          return;
+        } else if (!isStrongMobileOmrMeta(warpMeta, chunkRows, chunkRows)) {
+          clearPreview();
+          toast.error(
+            'Lectura incompleta. Mejora el encuadre y la luz, luego captura de nuevo.'
+          );
+          setLiveStatus('Lectura incompleta — vuelve a capturar.');
+          if (video) resumeLiveVideoAfterScan(video);
+          return;
         }
-        // Meta del scanner desktop; overlay en coords carta (preview).
+        // Meta fuerte del scanner desktop; overlay en coords carta (preview).
         const resolved = resolveMobileGradeDisplay(
           displayCanvas,
           scanCanvas,
@@ -4100,16 +4085,37 @@ export default function CalificarPage() {
         toast.error('Centra la hoja: 3 esquinas + franjas laterales, o las 4 esquinas negras.');
         return;
       }
+      let gradeMeta = sanitizeAnswerSheetOmrMeta(meta, chunk.length);
+      if (isAnswerSheetOmrMostlyBlank(gradeMeta, chunk.length)) {
+        gradeMeta = {
+          ...gradeMeta,
+          picks: Array(chunk.length).fill(null) as (number | null)[],
+          rows: gradeMeta.rows.slice(0, chunk.length).map((r) => ({
+            ...r,
+            pick: null,
+            ambiguous: false,
+          })),
+          maxSameColumnCount: 0,
+          needsVisionAssist: false,
+        };
+      } else if (
+        isWeakMobileOmrMeta(gradeMeta, chunk.length, chunk.length) ||
+        !isStrongMobileOmrMeta(gradeMeta, chunk.length, chunk.length)
+      ) {
+        setReviewStatus('Lectura poco fiable. Vuelve a capturar con mejor luz.');
+        toast.error('No se pudo leer bien las respuestas. Encuadra de nuevo e intenta otra vez.');
+        return;
+      }
       const resolved = resolveMobileGradeDisplay(
         displayCanvas,
         docCanvas,
         omrCols,
         omrRowCount,
-        meta
+        gradeMeta
       );
       const readingOverride = buildCalifacilOmrReadingOverride(
         {
-          ...meta,
+          ...gradeMeta,
           reviewSourceCanvas: resolved.previewCanvas,
           geometry: resolved.geometry,
         },

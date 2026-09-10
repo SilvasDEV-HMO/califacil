@@ -54,7 +54,11 @@ export function isWeakMobileOmrMeta(
   const resolved = countResolvedPicks(meta, scored);
   if (isAnswerSheetOmrMostlyBlank(meta, scored)) return true;
   if (resolved < Math.ceil(scored * 0.4)) return true;
-  if (meta.maxSameColumnCount > Math.max(4, Math.round(scored * 0.4))) return true;
+  // Colapso a una columna en hoja incompleta = tabla desalineada (no tumba exámenes casi llenos all-A).
+  const sameColCap = Math.max(5, Math.round(scored * 0.55));
+  if (meta.maxSameColumnCount > sameColCap && resolved < Math.ceil(scored * 0.9)) {
+    return true;
+  }
   return false;
 }
 
@@ -67,7 +71,11 @@ export function isStrongMobileOmrMeta(
   rows: number,
   activeRows: number = rows
 ): boolean {
-  return !isWeakMobileOmrMeta(meta, rows, activeRows);
+  if (isWeakMobileOmrMeta(meta, rows, activeRows)) return false;
+  const scored = Math.max(1, Math.min(rows, activeRows));
+  const resolved = countResolvedPicks(meta, scored);
+  // Exigir señal coherente (≥40%) y sin sesgo fuerte de columna.
+  return resolved >= Math.ceil(scored * 0.4);
 }
 
 /** Fast path suficiente para no lanzar segundo pase pesado en desktop. */
@@ -82,7 +90,9 @@ function isDesktopFastPassEnough(
   const resolved = countResolvedPicks(meta, rows);
   // 0 picks con tinta/ruido no es "enough": hay que intentar strip recovery.
   if (resolved === 0) return false;
-  // Foto/PDF: con ≥40% lecturas basta el pase rápido (evita «Leyendo…» eterno).
+  // No conservar inventos medianos: si es débil/sesgado, intentar recovery.
+  if (isWeakMobileOmrMeta(meta, rows)) return false;
+  // Foto/PDF: con ≥40% lecturas fuertes basta el pase rápido.
   if (resolved >= Math.ceil(rows * 0.4)) return true;
   if (isReferenceGradeExam(rows, columns) && isReferenceGradeCanvasAnchor(displayCanvas.width, displayCanvas.height)) {
     if (resolved >= Math.ceil(rows * 0.55)) return true;
@@ -166,15 +176,23 @@ export function pickBetterOmrMeta(
   const blankB = isAnswerSheetOmrMostlyBlank(b, rows);
   if (blankA !== blankB) {
     const nonBlank = blankA ? b : a;
-    const resolved = countResolvedPicks(nonBlank, rows);
-    const strongFilled = resolved >= Math.ceil(rows * 0.4);
-    if (strongFilled) return nonBlank;
+    // Solo preferir no-blank si es lectura fuerte (no inventos medianos/sesgados).
+    if (isStrongMobileOmrMeta(nonBlank, rows)) return nonBlank;
     return blankA ? a : b;
   }
 
+  const weakA = isWeakMobileOmrMeta(a, rows);
+  const weakB = isWeakMobileOmrMeta(b, rows);
+  if (weakA !== weakB) return weakA ? b : a;
+
   const ra = countResolvedPicks(a, rows);
   const rb = countResolvedPicks(b, rows);
-  if (rb !== ra) return rb > ra ? b : a;
+  // Con ambos débiles: preferir el de menos picks (menos invento).
+  if (weakA && weakB) {
+    if (rb !== ra) return rb < ra ? b : a;
+  } else if (rb !== ra) {
+    return rb > ra ? b : a;
+  }
   if (b.maxSameColumnCount !== a.maxSameColumnCount) {
     return b.maxSameColumnCount < a.maxSameColumnCount ? b : a;
   }
