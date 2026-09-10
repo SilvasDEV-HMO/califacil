@@ -520,12 +520,15 @@ export function califacilMobileScannerGuideInViewportPx(
 
 /** Detección unificada para loop en vivo en móvil (franjas + contornos). */
 export function detectMobileLiveSheetQuad(
-  roiCanvas: HTMLCanvasElement
+  roiCanvas: HTMLCanvasElement,
+  opts?: { allowLargestQuad?: boolean }
 ): [Point, Point, Point, Point] | null {
   const w = roiCanvas.width;
   const h = roiCanvas.height;
   const strip = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
   if (strip && isValidMobileRoiQuad(strip, w, h)) return strip;
+  // Post-captura / grade: nunca largestQuad (mesa, bisel de monitor).
+  if (opts?.allowLargestQuad === false) return null;
   return detectLargestQuadInRoiCanvas(roiCanvas);
 }
 
@@ -4718,15 +4721,21 @@ function isSaneReviewBubbleR(r: number): boolean {
 /**
  * Geometría de overlay para preview carta: plantilla fija 30 + anclas de anillo.
  * No reutiliza bubbles del canvas de referencia.
+ * Snap suave por defecto (maxShiftRatio bajo) para no empujar bolitas al strip lateral.
  */
 export function buildLetterDisplayOverlayGeometry(
   canvas: HTMLCanvasElement,
   columns: number,
-  rowCount: number = CALIFACIL_OMR_DEFAULT_ROWS
+  rowCount: number = CALIFACIL_OMR_DEFAULT_ROWS,
+  opts?: { maxShiftRatio?: number; skipSnap?: boolean }
 ): CalifacilOmrScanGeometry {
   const rows = clampCalifacilOmrRowCount(rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const base = buildAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height);
+  if (opts?.skipSnap) {
+    return base;
+  }
+  const maxShiftRatio = opts?.maxShiftRatio ?? 0.12;
   const attached = attachAnswerSheetReviewBubbleOverlay(
     canvas,
     {
@@ -4745,7 +4754,7 @@ export function buildLetterDisplayOverlayGeometry(
     },
     cols,
     rows,
-    { forceRebuild: true, maxShiftRatio: 0.35 }
+    { forceRebuild: true, maxShiftRatio }
   );
   return attached.geometry ?? base;
 }
@@ -8619,10 +8628,10 @@ export function isAnswerSheetOmrMostlyBlank(
   // Sin ninguna lectura OMR y poca tinta "marcada": hoja en blanco (anillos impresos no cuentan).
   if (resolved === 0 && marked <= markedCap) return true;
 
-  // 1–2 falsos "fuertes" (madera/sombra/strip) + mediana de hoja en zona de ruido → blank.
-  // Cierra 1/30 en hoja vacía sin tumbar exámenes ≥40% contestados.
-  const strongSparseCap = Math.max(1, Math.floor(rows * 0.07));
-  if (resolved > 0 && resolved <= strongSparseCap && mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.4) {
+  // 1–2 picks sparse (moiré / sombra / franja): SIEMPRE blank, sin gate de mediana.
+  // Cierra 2/30 inventados en foto de pantalla; no tumba exámenes ≥40% contestados.
+  const strongSparseCap = Math.max(2, Math.floor(rows * 0.07));
+  if (resolved > 0 && resolved <= strongSparseCap) {
     return true;
   }
 

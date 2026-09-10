@@ -192,11 +192,23 @@ export function resolveMobileGradeDisplay(
   _scanCanvas: HTMLCanvasElement,
   columns: number,
   rowCount: number,
-  _meta?: OmrScanMetaResult | null
+  meta?: OmrScanMetaResult | null
 ): { previewCanvas: HTMLCanvasElement; geometry: CalifacilOmrScanGeometry } {
+  const scored = Math.max(1, Math.min(rowCount, meta?.picks?.length ?? rowCount));
+  const resolved = meta
+    ? meta.picks.slice(0, scored).filter((p) => p != null).length
+    : scored;
+  const blankOrSparse =
+    !meta ||
+    isAnswerSheetOmrMostlyBlank(meta, scored) ||
+    resolved <= Math.max(2, Math.floor(scored * 0.07));
   return {
     previewCanvas: displayCanvas,
-    geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount),
+    geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount, {
+      // Blank/sparse: sin snap agresivo a franjas/moiré (evita cluster en margen derecho).
+      skipSnap: blankOrSparse,
+      maxShiftRatio: 0.12,
+    }),
   };
 }
 

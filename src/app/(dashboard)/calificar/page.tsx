@@ -886,31 +886,30 @@ export default function CalificarPage() {
         omrRowCount,
         { preWarped: true, warpAlignment }
       );
-      const acceptable =
-        isMobileLetterGradeCanvasReady(displayCanvas) ||
-        isMobileWarpedAnswerSheetAcceptable(warped) ||
-        isMobileWarpedAnswerSheetAcceptable(displayCanvas);
-      if (!acceptable) {
-        const corners = Math.max(
-          countCalifacilCornerMarkers(displayCanvas),
-          countCalifacilCornerMarkers(warped)
-        );
-        const strips =
-          hasCalifacilAlignStrips(displayCanvas) || hasCalifacilAlignStrips(warped);
-        const letterOk =
-          isCalifacilWarpedLetterCanvas(displayCanvas) ||
-          isCalifacilWarpedLetterCanvas(warped);
-        // Evita toast falso si hay franjas + ≥3 esquinas útiles (casi Acceptable).
-        const softOk = letterOk && strips && corners >= 3;
-        if (!softOk) {
-          return {
-            meta: null as OmrScanMetaResult | null,
-            orangeFrameNorm: null as OmrNormRect | null,
-            docCanvas: scanCanvas,
-            displayCanvas,
-            rejectedCorners: true as const,
-          };
+
+      const sheetFillOk = (c: HTMLCanvasElement): boolean => {
+        if (isMobileWarpedAnswerSheetAcceptable(c) || isMobileLetterGradeCanvasReady(c)) {
+          return true;
         }
+        // Soft solo en ESTE canvas (no mezclar señales entre warped/display).
+        if (!isCalifacilWarpedLetterCanvas(c) || !hasCalifacilAlignStrips(c)) return false;
+        if (countCalifacilCornerMarkers(c) < 3) return false;
+        const stripQuad = detectAnswerSheetQuadViaAlignStrips(c);
+        if (stripQuad) {
+          return measureRoiSheetFillRatio(stripQuad, c.width, c.height) >= 0.62;
+        }
+        return countCalifacilCornerMarkers(c) >= 4;
+      };
+
+      const acceptable = sheetFillOk(displayCanvas) || sheetFillOk(warped);
+      if (!acceptable || (warpAlignment != null && !warpAlignment.ok)) {
+        return {
+          meta: null as OmrScanMetaResult | null,
+          orangeFrameNorm: null as OmrNormRect | null,
+          docCanvas: scanCanvas,
+          displayCanvas,
+          rejectedCorners: true as const,
+        };
       }
       // Misma lectura que desktop PDF (1600 + reattach); no inventar con path móvil rápido.
       const meta = await scanDesktopGradeUnifiedOrLegacyAsync(
@@ -3574,13 +3573,18 @@ export default function CalificarPage() {
               maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
               fast: true,
             });
-            // No devolver warp débil: solo Acceptable (o carta + franjas + ≥3).
+            // Soft + fill (paridad desktop isPhotoSheetWarpAcceptable); un solo canvas.
             const cand = refined.canvas;
             const corners = countCalifacilCornerMarkers(cand);
+            const stripQuad = detectAnswerSheetQuadViaAlignStrips(cand);
+            const fillOk = stripQuad
+              ? measureRoiSheetFillRatio(stripQuad, cand.width, cand.height) >= 0.62
+              : corners >= 4;
             const soft =
               isCalifacilWarpedLetterCanvas(cand) &&
               hasCalifacilAlignStrips(cand) &&
-              corners >= 3;
+              corners >= 3 &&
+              fillOk;
             if (isMobileWarpedAnswerSheetAcceptable(cand) || soft) {
               warped = cand;
               alignment = refined.alignment;
@@ -3729,7 +3733,21 @@ export default function CalificarPage() {
           alignment
         );
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
-        const warpMeta = califacilFastScan.meta;
+        let warpMeta = califacilFastScan.meta;
+        // No auto-grade 1–2 picks de moiré/warp flojo: forzar blank (0%).
+        if (isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
+          warpMeta = {
+            ...warpMeta,
+            picks: Array(chunkRows).fill(null) as (number | null)[],
+            rows: warpMeta.rows.slice(0, chunkRows).map((r) => ({
+              ...r,
+              pick: null,
+              ambiguous: false,
+            })),
+            maxSameColumnCount: 0,
+            needsVisionAssist: false,
+          };
+        }
         // Meta del scanner desktop; overlay en coords carta (preview).
         const resolved = resolveMobileGradeDisplay(
           displayCanvas,
@@ -3822,19 +3840,17 @@ export default function CalificarPage() {
       });
       await yieldForSpinnerPaint();
 
-      // Preferir ROI del gate "Listo" (no redetectar con largestQuad / mesa).
+      // Preferir ROI del gate "Listo" o franjas. Nunca largestQuad (mesa/bisel).
       const gateQuad =
         opts?.roiQuad && opts?.roiCapture
           ? frameQuadOnFullCanvas(opts.roiQuad, opts.roiCapture, fullCanvas)
           : null;
       const stripQuad = detectAnswerSheetQuadViaAlignStrips(fullCanvas);
-      const frameQuad =
-        gateQuad ??
-        stripQuad ??
-        detectMobileLiveSheetQuad(fullCanvas);
-      // No usar detectLargestQuadInRoiCanvas aquí: suele pillar mesa/borde.
+      const frameQuad = gateQuad ?? stripQuad ?? null;
 
-      await processMobileCapturedCanvas(fullCanvas, video, { frameQuad });
+      await processMobileCapturedCanvas(fullCanvas, video, {
+        frameQuad: frameQuad ?? undefined,
+      });
     },
     [processMobileCapturedCanvas, mobileScanPreviewSetters]
   );
