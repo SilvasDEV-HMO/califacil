@@ -46,7 +46,12 @@ export function useAuth() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
-      setUser(session?.user ?? null);
+      const next = session?.user ?? null;
+      // TOKEN_REFRESHED al volver a la pestaña no debe crear un User nuevo (remonta Calificar).
+      setUser((prev) => {
+        if (prev?.id === next?.id && prev?.email === next?.email) return prev;
+        return next;
+      });
       setLoading(false);
     });
 

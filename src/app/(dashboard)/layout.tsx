@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
@@ -34,18 +34,27 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const { user, loading, signOut } = useAuth();
   const [billingReady, setBillingReady] = useState(false);
+  const verifiedUserIdRef = useRef<string | null>(null);
   const dashboardHome = pathname === '/dashboard';
 
   useEffect(() => {
     if (!loading && !user) {
       router.replace('/login');
     }
-  }, [user, loading, router]);
+  }, [user?.id, loading, router]);
 
   useEffect(() => {
     const guardBilling = async () => {
-      if (loading || !user) return;
-      setBillingReady(false);
+      if (loading) return;
+      if (!user) {
+        verifiedUserIdRef.current = null;
+        setBillingReady(false);
+        return;
+      }
+      // No desmontar Calificar al refrescar el token (cambio de pestaña/pantalla).
+      if (verifiedUserIdRef.current !== user.id) {
+        setBillingReady(false);
+      }
       const { data, error } = await supabase
         .from('teacher_billing')
         .select('is_active,subscription_status')
@@ -56,14 +65,19 @@ export default function DashboardLayout({
         !isCalifacilSuperUserEmail(user.email) &&
         (error || !isSubscriptionActive(data))
       ) {
+        verifiedUserIdRef.current = null;
+        setBillingReady(false);
         router.replace('/billing');
         return;
       }
+      verifiedUserIdRef.current = user.id;
       setBillingReady(true);
     };
 
     void guardBilling();
-  }, [loading, user, router]);
+    // user.id: no re-ejecutar al recibir un objeto User nuevo por TOKEN_REFRESHED.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, user?.id, user?.email, router]);
 
   const handleSignOut = async () => {
     const { error } = await signOut();
