@@ -23,6 +23,7 @@ import {
   scaleCanvasToMaxSide,
   scanWarpedWithBestTableFrame,
   syncCalifacilOmrGeometryImageSize,
+  buildAnswerSheetOmrGeometry,
   type CalifacilOmrScanGeometry,
 } from '../src/lib/omrScan.ts';
 
@@ -201,6 +202,34 @@ function gradeCanvas(source: HTMLCanvasElement, label: string) {
         Math.abs(ctr!.ny - mid) < Math.abs(ctr!.ny - farMid),
         `${label}: q${r + 1} overlay estirado (ny=${ctr!.ny.toFixed(3)} fila1-10 vs fila ${r + 16})`
       );
+    }
+  }
+  {
+    const stretched = buildAnswerSheetOmrGeometry(10, COLS, canvas.width, canvas.height);
+    assert(stretched.cells.length < ROWS, `${label}: fixture 10 filas`);
+    const unstretched = snapReviewOverlayToPrintedRings(
+      canvas,
+      { ...meta, geometry: stretched },
+      COLS,
+      10,
+      { maxShiftRatio: 0.45, maxShiftRatioY: 0.32 }
+    );
+    const g30 = unstretched.geometry!;
+    assert((g30.cells?.length ?? 0) >= ROWS, `${label}: snap N no restauró 30 renglones`);
+    for (let r = 0; r < 10; r++) {
+      const gt = GROUND_TRUTH[r]!;
+      const ctr = bubbleCenter(g30, r, gt);
+      const cell = g30.cells[r]?.[gt];
+      const far = g30.cells[r + 15]?.[gt];
+      assert(!!ctr && !!cell, `${label}: snap-10 q${r + 1}`);
+      if (far) {
+        const mid = cell!.y + cell!.h * 0.5;
+        const farMid = far.y + far.h * 0.5;
+        assert(
+          Math.abs(ctr!.ny - mid) < Math.abs(ctr!.ny - farMid),
+          `${label}: snap desde 10 filas dejó q${r + 1} en otro renglón`
+        );
+      }
     }
   }
   console.log(`ok: ${label} picks=${gotKey}`);

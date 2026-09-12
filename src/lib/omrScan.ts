@@ -4917,31 +4917,65 @@ export function attachAnswerSheetReviewBubbleOverlay(
 }
 
 /**
+ * Rejilla de overlay = 30 renglones impresos. Si el motor trajo N celdas estiradas, se sustituye.
+ */
+export function ensureCalifacilPrintedRowGeometry(
+  canvas: HTMLCanvasElement,
+  geometry: CalifacilOmrScanGeometry | null | undefined,
+  columns: number
+): CalifacilOmrScanGeometry {
+  const rows = CALIFACIL_OMR_DEFAULT_ROWS;
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const printed = syncCalifacilOmrGeometryImageSize(
+    buildAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height),
+    canvas.width,
+    canvas.height
+  );
+  if (!geometry?.cells?.length) return printed;
+  const synced = syncCalifacilOmrGeometryImageSize(geometry, canvas.width, canvas.height);
+  if (synced.cells.length >= rows) {
+    return {
+      ...synced,
+      cells: synced.cells.slice(0, rows),
+      bubbles: synced.bubbles?.length ? synced.bubbles.slice(0, rows) : synced.bubbles,
+    };
+  }
+  return printed;
+}
+
+/**
  * Overlay-only: ancla bolitas a anillos impresos (paso fino + sesgo mediano).
- * No relée ni sustituye picks.
+ * No relée ni sustituye picks. La rejilla es siempre 30 renglones impresos.
  */
 export function snapReviewOverlayToPrintedRings(
   canvas: HTMLCanvasElement,
   meta: OmrScanMetaResult,
   columns: number,
-  rowCount: number,
+  _rowCount: number,
   opts?: { maxShiftRatio?: number; maxShiftRatioY?: number; biasRows?: number }
 ): OmrScanMetaResult {
-  const rows = clampCalifacilOmrRowCount(rowCount);
+  const rows = CALIFACIL_OMR_DEFAULT_ROWS;
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const maxShiftRatio = opts?.maxShiftRatio ?? 0.45;
   const maxShiftRatioY = opts?.maxShiftRatioY ?? 0.32;
-  const first = attachAnswerSheetReviewBubbleOverlay(canvas, meta, columns, rowCount, {
-    forceRebuild: true,
-    maxShiftRatio: Math.min(maxShiftRatio, maxShiftRatioY),
-    fineSearch: true,
-  });
+  const printedGeom = ensureCalifacilPrintedRowGeometry(canvas, meta.geometry, cols);
+  const first = attachAnswerSheetReviewBubbleOverlay(
+    canvas,
+    { ...meta, geometry: printedGeom },
+    columns,
+    rows,
+    {
+      forceRebuild: true,
+      maxShiftRatio: Math.min(maxShiftRatio, maxShiftRatioY),
+      fineSearch: true,
+    }
+  );
   const geom = first.geometry;
   if (!geom?.cells?.length || !geom.bubbles?.length) return first;
 
   const W = Math.max(1, canvas.width);
   const H = Math.max(1, canvas.height);
-  const biasRows = Math.max(1, Math.min(rows, opts?.biasRows ?? rows));
+  const biasRows = rows;
   const dxs: number[] = [];
   const dys: number[] = [];
   for (let r = 0; r < biasRows; r++) {
