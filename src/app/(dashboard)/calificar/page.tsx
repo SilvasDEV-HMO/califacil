@@ -213,7 +213,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import {
-  isDesktopPointerDevice,
+  canRequestCalificarLiveCamera,
   useCalificarLiveCamera,
   useIsMobile,
 } from '@/hooks/use-mobile';
@@ -2302,7 +2302,7 @@ export default function CalificarPage() {
 
   const startLiveCamera = useCallback(async (opts?: { skipPhaseGuard?: boolean }): Promise<boolean> => {
     // Escritorio: solo PDF/JPG. Nunca pedir permiso de cámara (ni DroidCam / webcams).
-    if (!useLiveCameraUi || !isMobile || isDesktopPointerDevice()) return false;
+    if (!canRequestCalificarLiveCamera() || !useLiveCameraUi || !isMobile) return false;
     if (!examId || !exam || !supportsCalifacil) {
       toast.error('Selecciona primero un examen válido y entra a captura.');
       return false;
@@ -2329,6 +2329,10 @@ export default function CalificarPage() {
         startingCameraRef.current = false;
         return false;
       }
+      if (!canRequestCalificarLiveCamera()) {
+        startingCameraRef.current = false;
+        return false;
+      }
       const attempts: MediaStreamConstraints[] = [
         {
           video: {
@@ -2348,10 +2352,10 @@ export default function CalificarPage() {
         },
         { video: { facingMode: { ideal: 'environment' } }, audio: false },
         { video: { facingMode: 'environment' }, audio: false },
-        { video: true, audio: false },
       ];
       let stream: MediaStream | null = null;
       for (const constraints of attempts) {
+        if (!canRequestCalificarLiveCamera()) break;
         try {
           stream = await navigator.mediaDevices.getUserMedia(constraints);
           if (stream) break;
@@ -3183,7 +3187,7 @@ export default function CalificarPage() {
   );
 
   const openMobileCapture = useCallback(() => {
-    if (!useLiveCameraUi || isDesktopPointerDevice()) {
+    if (!useLiveCameraUi || !canRequestCalificarLiveCamera()) {
       flushSync(() => {
         setPhase('capturar');
         setCameraPermissionPhase('granted');
@@ -3243,7 +3247,7 @@ export default function CalificarPage() {
   ]);
 
   const requestCameraFromGate = useCallback(() => {
-    if (!useLiveCameraUi || isDesktopPointerDevice()) return;
+    if (!useLiveCameraUi || !canRequestCalificarLiveCamera()) return;
     setCameraPermissionPhase('requesting');
     void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {
       setCameraPermissionPhase(ok ? 'granted' : 'denied');
@@ -5173,6 +5177,7 @@ export default function CalificarPage() {
               }
               scanStatusLabel="Calificando…"
               onRetryCamera={() => {
+                if (!canRequestCalificarLiveCamera()) return;
                 setCameraPermissionPhase('requesting');
                 void startLiveCamera({ skipPhaseGuard: true }).then((ok) => {
                   setCameraPermissionPhase(ok ? 'granted' : 'denied');

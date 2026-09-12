@@ -1,4 +1,7 @@
 import * as React from "react"
+import { canRequestCalificarLiveCamera } from "@/lib/calificarLiveCamera"
+
+export { canRequestCalificarLiveCamera, isDesktopPointerDevice } from "@/lib/calificarLiveCamera"
 
 const MOBILE_BREAKPOINT = 768
 
@@ -18,48 +21,29 @@ export function useIsMobile() {
   return !!isMobile
 }
 
-/** Ratón/trackpad de escritorio: no pedir cámara aunque la ventana sea estrecha. */
-export function isDesktopPointerDevice(): boolean {
-  if (typeof window === "undefined") return true
-  const finePointer = window.matchMedia("(pointer: fine)").matches
-  const hover = window.matchMedia("(hover: hover)").matches
-  return finePointer && hover
-}
-
-const DESKTOP_LAYOUT_BREAKPOINT = 1024
-
 /**
  * Cámara en vivo solo en móvil táctil.
  * En escritorio (ratón o layout lg) no se pide getUserMedia: solo PDF/JPG.
- * Tras la captura se usa el mismo OMR desktop (warp carta → scanDesktop…).
  */
 export function useCalificarLiveCamera(): boolean {
   const [enabled, setEnabled] = React.useState(false)
 
   React.useEffect(() => {
-    const update = () => {
-      if (isDesktopPointerDevice()) {
-        setEnabled(false)
-        return
-      }
-      if (window.matchMedia(`(min-width: ${DESKTOP_LAYOUT_BREAKPOINT}px)`).matches) {
-        setEnabled(false)
-        return
-      }
-      const narrow = window.innerWidth < MOBILE_BREAKPOINT
-      const coarse = window.matchMedia("(pointer: coarse)").matches
-      const touchLike = coarse || navigator.maxTouchPoints > 0
-      setEnabled(narrow && touchLike)
-    }
+    const update = () => setEnabled(canRequestCalificarLiveCamera())
 
     update()
     const narrowMq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-    const desktopMq = window.matchMedia(`(min-width: ${DESKTOP_LAYOUT_BREAKPOINT}px)`)
-    narrowMq.addEventListener("change", update)
-    desktopMq.addEventListener("change", update)
+    const desktopMq = window.matchMedia("(min-width: 1024px)")
+    const fineMq = window.matchMedia("(pointer: fine)")
+    const hoverMq = window.matchMedia("(hover: hover)")
+    const coarseMq = window.matchMedia("(pointer: coarse)")
+    for (const mq of [narrowMq, desktopMq, fineMq, hoverMq, coarseMq]) {
+      mq.addEventListener("change", update)
+    }
     return () => {
-      narrowMq.removeEventListener("change", update)
-      desktopMq.removeEventListener("change", update)
+      for (const mq of [narrowMq, desktopMq, fineMq, hoverMq, coarseMq]) {
+        mq.removeEventListener("change", update)
+      }
     }
   }, [])
 

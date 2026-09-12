@@ -1,3 +1,5 @@
+import { canRequestCalificarLiveCamera } from '@/lib/calificarLiveCamera';
+
 type TorchTrack = MediaStreamTrack & { applyConstraints(c: MediaTrackConstraints): Promise<void> };
 
 function torchConstraintSets(enabled: boolean): MediaTrackConstraints[] {
@@ -78,6 +80,8 @@ export async function restartStreamWithTorch({
         baseVideo,
       ]
     : [baseVideo];
+
+  if (!canRequestCalificarLiveCamera()) return false;
 
   for (const video of videoVariants) {
     try {
