@@ -143,6 +143,7 @@ import {
   isWeakMobileOmrMeta,
   rereadOmrWithDisplayOverlayGeometry,
   isUsableOmrRecoveryMeta,
+  scanWarpedGradeMobileAsync,
   pickBetterOmrMeta,
 } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
@@ -902,15 +903,31 @@ export default function CalificarPage() {
         };
       }
 
-      // Una geometría + una lectura sobre el mismo LetterCanvas (30 filas).
+      // Rejilla de bolitas reales (no plantilla carta: en foto de tabla corre las marcas a la izquierda).
+      const unifiedMeta = await scanWarpedGradeMobileAsync(
+        displayCanvas,
+        omrCols,
+        omrRowCount,
+        { activeRows: scoredRows, letterCanvas: displayCanvas }
+      );
+      const unifiedFit = unifiedMeta.geometry
+        ? measureLetterGeometryBubbleFit(displayCanvas, unifiedMeta.geometry, omrRowCount)
+        : 0;
+
       const graded = gradeLetterCanvas(displayCanvas, omrCols, omrRowCount, {
         geometry: prepared.geometry,
       });
       let meta = graded.meta;
       let bubbleFit = graded.bubbleFit;
-
-      // Recovery solo si fit mejora (nunca por más picks inventados).
       if (
+        unifiedFit >= 0.48 &&
+        (unifiedFit + 0.01 >= bubbleFit ||
+          isWeakMobileOmrMeta(meta, omrRowCount, scoredRows) ||
+          !isStrongMobileOmrMeta(meta, omrRowCount, scoredRows))
+      ) {
+        meta = unifiedMeta;
+        bubbleFit = Math.max(bubbleFit, unifiedFit);
+      } else if (
         bubbleFit < LETTER_GRADE_MIN_BUBBLE_FIT ||
         isAnswerSheetOmrMostlyBlank(meta, scoredRows) ||
         isWeakMobileOmrMeta(meta, omrRowCount, scoredRows) ||
@@ -2206,8 +2223,8 @@ export default function CalificarPage() {
           toast.error('No se pudo leer la imagen.');
           return;
         }
-        // Galería: calificar la imagen directa (no exigir cámara abierta).
-        await processMobileCapturedCanvas(fullCanvas, videoRef.current, { fromGallery: true });
+        // Galería móvil: mismo pipeline que desktop (sin warp de cámara).
+        await finalizeCapturedSheet(fullCanvas, file, { skipReviewUi: true });
       } else {
         setLiveStatus('Leyendo examen…');
         await yieldForSpinnerPaint();

@@ -1,5 +1,9 @@
 import { preprocessForSheetDetection } from '@/lib/omr/preprocess';
 import { prepareReferenceGradeCanvas } from '@/lib/omr/reference-grade';
+import {
+  cropCanvasToPrintedBubbleTable,
+  detectCircleGridGeometry,
+} from '@/lib/omr/engine/detect-circles-grid';
 import type { WarpAlignmentReport } from '@/lib/omrScan';
 import {
   MAX_WARP_ALIGNMENT_ERROR_PX,
@@ -405,11 +409,23 @@ export function normalizeCalifacilGradeDocumentCanvas(
   const base = captureImageFullFrame(source, { maxSide: Math.max(maxSide, 2400) }) ?? source;
   const uploadClass =
     opts?.uploadClass ?? classifyDesktopUploadCanvas(base, columns);
+  const rowCount = Math.max(2, Math.min(30, Math.round(opts?.rowCount ?? 30)));
   const useFlatPath =
     uploadClass === 'pdf' ||
     uploadClass === 'flatScan' ||
     (opts?.flatDocument === true &&
       isLikelyFlatCalifacilDocument(base, columns, { flatDocument: true }));
+
+  const tryPrintedTableAsFlat = (
+    canvas: HTMLCanvasElement
+  ): NormalizeGradeDocumentResult | null => {
+    const tableCrop = cropCanvasToPrintedBubbleTable(canvas);
+    const grid = detectCircleGridGeometry(tableCrop, columns, rowCount);
+    if (grid && grid.bubbleFit >= 0.5) {
+      return finishOk(tableCrop, null, tableCrop !== canvas);
+    }
+    return null;
+  };
 
   // PDF / escaneo plano: no auto-orientar ni warpear (congela la UI y tuerce la hoja).
   if (useFlatPath) {
@@ -469,7 +485,11 @@ export function normalizeCalifacilGradeDocumentCanvas(
     return finishOk(oriented, null, oriented !== base);
   }
 
-  // Foto: exigir hoja sola (nunca finish(base) con mesa).
+  // Foto / recorte de tabla (móvil): si hay rejilla de bolitas, no warpear a carta.
+  if (uploadClass === 'photoCrop') {
+    const tableFlat = tryPrintedTableAsFlat(base);
+    if (tableFlat) return tableFlat;
+  }
   if (
     hasCalifacilAlignStrips(base) &&
     isCalifacilExamSheetLikely(base, columns) &&

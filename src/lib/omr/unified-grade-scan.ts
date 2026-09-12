@@ -204,12 +204,12 @@ function finalizeUnifiedDisplayMeta(
   const overlayFinal = pickBetterOmrMeta(withGeom, overlayReread, rows);
 
   const hasSaneEngineBubbles = hasSaneOverlayBubbles(geometry, rows);
-  if (opts?.skipBubbleReattach && hasSaneEngineBubbles && engineGeometryMatchesDisplay(displayCanvas, meta)) {
-    if (geometry) {
-      const engineReread = rereadOmrPicksOnGeometry(displayCanvas, geometry, columns, rows, kept);
-      return pickBetterOmrMeta(kept, engineReread, rows);
+  if (hasSaneEngineBubbles && engineGeometryMatchesDisplay(displayCanvas, meta)) {
+    const engineReread = rereadOmrPicksOnGeometry(displayCanvas, geometry!, columns, rows, kept);
+    const engineBest = pickBetterOmrMeta(kept, engineReread, rows);
+    if (opts?.skipBubbleReattach || !isWeakMobileOmrMeta(engineBest, rows)) {
+      return engineBest;
     }
-    return kept;
   }
 
   return pickBetterOmrMeta(kept, overlayFinal, rows);
@@ -515,7 +515,7 @@ export async function scanWarpedGradeMobileAsync(
     unifiedResultToMeta(unified),
     rows,
     columns,
-    { skipBubbleReattach: false }
+    { skipBubbleReattach: true }
   );
   // Sanitizar con preguntas reales (no plantilla 30) para no blankear hojas parciales.
   meta = sanitizeAnswerSheetOmrMeta(meta, activeRows);
@@ -527,7 +527,7 @@ export async function scanWarpedGradeMobileAsync(
   // Recovery barato: solo strip live sweeps (sin optimize 160/320).
   const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
   let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns, {
-    skipBubbleReattach: false,
+    skipBubbleReattach: true,
   });
   stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, activeRows);
   meta = pickBetterOmrMeta(meta, stripMeta, activeRows);
@@ -550,13 +550,13 @@ export async function scanWarpedGradeMobileAsync(
       unifiedResultToMeta(letterUnified),
       rows,
       columns,
-      { skipBubbleReattach: false }
+      { skipBubbleReattach: true }
     );
     letterMeta = sanitizeAnswerSheetOmrMeta(letterMeta, activeRows);
     if (isWeakMobileOmrMeta(letterMeta, rows, activeRows)) {
       const letterStrip = runStripFallbackFast(letter, columns, rows);
       let letterStripMeta = finalizeUnifiedDisplayMeta(letter, letterStrip, rows, columns, {
-        skipBubbleReattach: false,
+        skipBubbleReattach: true,
       });
       letterStripMeta = sanitizeAnswerSheetOmrMeta(letterStripMeta, activeRows);
       letterMeta = pickBetterOmrMeta(letterMeta, letterStripMeta, activeRows);
