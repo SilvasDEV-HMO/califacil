@@ -5,12 +5,12 @@ import {
   scanWarpedGradeDocumentAsync,
   scanCalifacilOmrSheetWithMeta,
   syncCalifacilOmrGeometryImageSize,
-  attachAnswerSheetReviewBubbleOverlay,
   sanitizeAnswerSheetOmrMeta,
   downscaleCanvasForOmrScan,
   isAnswerSheetOmrMostlyBlank,
   buildLetterDisplayOverlayGeometry,
   rereadOmrPicksOnGeometry,
+  scanWarpedWithBestTableFrame,
   type CalifacilOmrScanGeometry,
   type CalifacilScanOptions,
   type OmrScanMetaResult,
@@ -40,6 +40,61 @@ function gradeScanCanvas(canvas: HTMLCanvasElement, maxSide: number): HTMLCanvas
 
 function countResolvedPicks(meta: OmrScanMetaResult, rows: number): number {
   return meta.picks.slice(0, rows).filter((p) => p != null).length;
+}
+
+function hasSaneOverlayBubbles(
+  geometry: CalifacilOmrScanGeometry | null | undefined,
+  rows: number
+): boolean {
+  if (!geometry?.bubbles || geometry.bubbles.length < rows) return false;
+  return geometry.bubbles.some((row) =>
+    row?.some((b) => Number.isFinite(b.r) && b.r > 0.002 && b.r < 0.06)
+  );
+}
+
+function engineGeometryMatchesDisplay(
+  displayCanvas: HTMLCanvasElement,
+  meta?: OmrScanMetaResult | null
+): boolean {
+  const reviewSource = meta?.reviewSourceCanvas;
+  const readMatchesDisplay =
+    reviewSource == null ||
+    (reviewSource instanceof HTMLCanvasElement &&
+      Math.abs(reviewSource.width - displayCanvas.width) <= 2 &&
+      Math.abs(reviewSource.height - displayCanvas.height) <= 2);
+  const engineGeom = meta?.geometry;
+  return (
+    readMatchesDisplay &&
+    Boolean(engineGeom?.cells?.length) &&
+    (engineGeom!.imageWidth == null ||
+      Math.abs((engineGeom!.imageWidth ?? displayCanvas.width) - displayCanvas.width) <= 2) &&
+    (engineGeom!.imageHeight == null ||
+      Math.abs((engineGeom!.imageHeight ?? displayCanvas.height) - displayCanvas.height) <= 2)
+  );
+}
+
+/**
+ * Overlay único desktop/móvil: anillos del canvas mostrado (referencia si aplica, si no plantilla carta).
+ */
+export function buildDisplayOverlayGeometry(
+  canvas: HTMLCanvasElement,
+  columns: number,
+  rowCount: number,
+  opts?: { skipSnap?: boolean; maxShiftRatio?: number }
+): CalifacilOmrScanGeometry {
+  const rows = Math.max(1, rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  if (
+    isReferenceGradeExam(rows, cols) &&
+    isReferenceGradeCanvasAnchor(canvas.width, canvas.height)
+  ) {
+    const desktop = buildDesktopDisplayOverlayGeometry(canvas, cols, rows);
+    if (desktop) return desktop;
+  }
+  return buildLetterDisplayOverlayGeometry(canvas, cols, rows, {
+    skipSnap: opts?.skipSnap,
+    maxShiftRatio: opts?.maxShiftRatio ?? 0.22,
+  });
 }
 
 /**
@@ -108,34 +163,6 @@ function finalizeUnifiedDisplayMeta(
   columns: number,
   opts?: { skipBubbleReattach?: boolean }
 ): OmrScanMetaResult {
-  // Desktop 30×4 near/exact ref: overlay desde calibración (no plantilla carta).
-  if (
-    isReferenceGradeExam(rows, columns) &&
-    isReferenceGradeCanvasAnchor(displayCanvas.width, displayCanvas.height)
-  ) {
-    const desktopGeom = buildDesktopDisplayOverlayGeometry(displayCanvas, columns, rows);
-    if (desktopGeom) {
-      const withGeom: OmrScanMetaResult = {
-        ...meta,
-        geometry: syncCalifacilOmrGeometryImageSize(
-          desktopGeom,
-          displayCanvas.width,
-          displayCanvas.height
-        ),
-        reviewSourceCanvas: displayCanvas,
-      };
-      // Re-leer tinta sobre la misma geometría que se pinta (verde/rojo reales).
-      const reread = rereadOmrPicksOnGeometry(
-        displayCanvas,
-        withGeom.geometry!,
-        columns,
-        rows,
-        withGeom
-      );
-      return pickBetterOmrMeta(withGeom, reread, rows);
-    }
-  }
-
   const geometry = meta.geometry
     ? syncCalifacilOmrGeometryImageSize(
         meta.geometry,
@@ -143,53 +170,53 @@ function finalizeUnifiedDisplayMeta(
         displayCanvas.height
       )
     : null;
-  const hasSaneEngineBubbles =
-    !!geometry?.bubbles &&
-    geometry.bubbles.length >= rows &&
-    geometry.bubbles.some((row) =>
-      row?.some((b) => Number.isFinite(b.r) && b.r > 0.002 && b.r < 0.06)
-    );
 
-  if (opts?.skipBubbleReattach && hasSaneEngineBubbles) {
-    const base = {
-      ...meta,
-      geometry,
-      reviewSourceCanvas: displayCanvas,
-    };
-    if (geometry) {
-      const reread = rereadOmrPicksOnGeometry(displayCanvas, geometry, columns, rows, base);
-      return pickBetterOmrMeta(base, reread, rows);
-    }
-    return base;
-  }
-
-  const withOverlay = attachAnswerSheetReviewBubbleOverlay(
-    displayCanvas,
-    { ...meta, geometry },
-    columns,
-    rows
-  );
-  const finalized = {
-    ...withOverlay,
-    geometry: withOverlay.geometry,
-    reviewSourceCanvas: displayCanvas,
-  };
-  if (finalized.geometry) {
-    const reread = rereadOmrPicksOnGeometry(
+  let kept: OmrScanMetaResult = { ...meta, geometry, reviewSourceCanvas: displayCanvas };
+  if (geometry?.cells?.length) {
+    const keptReread = rereadOmrPicksOnGeometry(
       displayCanvas,
-      finalized.geometry,
+      geometry,
       columns,
       rows,
-      finalized
+      kept
     );
-    return pickBetterOmrMeta(finalized, reread, rows);
+    kept = pickBetterOmrMeta(kept, keptReread, rows);
   }
-  return finalized;
+
+  const displayGeom = buildDisplayOverlayGeometry(displayCanvas, columns, rows);
+  const withGeom: OmrScanMetaResult = {
+    ...meta,
+    geometry: syncCalifacilOmrGeometryImageSize(
+      displayGeom,
+      displayCanvas.width,
+      displayCanvas.height
+    ),
+    reviewSourceCanvas: displayCanvas,
+  };
+  const overlayReread = rereadOmrPicksOnGeometry(
+    displayCanvas,
+    withGeom.geometry!,
+    columns,
+    rows,
+    withGeom
+  );
+  const overlayFinal = pickBetterOmrMeta(withGeom, overlayReread, rows);
+
+  const hasSaneEngineBubbles = hasSaneOverlayBubbles(geometry, rows);
+  if (opts?.skipBubbleReattach && hasSaneEngineBubbles && engineGeometryMatchesDisplay(displayCanvas, meta)) {
+    if (geometry) {
+      const engineReread = rereadOmrPicksOnGeometry(displayCanvas, geometry, columns, rows, kept);
+      return pickBetterOmrMeta(kept, engineReread, rows);
+    }
+    return kept;
+  }
+
+  return pickBetterOmrMeta(kept, overlayFinal, rows);
 }
 
 /**
- * Recovery: relee sobre la geometría de overlay que ve el usuario
- * (desktop nudges o letter snap). Aceptar si ≥40% resolved.
+ * Recovery: relee sobre la geometría de overlay que ve el usuario.
+ * Aceptar si ≥40% resolved.
  */
 export function rereadOmrWithDisplayOverlayGeometry(
   canvas: HTMLCanvasElement,
@@ -199,16 +226,7 @@ export function rereadOmrWithDisplayOverlayGeometry(
 ): OmrScanMetaResult {
   const rows = Math.max(1, rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  let geom =
-    isReferenceGradeExam(rows, cols) &&
-    isReferenceGradeCanvasAnchor(canvas.width, canvas.height)
-      ? buildDesktopDisplayOverlayGeometry(canvas, cols, rows)
-      : null;
-  if (!geom) {
-    geom = buildLetterDisplayOverlayGeometry(canvas, cols, rows, {
-      maxShiftRatio: 0.22,
-    });
-  }
+  const geom = buildDisplayOverlayGeometry(canvas, cols, rows);
   return rereadOmrPicksOnGeometry(canvas, geom, cols, rows, baseMeta);
 }
 
@@ -281,8 +299,8 @@ export function pickBetterOmrMeta(
 }
 
 /**
- * Preview móvil: misma geometría que la lectura cuando coincide el canvas.
- * Solo reconstruye letter+snap si no hay geometry fiable del read.
+ * Preview: misma geometría que la lectura cuando coincide el canvas.
+ * Si no, overlay unificado (referencia o carta) + snap a anillos.
  */
 export function resolveMobileGradeDisplay(
   displayCanvas: HTMLCanvasElement,
@@ -291,32 +309,8 @@ export function resolveMobileGradeDisplay(
   rowCount: number,
   meta?: OmrScanMetaResult | null
 ): { previewCanvas: HTMLCanvasElement; geometry: CalifacilOmrScanGeometry } {
-  const scored = Math.max(1, Math.min(rowCount, meta?.picks?.length ?? rowCount));
-  const resolved = meta
-    ? meta.picks.slice(0, scored).filter((p) => p != null).length
-    : scored;
-  const blankOrSparse =
-    !meta ||
-    isAnswerSheetOmrMostlyBlank(meta, scored) ||
-    resolved <= Math.max(2, Math.floor(scored * 0.07));
-
-  const reviewSource = meta?.reviewSourceCanvas;
-  const readMatchesDisplay =
-    reviewSource == null ||
-    (reviewSource instanceof HTMLCanvasElement &&
-      Math.abs(reviewSource.width - displayCanvas.width) <= 2 &&
-      Math.abs(reviewSource.height - displayCanvas.height) <= 2);
-
   const engineGeom = meta?.geometry;
-  const engineMatchesDisplay =
-    readMatchesDisplay &&
-    Boolean(engineGeom?.cells?.length) &&
-    (engineGeom!.imageWidth == null ||
-      Math.abs((engineGeom!.imageWidth ?? displayCanvas.width) - displayCanvas.width) <= 2) &&
-    (engineGeom!.imageHeight == null ||
-      Math.abs((engineGeom!.imageHeight ?? displayCanvas.height) - displayCanvas.height) <= 2);
-
-  if (engineMatchesDisplay && engineGeom) {
+  if (engineGeometryMatchesDisplay(displayCanvas, meta) && engineGeom) {
     return {
       previewCanvas: displayCanvas,
       geometry: syncCalifacilOmrGeometryImageSize(
@@ -327,23 +321,22 @@ export function resolveMobileGradeDisplay(
     };
   }
 
-  if (!blankOrSparse) {
-    return {
-      previewCanvas: displayCanvas,
-      geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount, {
-        skipSnap: false,
-        maxShiftRatio: 0.22,
-      }),
-    };
-  }
-
   return {
     previewCanvas: displayCanvas,
-    geometry: buildLetterDisplayOverlayGeometry(displayCanvas, columns, rowCount, {
-      skipSnap: true,
-      maxShiftRatio: 0.12,
-    }),
+    geometry: buildDisplayOverlayGeometry(displayCanvas, columns, rowCount),
   };
+}
+
+function recoverDesktopTableFrame(
+  displayCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number,
+  meta: OmrScanMetaResult
+): OmrScanMetaResult {
+  const tableRaw = scanWarpedWithBestTableFrame(displayCanvas, columns, rows, { fast: true });
+  let tableMeta = finalizeUnifiedDisplayMeta(displayCanvas, tableRaw.meta, rows, columns);
+  tableMeta = sanitizeAnswerSheetOmrMeta(tableMeta, rows);
+  return pickBetterOmrMeta(meta, tableMeta, rows);
 }
 
 export function scanDesktopGradeUnifiedOrLegacy(
@@ -360,14 +353,13 @@ export function scanDesktopGradeUnifiedOrLegacy(
     });
     let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(fast), rows, columns);
     meta = sanitizeAnswerSheetOmrMeta(meta, rows);
-    if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
-      return meta;
+    if (!isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
+      const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
+      let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
+      stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
+      meta = pickBetterOmrMeta(meta, stripMeta, rows);
     }
-    // Recovery barato: strip fast (nunca fastMode:false → tiers desktop eternos).
-    const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
-    let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
-    stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
-    return pickBetterOmrMeta(meta, stripMeta, rows);
+    return recoverDesktopTableFrame(displayCanvas, columns, rows, meta);
   }
   return scanCalifacilDesktopGradeDocument(displayCanvas, columns, rows);
 }
@@ -394,16 +386,14 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
     });
     let meta = finalizeUnifiedDisplayMeta(displayCanvas, unifiedResultToMeta(fast), rows, columns);
     meta = sanitizeAnswerSheetOmrMeta(meta, rows);
-    if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
-      return meta;
+    if (!isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
+      let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
+      stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
+      meta = pickBetterOmrMeta(meta, stripMeta, rows);
     }
-
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    // Nunca fastMode:false aquí: dispara runDesktopGradeScanTiers y congela «Leyendo…».
-    const stripRaw = runStripFallbackFast(displayCanvas, columns, rows);
-    let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
-    stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
-    return pickBetterOmrMeta(meta, stripMeta, rows);
+    return recoverDesktopTableFrame(displayCanvas, columns, rows, meta);
   }
   return scanCalifacilDesktopGradeDocumentAsync(displayCanvas, columns, rows);
 }

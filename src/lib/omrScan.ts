@@ -6999,6 +6999,31 @@ export function califacilOmrTableFrameNormRect(rowCount: number): OmrNormRect {
 }
 
 /**
+ * Escaneos/PDF planos: la tabla queda un poco más a la derecha/ancha y menos alta
+ * que la plantilla de impresión (márgenes del escáner).
+ */
+export function califacilFlatScanTableFrameCandidates(template: OmrNormRect): OmrNormRect[] {
+  const clamp = (f: OmrNormRect): OmrNormRect => {
+    const x = Math.max(0.02, Math.min(0.4, f.x));
+    const y = Math.max(0.02, Math.min(0.25, f.y));
+    const w = Math.max(0.55, Math.min(0.95, f.w));
+    const h = Math.max(0.6, Math.min(0.95, f.h));
+    return {
+      x,
+      y,
+      w: Math.min(w, 0.995 - x),
+      h: Math.min(h, 0.995 - y),
+    };
+  };
+  return [
+    { x: template.x + 0.018, y: template.y + 0.006, w: template.w + 0.038, h: template.h - 0.058 },
+    { x: template.x + 0.015, y: template.y + 0.006, w: template.w + 0.04, h: template.h - 0.05 },
+    { x: template.x + 0.018, y: template.y + 0.008, w: template.w + 0.038, h: template.h - 0.048 },
+    { x: 0.1193, y: 0.073, w: 0.8354, h: 0.8219 },
+  ].map(clamp);
+}
+
+/**
  * Detecta líneas de la rejilla impresa dentro de un marco naranja (tabla completa o burbujas).
  */
 function sweepAnswerSheetGridInNormFrame(
@@ -7548,7 +7573,10 @@ export function scanWarpedWithBestTableFrame(
 ): { meta: OmrScanMetaResult; orangeFrameNorm: OmrNormRect } {
   const rows = clampCalifacilOmrRowCount(rowCount);
   const templateFrame = califacilOmrTableFrameNormRect(rows);
-  const candidates: OmrNormRect[] = [templateFrame];
+  const candidates: OmrNormRect[] = [
+    ...califacilFlatScanTableFrameCandidates(templateFrame),
+    templateFrame,
+  ];
   if (isReferenceGradeExam(rows, columns) && hasReferenceGradeCalibration()) {
     if (canvasMatchesReferenceGrade(warped.width, warped.height)) {
       candidates.unshift(referenceTableFrameNorm());
@@ -7561,6 +7589,7 @@ export function scanWarpedWithBestTableFrame(
       skipControl: true,
     });
     if (!omrScanHasMinReads(templateProbe, rows, 0.45)) {
+      candidates.push(...califacilFlatScanTableFrameCandidates(templateFrame));
       const fullSweep = detectFullCanvasTableGeometry(warped, rows, columns);
       if (fullSweep) candidates.push(fullSweep.tableFrame);
     }
@@ -7650,11 +7679,6 @@ export function scanWarpedWithBestTableFrame(
       bestFrame = frame;
       bestMeta = meta;
     }
-    if (omrScanHasMinReads(meta, rows, 0.9)) {
-      bestFrame = frame;
-      bestMeta = meta;
-      break;
-    }
   }
 
   if (!bestMeta) {
@@ -7700,15 +7724,14 @@ export function scanWarpedWithNormTableFrame(
       controlNumber: null,
     };
   }
-  const geometry = buildAnswerSheetOmrGeometryInNormRect(
+  const uniform = buildAnswerSheetOmrGeometryInNormRect(
     tableFrame,
     rows,
     columns,
     warped.width,
-    warped.height,
-    warped
+    warped.height
   );
-  return omrMetaFromGeometry(warped, geometry, rows, columns, { skipControl: opts?.skipControl });
+  return rereadOmrPicksOnGeometry(warped, uniform, columns, rows);
 }
 
 /**

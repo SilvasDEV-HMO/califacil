@@ -8,7 +8,6 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type ReactNode,
 } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import Link from 'next/link';
@@ -99,7 +98,6 @@ import {
   rereadOmrPicksOnGeometry,
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
-  buildLetterDisplayOverlayGeometry,
   buildAnswerSheetOmrGeometry,
   smoothMobileRoiQuad,
   warpCalifacilSheetFromCornerMarkers,
@@ -141,11 +139,8 @@ import {
   LETTER_GRADE_MIN_BUBBLE_FIT,
 } from '@/lib/omr/grade-letter-canvas';
 import {
-  buildDesktopDisplayOverlayGeometry,
-  isReferenceGradeCanvasAnchor,
-} from '@/lib/omr/reference-grade';
-import {
   resolveMobileGradeDisplay,
+  buildDisplayOverlayGeometry,
   isStrongMobileOmrMeta,
   isWeakMobileOmrMeta,
   rereadOmrWithDisplayOverlayGeometry,
@@ -155,6 +150,7 @@ import {
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
+import { CalifacilReviewImageStack } from '@/components/califacil-review-image-stack';
 import {
   CalifacilOmrDebugOverlay,
   formatWarpAlignmentSummary,
@@ -494,41 +490,6 @@ function clearMobileScanPreview(
   setters.setPreviewPicks([]);
   setters.setPreviewOrangeFrame(null);
   if (video) resumeLiveVideoAfterScan(video);
-}
-
-function CalifacilReviewImageStack({
-  previewUrl,
-  alt,
-  geometry,
-  overlay,
-}: {
-  previewUrl: string;
-  alt: string;
-  geometry: CalifacilOmrScanGeometry;
-  overlay: ReactNode;
-}) {
-  const W = Math.max(1, geometry.imageWidth);
-  const H = Math.max(1, geometry.imageHeight);
-  return (
-    <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
-      <div
-        className="relative overflow-hidden rounded-md bg-neutral-200/50"
-        style={{
-          width: `min(100%, calc(24rem * ${W} / ${H}))`,
-          aspectRatio: `${W} / ${H}`,
-          maxHeight: '24rem',
-        }}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={previewUrl}
-          alt={alt}
-          className="absolute inset-0 z-0 h-full w-full object-contain object-center"
-        />
-        <div className="pointer-events-none absolute inset-0 z-[2]">{overlay}</div>
-      </div>
-    </div>
-  );
 }
 
 export default function CalificarPage() {
@@ -1733,32 +1694,14 @@ export default function CalificarPage() {
         }
         const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
         const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
-        // Overlay: preferir geometría de lectura si existe; si no, reference/letter.
+        // Overlay: misma geometría que el canvas del JPEG (lectura o snap unificado).
         let geomClone: CalifacilOmrScanGeometry;
         if (reviewCanvas instanceof HTMLCanvasElement) {
-          const readGeom =
+          const overlayGeom =
             geom && geom.cells?.length
-              ? syncCalifacilOmrGeometryImageSize(geom, previewW, previewH)
-              : null;
-          const hasStudentPicks = picksInChunk.some((p) => p != null);
-          // Con picks reales, pintar con la misma geometría que leyó el motor.
-          if (readGeom && hasStudentPicks) {
-            geomClone = readGeom;
-          } else {
-            const refOverlay = isReferenceGradeCanvasAnchor(reviewCanvas.width, reviewCanvas.height)
-              ? buildDesktopDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
-              : null;
-            const letterOverlay =
-              !refOverlay && isCalifacilWarpedLetterCanvas(reviewCanvas)
-                ? buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount)
-                : null;
-            const overlayGeom =
-              refOverlay ??
-              letterOverlay ??
-              readGeom ??
-              buildLetterDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount);
-            geomClone = syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH);
-          }
+              ? geom
+              : buildDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount);
+          geomClone = syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH);
         } else if (geom) {
           try {
             geomClone = structuredClone(geom);
@@ -1830,39 +1773,15 @@ export default function CalificarPage() {
         }
         if (isStaleRead()) return { success: false };
 
-        // Siempre reconstruir overlay + re-leer en el MISMO canvas del preview.
+        // Overlay + re-lectura en el MISMO canvas del preview.
         let reviewGeom = meta.geometry;
         let picksForUi = raw.slice(0, chunk.length);
         if (previewCanvas) {
-          if (isReferenceGradeCanvasAnchor(previewCanvas.width, previewCanvas.height)) {
-            const desktopOverlay = buildDesktopDisplayOverlayGeometry(
-              previewCanvas,
-              omrCols,
-              omrRowCount
-            );
-            if (desktopOverlay) {
-              reviewGeom = syncCalifacilOmrGeometryImageSize(
-                desktopOverlay,
-                previewCanvas.width,
-                previewCanvas.height
-              );
-            }
-          } else if (isCalifacilWarpedLetterCanvas(previewCanvas)) {
-            reviewGeom = syncCalifacilOmrGeometryImageSize(
-              buildLetterDisplayOverlayGeometry(previewCanvas, omrCols, omrRowCount, {
-                skipSnap: false,
-                maxShiftRatio: 0.22,
-              }),
-              previewCanvas.width,
-              previewCanvas.height
-            );
-          } else if (reviewGeom) {
-            reviewGeom = syncCalifacilOmrGeometryImageSize(
-              reviewGeom,
-              previewCanvas.width,
-              previewCanvas.height
-            );
-          }
+          reviewGeom = syncCalifacilOmrGeometryImageSize(
+            buildDisplayOverlayGeometry(previewCanvas, omrCols, omrRowCount),
+            previewCanvas.width,
+            previewCanvas.height
+          );
           if (reviewGeom?.cells?.length) {
             const reread = rereadOmrPicksOnGeometry(
               previewCanvas,
@@ -3838,9 +3757,26 @@ export default function CalificarPage() {
           if (video) resumeLiveVideoAfterScan(video);
           return;
         }
-        // Sustituir freeze crudo por hoja sola lo antes posible.
-        const letterFreeze = canvasPreviewDataUrl(displayCanvas, 900, 0.7);
-        if (letterFreeze) setMobileScanPreviewUrl(letterFreeze);
+        // Sustituir freeze crudo por hoja sola lo antes posible (mismo canvas + geometría).
+        const letterFreeze = canvasPreviewJpeg(displayCanvas, 900, 0.7);
+        if (letterFreeze) setMobileScanPreviewUrl(letterFreeze.dataUrl);
+        if (califacilFastScan.meta?.geometry) {
+          const overlayGeom = resolveMobileGradeDisplay(
+            displayCanvas,
+            displayCanvas,
+            omrCols,
+            omrRowCount,
+            califacilFastScan.meta
+          ).geometry;
+          setMobileScanPreviewGeometry(
+            syncCalifacilOmrGeometryImageSize(
+              overlayGeom,
+              letterFreeze?.width ?? displayCanvas.width,
+              letterFreeze?.height ?? displayCanvas.height
+            )
+          );
+          setMobileScanPreviewPicks(califacilFastScan.meta.picks.slice(0, chunkRows));
+        }
       } else {
         const zgPreview = scanZipGradeAnswerSheet(warped, omrCols, chunkRows);
         zipPreviewMeta = { picks: zgPreview.picks, geometry: zgPreview.geometry };
@@ -5223,6 +5159,7 @@ export default function CalificarPage() {
               stripAligned={mobileStripAligned}
               autoShutterEnabled={autoShutterEnabled}
               scanPreviewUrl={mobileScanPreviewUrl}
+              scanPreviewGeometry={mobileScanPreviewGeometry}
               scanPreviewOrangeFrame={mobileScanPreviewOrangeFrame}
               scanPreviewOverlay={
                 mobileScanPreviewGeometry ? (
@@ -5341,28 +5278,30 @@ export default function CalificarPage() {
                     previewUrl={previewUrl}
                     alt="Vista previa del examen escaneado"
                     geometry={reviewOmrGeometry}
-                    overlay={
-                      <CalifacilOmrReviewOverlay
-                        geometry={reviewOmrGeometry}
-                        picks={(() => {
-                          const picks = draftSelectionsToColumnPicks(
-                            currentChunk,
-                            draftSelections
-                          );
-                          while (picks.length < omrRowCount) picks.push(null);
-                          return picks;
-                        })()}
-                        expectedPicks={(() => {
-                          const picks = [...expectedChunkPicks];
-                          while (picks.length < omrRowCount) picks.push(null);
-                          return picks;
-                        })()}
-                        expectedOpacity={overlayOpacity / 100}
-                        rowCount={omrRowCount}
-                        clipRect={null}
-                      />
-                    }
-                  />
+                    className="overflow-hidden rounded-lg border bg-gray-50 p-1"
+                    frameClassName="rounded-md"
+                    maxHeight="24rem"
+                  >
+                    <CalifacilOmrReviewOverlay
+                      geometry={reviewOmrGeometry}
+                      picks={(() => {
+                        const picks = draftSelectionsToColumnPicks(
+                          currentChunk,
+                          draftSelections
+                        );
+                        while (picks.length < omrRowCount) picks.push(null);
+                        return picks;
+                      })()}
+                      expectedPicks={(() => {
+                        const picks = [...expectedChunkPicks];
+                        while (picks.length < omrRowCount) picks.push(null);
+                        return picks;
+                      })()}
+                      expectedOpacity={overlayOpacity / 100}
+                      rowCount={omrRowCount}
+                      clipRect={null}
+                    />
+                  </CalifacilReviewImageStack>
                 ) : (
                   <div className="flex w-full justify-center overflow-hidden rounded-lg border bg-gray-50 p-1">
                     <div className="relative inline-block max-h-96 max-w-full">

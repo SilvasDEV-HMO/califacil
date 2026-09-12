@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, Menu } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { CalifacilOmrScanGeometry } from '@/lib/omrScan';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
+import { CalifacilReviewImageStack } from '@/components/califacil-review-image-stack';
 import { Button } from '@/components/ui/button';
 import type { Student } from '@/types';
 
@@ -47,32 +48,22 @@ function SheetPreviewBox({
   maxHeight: string;
   className?: string;
 }) {
-  const W = Math.max(1, sheet.geometry.imageWidth);
-  const H = Math.max(1, sheet.geometry.imageHeight);
   return (
-    <div className={cn('flex w-full justify-center', className)}>
-      <div
-        className="relative mx-auto overflow-hidden rounded-md bg-white"
-        style={{
-          width: `min(100%, calc(${maxHeight} * ${W} / ${H}))`,
-          aspectRatio: `${W} / ${H}`,
-          maxHeight,
-        }}
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={previewSrc}
-          alt="Hoja escaneada con clave"
-          className="absolute inset-0 z-0 h-full w-full object-contain"
-        />
-        <CalifacilOmrReviewOverlay
-          geometry={sheet.geometry}
-          picks={sheet.picks}
-          expectedPicks={sheet.expectedPicks}
-          rowCount={sheet.rowCount}
-        />
-      </div>
-    </div>
+    <CalifacilReviewImageStack
+      previewUrl={previewSrc}
+      alt="Hoja escaneada con clave"
+      geometry={sheet.geometry}
+      maxHeight={maxHeight}
+      className={className}
+      frameClassName="mx-auto rounded-md bg-white"
+    >
+      <CalifacilOmrReviewOverlay
+        geometry={sheet.geometry}
+        picks={sheet.picks}
+        expectedPicks={sheet.expectedPicks}
+        rowCount={sheet.rowCount}
+      />
+    </CalifacilReviewImageStack>
   );
 }
 

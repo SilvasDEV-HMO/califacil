@@ -42,6 +42,7 @@ export {
   scanLiveOmrUnifiedOrLegacy,
   pickBetterOmrMeta,
   resolveMobileGradeDisplay,
+  buildDisplayOverlayGeometry,
   isWeakMobileOmrMeta,
   isStrongMobileOmrMeta,
   rereadOmrWithDisplayOverlayGeometry,

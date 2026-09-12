@@ -10,6 +10,7 @@ import { StatusCard } from '@/components/exam-scanner/status-card';
 import { ScanHud } from '@/components/exam-scanner/scan-hud';
 import { CaptureFlash } from '@/components/exam-scanner/capture-flash';
 import { CameraPermissionGate } from '@/components/exam-scanner/camera-permission-gate';
+import { CalifacilReviewImageStack } from '@/components/califacil-review-image-stack';
 import {
   deriveDetectionPhase,
   deriveStatusLabel,
@@ -54,6 +55,7 @@ export type ExamScannerScreenProps = {
   autoShutterEnabled?: boolean;
   scanPreviewUrl?: string | null;
   scanPreviewOverlay?: ReactNode;
+  scanPreviewGeometry?: { imageWidth: number; imageHeight: number } | null;
   scanPreviewOrangeFrame?: { x: number; y: number; w: number; h: number } | null;
   scanStatusLabel?: string;
 };
@@ -87,6 +89,7 @@ export function ExamScannerScreen({
   autoShutterEnabled = true,
   scanPreviewUrl = null,
   scanPreviewOverlay = null,
+  scanPreviewGeometry = null,
   scanPreviewOrangeFrame = null,
   scanStatusLabel = 'Leyendo respuestas…',
 }: ExamScannerScreenProps) {
@@ -181,16 +184,33 @@ export function ExamScannerScreen({
 
           {showingScan ? (
             <div className="absolute inset-0 z-[100004] flex flex-col bg-orange-50/95">
-              <div className="relative min-h-0 flex-1">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={scanPreviewUrl!}
-                  alt=""
-                  className="absolute inset-0 h-full w-full object-contain"
-                />
-                {scanPreviewOverlay ? (
-                  <div className="pointer-events-none absolute inset-0 z-[2]">{scanPreviewOverlay}</div>
-                ) : null}
+              <div className="relative flex min-h-0 flex-1 items-center justify-center p-3">
+                {scanPreviewGeometry ? (
+                  <CalifacilReviewImageStack
+                    previewUrl={scanPreviewUrl!}
+                    alt=""
+                    geometry={scanPreviewGeometry}
+                    maxHeight="calc(100dvh - 9rem)"
+                    className="h-full"
+                    frameClassName="rounded-md bg-white shadow-sm"
+                  >
+                    {scanPreviewOverlay}
+                  </CalifacilReviewImageStack>
+                ) : (
+                  <>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={scanPreviewUrl!}
+                      alt=""
+                      className="max-h-full max-w-full object-fill"
+                    />
+                    {scanPreviewOverlay ? (
+                      <div className="pointer-events-none absolute inset-0 z-[2]">
+                        {scanPreviewOverlay}
+                      </div>
+                    ) : null}
+                  </>
+                )}
               </div>
               <div className="shrink-0 border-t border-orange-100 bg-white/95 px-4 py-3 backdrop-blur-md">
                 <div className="flex items-center justify-center gap-2.5">

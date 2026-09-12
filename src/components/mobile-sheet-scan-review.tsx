@@ -12,13 +12,11 @@ import {
 } from 'lucide-react';
 import { cn, getGradeColor } from '@/lib/utils';
 import {
-  buildAnswerSheetGradingGeometryFromNormFrame,
   CALIFACIL_WARP_LETTER_HEIGHT,
   CALIFACIL_WARP_LETTER_WIDTH,
   califacilOmrOrangeFrameRect,
   califacilViewfinderNormRect,
   downscaleCanvasForOmrScan,
-  refineAnswerSheetGeometryToBubblePeaks,
   refineWarpedCalifacilSheet,
   scanWarpedWithNormTableFrame,
   warpCalifacilSheetFromQuad,
@@ -27,6 +25,7 @@ import {
   type WarpAlignmentReport,
 } from '@/lib/omrScan';
 import { CalifacilOmrReviewOverlay } from '@/components/califacil-omr-review-overlay';
+import { CalifacilReviewImageStack } from '@/components/califacil-review-image-stack';
 
 export type ScanReviewQuad = [
   { x: number; y: number },
@@ -377,18 +376,7 @@ export function MobileSheetScanReview({
     onPreviewAlignment(filteredPreview, alignment);
   }, [alignPreview, adjustMode, filteredPreview, alignment, onPreviewAlignment]);
 
-  const displayGeometry = useMemo(() => {
-    if (!alignPreview || !orangeFrameNorm) return null;
-    const scanCanvas = downscaleCanvasForOmrScan(alignPreview.previewCanvas, 1200);
-    const base = buildAnswerSheetGradingGeometryFromNormFrame(
-      orangeFrameNorm,
-      rowCount,
-      columnCount,
-      scanCanvas.width,
-      scanCanvas.height
-    );
-    return refineAnswerSheetGeometryToBubblePeaks(scanCanvas, base);
-  }, [alignPreview, orangeFrameNorm, rowCount, columnCount]);
+  const displayGeometry = alignPreview?.geometry ?? null;
 
   const recomputeWarp = useCallback(
     (quad: ScanReviewQuad) => {
@@ -528,16 +516,6 @@ export function MobileSheetScanReview({
       : '';
 
   const orangeFrame = orangeFrameNorm;
-  const geoW = displayGeometry
-    ? Math.max(1, displayGeometry.imageWidth)
-    : alignPreview
-      ? Math.max(1, alignPreview.geometry.imageWidth)
-      : 1;
-  const geoH = displayGeometry
-    ? Math.max(1, displayGeometry.imageHeight)
-    : alignPreview
-      ? Math.max(1, alignPreview.geometry.imageHeight)
-      : 1;
   const overlayPicks = livePicks ?? alignPreview?.picks ?? [];
   const overlayScore = liveScore ?? alignPreview?.score;
 
@@ -601,38 +579,33 @@ export function MobileSheetScanReview({
           </div>
         ) : alignPreview ? (
           <div className="flex h-full flex-col items-center justify-center">
-            <div
-              ref={alignSurfaceRef}
-              className="relative mx-auto w-full max-w-md touch-none overflow-hidden rounded-lg bg-black/40 shadow-2xl"
-              style={{ aspectRatio: `${geoW} / ${geoH}`, maxHeight: 'min(58dvh, 32rem)' }}
-              onPointerMove={handleOrangePointerMove}
-              onPointerUp={handleOrangePointerUp}
-              onPointerCancel={handleOrangePointerUp}
+            <CalifacilReviewImageStack
+              previewUrl={alignPreview.previewUrl}
+              alt="Lectura OMR sobre el escaneo"
+              geometry={alignPreview.geometry}
+              maxHeight="min(58dvh, 32rem)"
+              className="max-w-md"
+              frameClassName="rounded-lg bg-black/40 shadow-2xl touch-none"
+              frameRef={alignSurfaceRef}
+              frameProps={{
+                onPointerMove: handleOrangePointerMove,
+                onPointerUp: handleOrangePointerUp,
+                onPointerCancel: handleOrangePointerUp,
+              }}
             >
               {scanning ? (
                 <div className="absolute inset-0 z-[5] flex items-center justify-center bg-black/40">
                   <Loader2 className="h-8 w-8 animate-spin text-amber-300" />
                 </div>
               ) : null}
-              {alignPreview.previewUrl ? (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  src={alignPreview.previewUrl}
-                  alt="Lectura OMR sobre el escaneo"
-                  className="pointer-events-none absolute inset-0 z-0 h-full w-full object-contain"
-                  draggable={false}
-                />
-              ) : null}
               {displayGeometry ? (
-                <div className="pointer-events-none absolute inset-0 z-[2]">
-                  <CalifacilOmrReviewOverlay
-                    geometry={displayGeometry}
-                    picks={overlayPicks}
-                    expectedPicks={alignPreview.expectedPicks}
-                    expectedOpacity={0.45}
-                    rowCount={rowCount}
-                  />
-                </div>
+                <CalifacilOmrReviewOverlay
+                  geometry={displayGeometry}
+                  picks={overlayPicks}
+                  expectedPicks={alignPreview.expectedPicks}
+                  expectedOpacity={0.45}
+                  rowCount={rowCount}
+                />
               ) : null}
               {orangeFrame ? (
                 <>
@@ -671,7 +644,7 @@ export function MobileSheetScanReview({
                   ))}
                 </>
               ) : null}
-            </div>
+            </CalifacilReviewImageStack>
             <div className="mt-3 w-full max-w-md rounded-xl bg-white/8 px-3 py-2 text-center ring-1 ring-white/10">
               {detectedControlNumber ? (
                 <p className="text-[11px] text-white/75">

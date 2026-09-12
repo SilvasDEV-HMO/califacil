@@ -11,7 +11,8 @@
     "test:omr-mobile": "node scripts/omr-mobile-golden.mjs",
     "test:omr-print": "npx tsx scripts/assert-omr-print-n.mts",
     "test:grading": "npx tsx scripts/assert-calificar-grading.mts",
-    "test:omr": "npm run test:omr-mobile && npm run test:omr-print && npm run test:grading",
+    "test:omr-scan": "npx tsx scripts/assert-omr-scan-overlay-golden.mts",
+    "test:omr": "npm run test:omr-mobile && npm run test:omr-scan",
     "create-test-user": "node scripts/create-test-user.mjs",
     "logo:knockout-black": "node scripts/knockout-logo-black.mjs",
     "logo:knockout-banner": "node scripts/knockout-print-banner.mjs"

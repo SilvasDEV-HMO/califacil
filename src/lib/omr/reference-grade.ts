@@ -185,43 +185,8 @@ export function buildReferenceAnchoredGeometry(
 }
 
 /**
- * Overlay desktop 30×4: geometría anclada a referencia + anillos (mismo canvas que el JPEG).
- * Nunca usa plantilla carta (nudges UP / qnum 0.09).
- *
- * Pre-nudge siembra celdas para el snap; post-nudge afinado tras feedback desktop (antes quedaban bajo/derecha).
- */
-const DESKTOP_OVERLAY_PRE_NUDGE_X = 0;
-/** Pre-snap: sembrar un poco más abajo (overlay quedaba arriba de anillos). */
-const DESKTOP_OVERLAY_PRE_NUDGE_Y = 0.014;
-/** Post-snap: leve derecha/abajo para centrar bolitas en anillos impresos. */
-const DESKTOP_OVERLAY_POST_NUDGE_X = 0.0035;
-const DESKTOP_OVERLAY_POST_NUDGE_Y = 0.01;
-
-function nudgeDesktopOverlayGeometry(
-  geometry: CalifacilOmrScanGeometry,
-  dx: number,
-  dy: number
-): CalifacilOmrScanGeometry {
-  const shiftRect = (r: { x: number; y: number; w: number; h: number }) => {
-    const x = Math.max(0, Math.min(1 - r.w, r.x + dx));
-    const y = Math.max(0, Math.min(1 - r.h, r.y + dy));
-    return { ...r, x, y };
-  };
-  const cells = geometry.cells.map((row) => row.map(shiftRect));
-  const bubbles = geometry.bubbles?.map((row) =>
-    row.map((b) => ({
-      ...b,
-      cx: Math.max(0, Math.min(1, b.cx + dx)),
-      cy: Math.max(0, Math.min(1, b.cy + dy)),
-      bounds: b.bounds ? shiftRect(b.bounds) : b.bounds,
-    }))
-  );
-  return { ...geometry, cells, bubbles };
-}
-
-/**
- * Overlay desktop 30×4: geometría anclada a referencia + anillos (mismo canvas que el JPEG).
- * Nunca usa plantilla carta (nudges UP / qnum 0.09).
+ * Overlay 30×4: geometría anclada a referencia + anillos del mismo canvas que el JPEG.
+ * Sin empujones empíricos: el snap a anillos impresos centra las bolitas.
  */
 export function buildDesktopDisplayOverlayGeometry(
   canvas: HTMLCanvasElement,
@@ -233,11 +198,6 @@ export function buildDesktopDisplayOverlayGeometry(
   }
   const base = buildReferenceAnchoredGeometry(canvas, rowCount, columns);
   if (!base) return null;
-  const seeded = nudgeDesktopOverlayGeometry(
-    base,
-    DESKTOP_OVERLAY_PRE_NUDGE_X,
-    DESKTOP_OVERLAY_PRE_NUDGE_Y
-  );
   const rows = rowCount;
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const attached = attachAnswerSheetReviewBubbleOverlay(
@@ -251,7 +211,7 @@ export function buildDesktopDisplayOverlayGeometry(
       })),
       needsVisionAssist: false,
       maxSameColumnCount: 0,
-      geometry: seeded,
+      geometry: base,
       reviewSourceCanvas: canvas,
       controlNumberDigits: [],
       controlNumber: null,
@@ -260,12 +220,7 @@ export function buildDesktopDisplayOverlayGeometry(
     rows,
     { forceRebuild: true, maxShiftRatio: 0.3 }
   );
-  const snapped = attached.geometry ?? seeded;
-  return nudgeDesktopOverlayGeometry(
-    snapped,
-    DESKTOP_OVERLAY_POST_NUDGE_X,
-    DESKTOP_OVERLAY_POST_NUDGE_Y
-  );
+  return attached.geometry ?? base;
 }
 
 /** Alinea (si aplica) y devuelve canvas listo para lectura OMR de 30 filas. */
