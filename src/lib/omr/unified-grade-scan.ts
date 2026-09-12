@@ -185,6 +185,9 @@ function finalizeUnifiedDisplayMeta(
     kept = pickBetterOmrMeta(kept, keptReread, rows);
   }
 
+  if (opts?.skipBubbleReattach) {
+    return kept;
+  }
   const displayGeom = buildDisplayOverlayGeometry(displayCanvas, columns, rows);
   const withGeom: OmrScanMetaResult = {
     ...meta,
@@ -384,11 +387,12 @@ async function scanDesktopFlatDocumentAsync(
 export function scanDesktopGradeUnifiedOrLegacy(
   displayCanvas: HTMLCanvasElement,
   columns: number,
-  rows: number
+  rows: number,
+  opts?: { tableFrameOnly?: boolean }
 ): OmrScanMetaResult {
-  if (hasCalifacilAlignStrips(displayCanvas)) {
+  if (opts?.tableFrameOnly || hasCalifacilAlignStrips(displayCanvas)) {
     const tableMeta = scanDesktopFlatDocument(displayCanvas, columns, rows);
-    if (isDesktopFastPassEnough(tableMeta, rows, displayCanvas, columns)) {
+    if (opts?.tableFrameOnly || isDesktopFastPassEnough(tableMeta, rows, displayCanvas, columns)) {
       return tableMeta;
     }
   }
@@ -418,9 +422,9 @@ export function scanDesktopGradeUnifiedOrLegacy(
 export async function scanDesktopGradeUnifiedOrLegacyAsync(
   displayCanvas: HTMLCanvasElement,
   columns: number,
-  rows: number
+  rows: number,
+  opts?: { tableFrameOnly?: boolean }
 ): Promise<OmrScanMetaResult> {
-  const scanCanvas = gradeScanCanvas(displayCanvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
   await new Promise<void>((resolve) => {
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => resolve());
@@ -429,13 +433,14 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
     setTimeout(resolve, 0);
   });
 
-  if (hasCalifacilAlignStrips(displayCanvas)) {
+  if (opts?.tableFrameOnly || hasCalifacilAlignStrips(displayCanvas)) {
     const tableMeta = await scanDesktopFlatDocumentAsync(displayCanvas, columns, rows);
-    if (isDesktopFastPassEnough(tableMeta, rows, displayCanvas, columns)) {
+    if (opts?.tableFrameOnly || isDesktopFastPassEnough(tableMeta, rows, displayCanvas, columns)) {
       return tableMeta;
     }
   }
 
+  const scanCanvas = gradeScanCanvas(displayCanvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
   if (isUnifiedOmrEngineEnabled()) {
     const fast = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
       fastMode: true,

@@ -202,6 +202,13 @@ gradeCanvas(pdfCanvas, 'pdf');
   assert(pdfNorm.canvas!.height > pdfNorm.canvas!.width * 1.05, 'pdf-normalize rotó a landscape');
   assert(ms < 8000, `pdf-normalize too slow: ${ms}ms`);
   gradeCanvas(pdfNorm.canvas!, 'pdf-normalize');
+  const uiPdf = scanDesktopGradeUnifiedOrLegacy(pdfNorm.canvas!, COLS, ROWS, {
+    tableFrameOnly: true,
+  });
+  const gotPdf = picksKey(uiPdf.picks);
+  const wantPdf = GROUND_TRUTH.map((i) => LETTERS[i]).join('');
+  assert(gotPdf === wantPdf, `pdf-ui-scan picks ${gotPdf} != ${wantPdf}`);
+  console.log(`ok: pdf-ui-scan picks=${gotPdf}`);
 }
 gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
 {

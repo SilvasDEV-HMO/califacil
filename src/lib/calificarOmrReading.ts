@@ -246,15 +246,22 @@ export async function runCalifacilOmrReadingPipeline(
     });
   };
 
+  const skipReferencePrep =
+    uploadKind === 'pdf' ||
+    uploadKind === 'flatScan' ||
+    uploadKind === 'flatDocument';
+
   let scanCanvas = resolveScanCanvas(oriented);
-  if (scanCanvas) {
+  if (scanCanvas && !skipReferencePrep) {
     scanCanvas = prepareGradeCanvas(scanCanvas);
   }
   let activeScanSource: HTMLImageElement | HTMLCanvasElement = scanCanvas ?? oriented;
   let meta: OmrScanMetaResult;
 
   if (scanCanvas) {
-    meta = await scanDesktopGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount);
+    meta = await scanDesktopGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount, {
+      tableFrameOnly: skipReferencePrep,
+    });
   } else {
     meta = scanLiveOmrUnifiedOrLegacy(activeScanSource, omrCols, {
       skipGuideCrop: true,
@@ -281,10 +288,16 @@ export async function runCalifacilOmrReadingPipeline(
   const minResolved = Math.max(1, Math.ceil(chunk.length * CALIFACIL_MIN_AUTO_READ_RATIO));
   let mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
 
+  const skipLetterOverlayRecovery =
+    uploadKind === 'pdf' ||
+    uploadKind === 'flatScan' ||
+    uploadKind === 'flatDocument';
+
   // Blank / lectura débil: re-leer sobre geometría de overlay antes de aceptar 0%.
   if (
-    (mostlyBlank && mapped.resolvedCount === 0) ||
-    isWeakMobileOmrMeta(meta, chunk.length, chunk.length)
+    !skipLetterOverlayRecovery &&
+    ((mostlyBlank && mapped.resolvedCount === 0) ||
+      isWeakMobileOmrMeta(meta, chunk.length, chunk.length))
   ) {
     const snapCanvas =
       (scanCanvas &&

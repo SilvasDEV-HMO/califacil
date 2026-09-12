@@ -18,7 +18,6 @@ import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
 import { downloadCalificacionCsv } from '@/lib/calificarExport';
 import {
-  canvasToJpegFile,
   createPdfGradingHandle,
   PDF_OMR_RENDER_MAX_SIDE,
   renderPdfGradingPageCanvas,
@@ -1794,10 +1793,23 @@ export default function CalificarPage() {
         }
         if (isStaleRead()) return { success: false };
 
-        // Overlay + re-lectura en el MISMO canvas del preview.
+        // Overlay: PDF/escaneo usa la geometría de la tabla leída (no plantilla carta).
         let reviewGeom = meta.geometry;
         let picksForUi = raw.slice(0, chunk.length);
-        if (previewCanvas) {
+        const keepEngineOverlay =
+          Boolean(reviewGeom?.cells?.length) &&
+          (desktopUploadKind === 'pdf' ||
+            desktopUploadKind === 'flatDocument' ||
+            desktopUploadKind === 'flatScan' ||
+            classifiedUploadKind === 'pdf' ||
+            isServerRenderedPdfPage);
+        if (previewCanvas && keepEngineOverlay && reviewGeom) {
+          reviewGeom = syncCalifacilOmrGeometryImageSize(
+            reviewGeom,
+            previewCanvas.width,
+            previewCanvas.height
+          );
+        } else if (previewCanvas) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
             buildDisplayOverlayGeometry(previewCanvas, omrCols, omrRowCount),
             previewCanvas.width,
@@ -2061,30 +2073,20 @@ export default function CalificarPage() {
 
   const finalizePdfPageForGrading = useCallback(
     async (rawCanvas: HTMLCanvasElement, pageNumber: number) => {
-      const normalized = normalizeCalifacilGradeDocumentCanvas(rawCanvas, omrCols, {
-        maxSide: PDF_OMR_RENDER_MAX_SIDE,
-        flatDocument: true,
-        uploadClass: 'pdf',
-        rowCount: omrRowCount,
-      });
-      if (!normalized.canvas) {
-        toast.error('No se pudo preparar la página del PDF.');
-        return;
-      }
       const scanCanvas =
-        downscaleCanvasForOmrScan(normalized.canvas, PDF_OMR_RENDER_MAX_SIDE) ??
-        normalized.canvas;
-      const pseudoFile = await canvasToJpegFile(scanCanvas, `pdf-pagina-${pageNumber}.jpg`);
+        downscaleCanvasForOmrScan(rawCanvas, PDF_OMR_RENDER_MAX_SIDE) ?? rawCanvas;
+      const pseudoFile = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], `pdf-pagina-${pageNumber}.jpg`, {
+        type: 'image/jpeg',
+      });
       flushSync(() => setLiveStatus('Leyendo examen…'));
       await yieldForSpinnerPaint();
       await finalizeCapturedSheet(scanCanvas, pseudoFile, {
         displaySource: scanCanvas,
         skipSheetValidation: true,
-        preWarped: true,
         uploadKind: 'pdf',
       });
     },
-    [finalizeCapturedSheet, omrCols, omrRowCount]
+    [finalizeCapturedSheet]
   );
 
   const resetFlow = useCallback(() => {
