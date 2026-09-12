@@ -130,7 +130,6 @@ import {
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
 import {
-  gradeLetterCanvas,
   prepareLetterGradeCanvas,
   measureLetterGeometryBubbleFit,
   LETTER_GRADE_MIN_BUBBLE_FIT,
@@ -140,10 +139,8 @@ import {
   buildDisplayOverlayGeometry,
   isStrongMobileOmrMeta,
   isWeakMobileOmrMeta,
-  rereadOmrWithDisplayOverlayGeometry,
   isUsableOmrRecoveryMeta,
-  scanWarpedGradeMobileAsync,
-  pickBetterOmrMeta,
+  scanDesktopGradeUnifiedOrLegacy,
 } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
 import { type LiveVideoLetterbox } from '@/components/califacil-live-scan-overlay';
@@ -855,7 +852,7 @@ export default function CalificarPage() {
     async (
       warped: HTMLCanvasElement,
       warpAlignment?: WarpAlignmentReport | null,
-      activeRows: number = omrRowCount
+      _activeRows: number = omrRowCount
     ) => {
       // Un canvas carta: preview === OMR === overlay (rejilla 30).
       const prepared = prepareLetterGradeCanvas(warped, {
@@ -865,7 +862,6 @@ export default function CalificarPage() {
         warpAlignment,
       });
       const displayCanvas = prepared.canvas;
-      const scoredRows = Math.max(1, Math.min(omrRowCount, activeRows));
 
       const sheetFillOk = (c: HTMLCanvasElement): boolean => {
         if (isPhotoSheetWarpAcceptable(c) || isMobileLetterGradeCanvasReady(c)) {
@@ -902,63 +898,16 @@ export default function CalificarPage() {
         };
       }
 
-      // Rejilla de bolitas reales (no plantilla carta: en foto de tabla corre las marcas a la izquierda).
-      const unifiedMeta = await scanWarpedGradeMobileAsync(
-        displayCanvas,
-        omrCols,
-        omrRowCount,
-        { activeRows: scoredRows, letterCanvas: displayCanvas }
-      );
-      const unifiedFit = unifiedMeta.geometry
-        ? measureLetterGeometryBubbleFit(displayCanvas, unifiedMeta.geometry, omrRowCount)
-        : 0;
-
-      const graded = gradeLetterCanvas(displayCanvas, omrCols, omrRowCount, {
-        geometry: prepared.geometry,
+      await yieldForSpinnerPaint();
+      const tableMeta = scanDesktopGradeUnifiedOrLegacy(displayCanvas, omrCols, omrRowCount, {
+        tableFrameOnly: true,
       });
-      let meta = graded.meta;
-      let bubbleFit = graded.bubbleFit;
-      if (
-        unifiedFit >= 0.48 &&
-        (unifiedFit + 0.01 >= bubbleFit ||
-          isWeakMobileOmrMeta(meta, omrRowCount, scoredRows) ||
-          !isStrongMobileOmrMeta(meta, omrRowCount, scoredRows))
-      ) {
-        meta = unifiedMeta;
-        bubbleFit = Math.max(bubbleFit, unifiedFit);
-      } else if (
-        bubbleFit < LETTER_GRADE_MIN_BUBBLE_FIT ||
-        isAnswerSheetOmrMostlyBlank(meta, scoredRows) ||
-        isWeakMobileOmrMeta(meta, omrRowCount, scoredRows) ||
-        !isStrongMobileOmrMeta(meta, omrRowCount, scoredRows)
-      ) {
-        const snapMeta = rereadOmrWithDisplayOverlayGeometry(
-          displayCanvas,
-          omrCols,
-          omrRowCount,
-          meta
-        );
-        const snapGeom = snapMeta.geometry ?? meta.geometry;
-        const snapFit = snapGeom
-          ? measureLetterGeometryBubbleFit(displayCanvas, snapGeom, omrRowCount)
-          : 0;
-        if (
-          snapFit > bubbleFit + 0.02 &&
-          (isUsableOmrRecoveryMeta(snapMeta, scoredRows) ||
-            isAnswerSheetOmrMostlyBlank(snapMeta, scoredRows))
-        ) {
-          meta = snapMeta;
-          bubbleFit = snapFit;
-        } else if (
-          isAnswerSheetOmrMostlyBlank(snapMeta, scoredRows) &&
-          isAnswerSheetOmrMostlyBlank(meta, scoredRows)
-        ) {
-          meta = snapMeta;
-        }
-      }
+      const bubbleFit = tableMeta.geometry
+        ? measureLetterGeometryBubbleFit(displayCanvas, tableMeta.geometry, omrRowCount)
+        : 0;
       const orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
       return {
-        meta,
+        meta: tableMeta,
         orangeFrameNorm,
         docCanvas: displayCanvas,
         displayCanvas,
@@ -3670,6 +3619,7 @@ export default function CalificarPage() {
 
       // Mantener freeze de captura; no regenerar JPEG warped (ahorra toDataURL).
       setLiveStatus('Calificando…');
+      await yieldForSpinnerPaint();
 
       // Pausar video solo después de tener freeze en pantalla.
       if (video) {
@@ -3717,17 +3667,10 @@ export default function CalificarPage() {
         // Sustituir freeze crudo por hoja sola lo antes posible (mismo canvas + geometría).
         const letterFreeze = canvasPreviewJpeg(displayCanvas, 900, 0.7);
         if (letterFreeze) setMobileScanPreviewUrl(letterFreeze.dataUrl);
-        if (califacilFastScan.meta?.geometry) {
-          const overlayGeom = resolveMobileGradeDisplay(
-            displayCanvas,
-            displayCanvas,
-            omrCols,
-            omrRowCount,
-            califacilFastScan.meta
-          ).geometry;
+        if (califacilFastScan.meta?.geometry?.cells?.length) {
           setMobileScanPreviewGeometry(
             syncCalifacilOmrGeometryImageSize(
-              overlayGeom,
+              califacilFastScan.meta.geometry,
               letterFreeze?.width ?? displayCanvas.width,
               letterFreeze?.height ?? displayCanvas.height
             )
@@ -3802,7 +3745,7 @@ export default function CalificarPage() {
           rows: califacilFastScan.meta.rows.slice(0, Math.max(chunkRows, omrRowCount)),
         };
 
-        // Overlay = misma geometría de la lectura (LetterCanvas único).
+        // Overlay = geometría de la tabla leída (no plantilla carta).
         const resolved = resolveMobileGradeDisplay(
           displayCanvas,
           displayCanvas,
@@ -3811,60 +3754,22 @@ export default function CalificarPage() {
           warpMeta
         );
         mobileDisplaySource = resolved.previewCanvas;
-        let displayGeom = resolved.geometry;
-        // Preferir geometry ya leída si coincide con el canvas.
-        if (
-          warpMeta.geometry?.cells?.length &&
-          warpMeta.reviewSourceCanvas === displayCanvas
-        ) {
-          displayGeom = warpMeta.geometry;
-        } else {
-          const geomReread = rereadOmrPicksOnGeometry(
-            resolved.previewCanvas,
-            displayGeom,
-            omrCols,
-            omrRowCount,
-            warpMeta
-          );
-          warpMeta = pickBetterOmrMeta(warpMeta, geomReread, chunkRows);
-          displayGeom = geomReread.geometry ?? displayGeom;
-        }
+        let displayGeom =
+          warpMeta.geometry?.cells?.length
+            ? syncCalifacilOmrGeometryImageSize(
+                warpMeta.geometry,
+                resolved.previewCanvas.width,
+                resolved.previewCanvas.height
+              )
+            : resolved.geometry;
 
         const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
         const sameColCap = Math.max(5, Math.round(chunkRows * 0.55));
         const noColumnCollapse = (warpMeta.maxSameColumnCount ?? 0) <= sameColCap;
-        const bubbleFit =
-          displayGeom != null
-            ? measureLetterGeometryBubbleFit(
-                resolved.previewCanvas,
-                displayGeom,
-                omrRowCount
-              )
-            : (califacilFastScan.bubbleFit ?? 0);
-        // Trusted: ≥70% + sin colapso + cells alineadas a anillos.
+        const tableClear = Boolean(displayGeom?.cells && displayGeom.cells.length >= chunkRows);
         let trusted =
-          resolvedCount >= Math.ceil(chunkRows * 0.7) &&
-          noColumnCollapse &&
-          bubbleFit >= LETTER_GRADE_MIN_BUBBLE_FIT;
-
-        if (!trusted && isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
-          const snapped = gradeLetterCanvas(
-            resolved.previewCanvas,
-            omrCols,
-            omrRowCount
-          );
-          if (snapped.bubbleFit > bubbleFit + 0.02) {
-            warpMeta = snapped.meta;
-            displayGeom = snapped.geometry;
-            const n = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
-            const noCollapse =
-              (warpMeta.maxSameColumnCount ?? 0) <= sameColCap;
-            trusted =
-              n >= Math.ceil(chunkRows * 0.7) &&
-              noCollapse &&
-              snapped.bubbleFit >= LETTER_GRADE_MIN_BUBBLE_FIT;
-          }
-        }
+          resolvedCount >= Math.ceil(chunkRows * 0.7) ||
+          (tableClear && resolvedCount >= Math.ceil(chunkRows * 0.4) && noColumnCollapse);
 
         if (trusted) {
           warpMeta = {

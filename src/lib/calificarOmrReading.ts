@@ -214,6 +214,7 @@ export async function runCalifacilOmrReadingPipeline(
     fallbackFile,
     uploadKind,
     disableVisionAssist,
+    skipReviewUi,
     sheetStrict,
     preserveCapturedFrame,
   } = input;
@@ -249,7 +250,8 @@ export async function runCalifacilOmrReadingPipeline(
   const skipReferencePrep =
     uploadKind === 'pdf' ||
     uploadKind === 'flatScan' ||
-    uploadKind === 'flatDocument';
+    uploadKind === 'flatDocument' ||
+    Boolean(isMobile && skipReviewUi);
 
   let scanCanvas = resolveScanCanvas(oriented);
   if (scanCanvas && !skipReferencePrep) {
@@ -291,7 +293,8 @@ export async function runCalifacilOmrReadingPipeline(
   const skipLetterOverlayRecovery =
     uploadKind === 'pdf' ||
     uploadKind === 'flatScan' ||
-    uploadKind === 'flatDocument';
+    uploadKind === 'flatDocument' ||
+    Boolean(isMobile && skipReviewUi);
 
   // Blank / lectura débil: re-leer sobre geometría de overlay antes de aceptar 0%.
   if (

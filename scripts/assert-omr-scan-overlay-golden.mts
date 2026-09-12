@@ -229,6 +229,16 @@ gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
   const want = GROUND_TRUTH.map((i) => LETTERS[i]).join('');
   assert(got === want, `png-ui-scan picks ${got} != ${want}`);
   console.log(`ok: png-ui-scan picks=${got} normalize=${ms}ms`);
+  {
+    const tMobile = Date.now();
+    const mobile = scanDesktopGradeUnifiedOrLegacy(norm.canvas!, COLS, ROWS, {
+      tableFrameOnly: true,
+    });
+    const mobileMs = Date.now() - tMobile;
+    assert(picksKey(mobile.picks) === want, `mobile-table-frame picks ${picksKey(mobile.picks)} != ${want}`);
+    assert(mobileMs < 8000, `mobile-table-frame too slow: ${mobileMs}ms`);
+    console.log(`ok: mobile-table-frame picks=${picksKey(mobile.picks)} ${mobileMs}ms`);
+  }
 }
 gradeCanvas(await canvasFromJpegFile(path.join(fixtures, 'scan-luis-30.jpg')), 'jpg');
 
