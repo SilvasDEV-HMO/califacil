@@ -77,7 +77,6 @@ import {
   isMobileWarpedAnswerSheetAcceptable,
   countCalifacilCornerMarkers,
   hasCalifacilAlignStrips,
-  mobileRoiQuadsAreStable,
   MOBILE_ROI_DETECT_MAX_SIDE,
   type MobileGuideRoiCapture,
   prepareMobileScannedDocumentCanvas,
@@ -87,7 +86,6 @@ import {
   refineWarpedCalifacilSheet,
   scanCalifacilOmrSheetWithMeta,
   scanWarpedMobileAnswerSheetFast,
-  scanWarpedWithBestTableFrame,
   readAnswerSheetControlNumberFromCanvas,
   califacilOmrTableFrameNormRect,
   canvasPreviewDataUrl,
@@ -2593,7 +2591,7 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            // Contrato: 4/4 → foto inmediata (sin fill/stability/sharpness/quadValid).
+            // 4/4 reales: acumular ticks; no disparar en el primer frame.
             if (fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
               const pageQuadRaw: RoiQuad = [
                 { x: 2, y: 2 },
@@ -2608,8 +2606,8 @@ export default function CalificarPage() {
               lastRawRoiQuadRef.current = pageQuadRaw;
               lastRoiQuadRef.current = snapQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
-              cornerStableTicksRef.current = MOBILE_CAPTURE_STABLE_TICKS_REQUIRED;
-              setMobileStableTicks(MOBILE_CAPTURE_STABLE_TICKS_REQUIRED);
+              cornerStableTicksRef.current += 1;
+              setMobileStableTicks(cornerStableTicksRef.current);
               setCornersAlignedView(true);
               setMobileExamReadyForCapture(true);
               setMobileSheetFillRatio(measureRoiSheetFillRatio(snapQuad, roiW, roiH));
@@ -2624,7 +2622,15 @@ export default function CalificarPage() {
                 roiCanvas,
               };
               lowVisibilityTicksRef.current = 0;
-              if (autoShutterEnabledRef.current) {
+              const readyToSnap = shouldTriggerAutoCapture({
+                autoShutterEnabled: autoShutterEnabledRef.current,
+                captureBusy: mobileCaptureBusyRef.current,
+                stableTicks: cornerStableTicksRef.current,
+                requiredTicks: MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
+              });
+              if (readyToSnap) {
+                cornerStableTicksRef.current = 0;
+                setMobileStableTicks(0);
                 setShutterFlash(true);
                 window.setTimeout(() => setShutterFlash(false), 160);
                 triggerMobileSheetCaptureRef.current(video, {
@@ -2632,8 +2638,15 @@ export default function CalificarPage() {
                   roiCapture,
                 });
                 setLiveStatus('Capturando…');
-              } else {
+              } else if (!autoShutterEnabledRef.current) {
                 setLiveStatus('Cuadros 4/4 — toca Capturar.');
+              } else {
+                setLiveStatus(
+                  `Cuadros 4/4 — mantén quieto… (${Math.min(
+                    cornerStableTicksRef.current,
+                    MOBILE_CAPTURE_STABLE_TICKS_REQUIRED
+                  )}/${MOBILE_CAPTURE_STABLE_TICKS_REQUIRED})`
+                );
               }
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
@@ -2681,110 +2694,23 @@ export default function CalificarPage() {
             }
 
             fiducialStableTicksRef.current = 0;
-
-            // Sin 4/4: fill/stability siguen aplicando (path franjas / 3 esquinas).
-            if (fillRatio < (stripAligned ? 0.06 : MOBILE_MIN_ROI_FILL_RATIO)) {
-              cornerStableTicksRef.current = 0;
-              setMobileStableTicks(0);
-              lastRoiQuadRef.current = roiQuad;
-              setCornersAlignedView(false);
-              setLiveStatus(
-                fillRatio < 0.1
-                  ? 'Acerca un poco el teléfono.'
-                  : 'Centra la hoja en el visor.'
-              );
-              nextDelay = MOBILE_CORNER_LOOP_MS;
-              return;
-            }
-
-            if (!lastRawRoiQuadRef.current) {
-              lastRawRoiQuadRef.current = roiQuadRaw;
-              lastRoiQuadRef.current = roiQuad;
-              cornerStableTicksRef.current = 1;
-              setMobileStableTicks(1);
-              setCornersAlignedView(true);
-              setLiveStatus('Documento detectado — mantén quieto…');
-              nextDelay = MOBILE_CORNER_LOOP_MS;
-              return;
-            }
-
-            const prevRaw = lastRawRoiQuadRef.current;
-            const stable = mobileRoiQuadsAreStable(
-              prevRaw,
-              roiQuadRaw!,
-              roiW,
-              roiH,
-              0.15
-            );
-            lastRawRoiQuadRef.current = roiQuadRaw!;
+            cornerStableTicksRef.current = 0;
+            setMobileStableTicks(0);
+            setMobileExamReadyForCapture(false);
             lastRoiQuadRef.current = roiQuad;
-            if (!stable) {
-              cornerStableTicksRef.current = Math.max(0, cornerStableTicksRef.current - 1);
-              setMobileStableTicks(cornerStableTicksRef.current);
-              if (cornerStableTicksRef.current === 0) {
-                setCornersAlignedView(false);
-                setLiveStatus('Mantén la hoja quieta…');
-              }
-              nextDelay = MOBILE_CORNER_LOOP_MS;
-              return;
-            }
-            cornerStableTicksRef.current += 1;
-
-            lowVisibilityTicksRef.current = 0;
-            setMobileStableTicks(cornerStableTicksRef.current);
-            setCornersAlignedView(examReadyForCapture);
-            if (!examReadyForCapture) {
-              setLiveStatus(
-                fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS
-                  ? !fiducialCorners[0] &&
-                    !fiducialCorners[1] &&
-                    (fiducialCorners[2] || fiducialCorners[3])
-                    ? 'Acerca las esquinas superiores y reduce el brillo arriba de la hoja.'
-                    : `Cuadros negros: ${fiducialCount}/4. Alinea cada esquina negra con el recuadro naranja.`
-                  : fillRatio < MOBILE_MIN_ROI_FILL_RATIO
-                    ? 'Acerca el teléfono hasta ver la hoja completa.'
-                    : 'Ajusta la hoja dentro del marco naranja.'
-              );
-              nextDelay = MOBILE_CORNER_LOOP_MS;
-              return;
-            }
-
-            const readyToSnap = shouldTriggerAutoCapture({
-              autoShutterEnabled: autoShutterEnabledRef.current,
-              captureBusy: mobileCaptureBusyRef.current,
-              stableTicks: cornerStableTicksRef.current,
-              requiredTicks: MOBILE_CAPTURE_STABLE_TICKS_REQUIRED,
-            });
-
-            if (
-              readyToSnap &&
-              autoShutterEnabledRef.current &&
-              !mobileCaptureBusyRef.current
-            ) {
-              const liveSharpness = estimateCanvasSharpness(roiCanvas);
-              if (liveSharpness < MOBILE_MIN_LIVE_SHARPNESS) {
-                setLiveStatus('Mantén el teléfono quieto');
-                nextDelay = MOBILE_CORNER_LOOP_MS;
-                return;
-              }
-              const captureQuad = smoothedRoiQuadRef.current ?? lastRoiQuadRef.current;
-              const captureRoi = lastRoiCaptureMetaRef.current;
-              cornerStableTicksRef.current = 0;
-              setMobileStableTicks(0);
-              setShutterFlash(true);
-              window.setTimeout(() => setShutterFlash(false), 160);
-              triggerMobileSheetCaptureRef.current(video, {
-                roiQuad: captureQuad,
-                roiCapture: captureRoi,
-              });
-              setLiveStatus('Capturando…');
-            } else if (!autoShutterEnabledRef.current) {
-              setLiveStatus('Examen detectado — mantén quieto…');
-            } else if (mobileCaptureBusyRef.current) {
-              setLiveStatus('Calificando…');
-            } else {
-              setLiveStatus('Mantén el teléfono quieto');
-            }
+            lastRawRoiQuadRef.current = roiQuadRaw;
+            setCornersAlignedView(false);
+            setLiveStatus(
+              fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS
+                ? !fiducialCorners[0] &&
+                  !fiducialCorners[1] &&
+                  (fiducialCorners[2] || fiducialCorners[3])
+                  ? 'Acerca las esquinas superiores y reduce el brillo arriba de la hoja.'
+                  : `Cuadros negros: ${fiducialCount}/4. Alinea cada esquina negra con el recuadro naranja.`
+                : fillRatio < MOBILE_MIN_ROI_FILL_RATIO
+                  ? 'Acerca el teléfono hasta ver la hoja completa.'
+                  : 'Alinea los 4 cuadros negros con las esquinas naranjas.'
+            );
             nextDelay = MOBILE_CORNER_LOOP_MS;
             return;
           } else {
@@ -3083,7 +3009,7 @@ export default function CalificarPage() {
             });
           }
 
-          if (stableFullTicksRef.current >= STABLE_FULL_TICKS && chunk.length > 0) {
+          if (!isMobile && stableFullTicksRef.current >= STABLE_FULL_TICKS && chunk.length > 0) {
             stableFullTicksRef.current = 0;
             await showAutoCaptureSnapshot(oriented);
             const nextStatus =
@@ -4420,9 +4346,9 @@ export default function CalificarPage() {
       setScanBusy(false);
       setLiveStatus('');
       toast.error('La lectura tardó demasiado. Prueba con un PDF o una foto más nítida.');
-    }, 30000);
+    }, useLiveCameraUi ? 30000 : 60000);
     return () => window.clearTimeout(timeout);
-  }, [scanBusy]);
+  }, [scanBusy, useLiveCameraUi]);
 
   // Busy huérfano: ref true con scanBusy false (auto nunca recupera sin esto).
   useEffect(() => {
@@ -4443,9 +4369,12 @@ export default function CalificarPage() {
   }, [cameraOpen, useLiveCameraUi, scanBusy]);
 
   const captureMobilePhotoManually = useCallback(async () => {
-    // Capturar siempre que la cámara esté lista: el marco naranja define el encuadre.
-    // El gate live (4/4) solo sirve de guía visual, no bloquea el botón.
     const gate = mobileCaptureGateRef.current;
+    const corners = gate.fiducialCorners?.filter(Boolean).length ?? gate.fiducialCount;
+    if (corners < MOBILE_MIN_FIDUCIAL_CORNERS) {
+      toast.error('Alinea los 4 cuadros negros con las esquinas naranjas.');
+      return;
+    }
 
     let video = videoRef.current;
     if (!video || !streamRef.current) {

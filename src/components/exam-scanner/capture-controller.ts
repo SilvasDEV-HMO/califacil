@@ -1,6 +1,6 @@
 export const CAPTURE_STABLE_TICKS_REQUIRED = 2;
-/** Ticks consecutivos con hoja lista (~50 ms) antes del disparo automático. */
-export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 1;
+/** Ticks consecutivos con 4/4 en esquinas naranjas (~50 ms c/u) antes del disparo. */
+export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 5;
 
 export type AutoCaptureGate = {
   autoShutterEnabled: boolean;

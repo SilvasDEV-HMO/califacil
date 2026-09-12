@@ -3222,10 +3222,8 @@ export function measureRoiQuadInteriorMeanLuminance(
 }
 
 /**
- * Gate de captura móvil: franjas laterales + esquinas negras.
- * - Ideal: 4 esquinas en el marco naranja (sin exigir strips).
- * - Relajado: 3 esquinas + franjas (aula real / 4.ª parcial).
- * Luminancia interior relajada (0.28) para no bloquear por sombra parcial.
+ * Gate de captura móvil: las 4 esquinas negras en las guías naranjas.
+ * 3 esquinas + franjas no disparan (solo HUD).
  */
 export function isMobileExamSheetReadyForCapture(opts: {
   fiducialCount: number;
@@ -3239,22 +3237,13 @@ export function isMobileExamSheetReadyForCapture(opts: {
 }): boolean {
   const corners = opts.fiducialCorners;
   const count = corners ? corners.filter(Boolean).length : opts.fiducialCount;
-  const fourCorners = count >= MOBILE_MIN_FIDUCIAL_CORNERS;
-  // 4/4 en marco naranja = listo sin strips; 3 esquinas siguen exigiendo franjas.
-  if (!fourCorners && !opts.stripAligned) return false;
-  if (!fourCorners && count < MOBILE_LIVE_MIN_FIDUCIAL_CORNERS) return false;
+  if (count < MOBILE_MIN_FIDUCIAL_CORNERS) return false;
   if (!opts.quad || !opts.roiW || !opts.roiH) return false;
   if (!isValidMobileRoiQuad(opts.quad, opts.roiW, opts.roiH)) return false;
 
   const fill =
     opts.fillRatio ?? measureRoiSheetFillRatio(opts.quad, opts.roiW, opts.roiH);
   if (fill < 0.06) return false;
-
-  // Con 4/4 no exigir luminancia interior (sombra parcial no debe bloquear el disparo).
-  if (!fourCorners && opts.roiCanvas) {
-    const interior = measureRoiQuadInteriorMeanLuminance(opts.roiCanvas, opts.quad);
-    if (interior < MOBILE_MIN_QUAD_INTERIOR_LUMINANCE) return false;
-  }
 
   return true;
 }
@@ -3726,42 +3715,14 @@ export function detectAnswerSheetFiducialsInRoi(
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
   const pageAsRoi = fullRoiPageQuad(W, H);
 
-  // Path temprano: hoja llena el ROI → sondear esquinas del canvas con parches chicos
-  // (nearStripEdge=false: franjas no deben endurecer el clasificador del cuadrito).
-  const canvasCorners = canvasCornerFiducialPatches(W, H);
-  let merged: [boolean, boolean, boolean, boolean] = detectFiducialsAtCornerPatches(
-    ctx,
-    canvasCorners.corners,
-    canvasCorners.patchW,
-    canvasCorners.patchH,
-    [false, false, false, false]
+  // 4/4 solo con fiduciales impresos (centros de plantilla / página), no parches de canvas ni esquina inferida.
+  let merged: [boolean, boolean, boolean, boolean] = detectAnswerSheetFiducialsAtQuad(
+    canvas,
+    pageAsRoi,
+    false
   );
   if (merged.filter(Boolean).length >= 4) return merged;
 
-  // Página-como-ROI: siempre nearStripEdge=false (centros impresos, no vértices de franja).
-  merged = mergeFiducialCornerStates(
-    merged,
-    detectAnswerSheetFiducialsAtQuad(canvas, pageAsRoi, false)
-  );
-  if (merged.filter(Boolean).length >= 4) return merged;
-
-  if (sheetQuad) {
-    merged = mergeFiducialCornerStates(
-      merged,
-      detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad, false)
-    );
-  }
-  if (stripQuad) {
-    // Solo en vértices del stripQuad usar nearStripEdge=true.
-    merged = mergeFiducialCornerStates(
-      merged,
-      detectAnswerSheetFiducialsAtQuad(canvas, stripQuad, true)
-    );
-    merged = inferMissingFiducialFromStripQuad(canvas, merged, stripQuad);
-  }
-  if (merged.filter(Boolean).length >= 3) return merged;
-
-  // Parches centrados en CALIFACIL_FIDUCIAL_CENTERS_NORM (no top-left del canvas).
   const centered = printedFiducialCornerPatches(W, H);
   merged = mergeFiducialCornerStates(
     merged,
@@ -3773,7 +3734,23 @@ export function detectAnswerSheetFiducialsInRoi(
       [false, false, false, false]
     )
   );
-  if (merged.filter(Boolean).length >= 3) return merged;
+  if (merged.filter(Boolean).length >= 4) return merged;
+
+  if (sheetQuad) {
+    merged = mergeFiducialCornerStates(
+      merged,
+      detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad, false)
+    );
+  }
+  if (merged.filter(Boolean).length >= 4) return merged;
+
+  if (stripQuad) {
+    merged = mergeFiducialCornerStates(
+      merged,
+      detectAnswerSheetFiducialsAtQuad(canvas, stripQuad, true)
+    );
+  }
+  if (merged.filter(Boolean).length >= 4) return merged;
 
   // Fallback: parches en esquinas del quad de franjas (página estimada).
   const patchW = Math.max(8, Math.round(Math.min(W, H) * ((19 / 850) * 2.5)));
@@ -3788,6 +3765,7 @@ export function detectAnswerSheetFiducialsInRoi(
       { x: bl.x + insetX, y: bl.y - patchH - insetY },
       { x: br.x - patchW - insetX, y: br.y - patchH - insetY },
     ];
+    const priorStrip: [boolean, boolean, boolean, boolean] = [...merged];
     merged = mergeFiducialCornerStates(
       merged,
       detectFiducialsAtCornerPatches(ctx, stripCorners, patchW, patchH, [
@@ -3797,7 +3775,10 @@ export function detectAnswerSheetFiducialsInRoi(
         true,
       ])
     );
-    if (merged.filter(Boolean).length >= 3) return merged;
+    // Parches de franja solo para HUD 1–3; no inflar a 4/4.
+    if (merged.filter(Boolean).length >= 4) {
+      merged = priorStrip;
+    }
   }
 
   // Frame completo sin recorte guía: viewfinder carta en el fotograma.
@@ -7023,6 +7004,28 @@ export function califacilFlatScanTableFrameCandidates(template: OmrNormRect): Om
   ].map(clamp);
 }
 
+function uniqueOmrNormRects(frames: OmrNormRect[]): OmrNormRect[] {
+  const seen = new Set<string>();
+  const out: OmrNormRect[] = [];
+  for (const f of frames) {
+    const k = `${f.x.toFixed(4)}|${f.y.toFixed(4)}|${f.w.toFixed(4)}|${f.h.toFixed(4)}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(f);
+  }
+  return out;
+}
+
+function yieldOmrUi(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
 /**
  * Detecta líneas de la rejilla impresa dentro de un marco naranja (tabla completa o burbujas).
  */
@@ -7588,11 +7591,6 @@ export function scanWarpedWithBestTableFrame(
     templateProbe = scanWarpedWithNormTableFrame(warped, columns, rows, templateFrame, {
       skipControl: true,
     });
-    if (!omrScanHasMinReads(templateProbe, rows, 0.45)) {
-      candidates.push(...califacilFlatScanTableFrameCandidates(templateFrame));
-      const fullSweep = detectFullCanvasTableGeometry(warped, rows, columns);
-      if (fullSweep) candidates.push(fullSweep.tableFrame);
-    }
   } else if (opts?.medium) {
     for (const [dx, dy] of [
       [-0.02, -0.015],
@@ -7664,13 +7662,19 @@ export function scanWarpedWithBestTableFrame(
     }
   }
 
+  const uniqueFrames = uniqueOmrNormRects(candidates);
+
   let bestFrame = templateFrame;
   let bestScore = Number.NEGATIVE_INFINITY;
   let bestMeta: OmrScanMetaResult | null = null;
 
-  for (const frame of candidates) {
+  for (const frame of uniqueFrames) {
     const meta =
-      templateProbe && frame === templateFrame
+      templateProbe &&
+      frame.x === templateFrame.x &&
+      frame.y === templateFrame.y &&
+      frame.w === templateFrame.w &&
+      frame.h === templateFrame.h
         ? templateProbe
         : scanWarpedWithNormTableFrame(warped, columns, rows, frame, { skipControl: true });
     const score = scoreOmrMetaPicks(meta, rows);
@@ -7686,17 +7690,83 @@ export function scanWarpedWithBestTableFrame(
     bestFrame = templateFrame;
   }
 
+  return attachControlToBestTableFrame(warped, rows, bestMeta, bestFrame);
+}
+
+function attachControlToBestTableFrame(
+  warped: HTMLCanvasElement,
+  rows: number,
+  bestMeta: OmrScanMetaResult,
+  bestFrame: OmrNormRect
+): { meta: OmrScanMetaResult; orangeFrameNorm: OmrNormRect } {
   if (bestMeta.controlNumber || bestMeta.controlNumberDigits.some((d) => d !== null)) {
     return { meta: bestMeta, orangeFrameNorm: bestFrame };
   }
-
   const ctrl = readAnswerSheetControlNumberFromCanvas(warped, rows);
-  const meta: OmrScanMetaResult = {
-    ...bestMeta,
-    controlNumber: ctrl.controlNumber,
-    controlNumberDigits: ctrl.digits,
+  return {
+    meta: {
+      ...bestMeta,
+      controlNumber: ctrl.controlNumber,
+      controlNumberDigits: ctrl.digits,
+    },
+    orangeFrameNorm: bestFrame,
   };
-  return { meta, orangeFrameNorm: bestFrame };
+}
+
+/** Igual que scanWarpedWithBestTableFrame, cediendo el hilo entre marcos. */
+export async function scanWarpedWithBestTableFrameAsync(
+  warped: HTMLCanvasElement,
+  columns: number,
+  rowCount: number,
+  opts?: { fast?: boolean; medium?: boolean }
+): Promise<{ meta: OmrScanMetaResult; orangeFrameNorm: OmrNormRect }> {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const templateFrame = califacilOmrTableFrameNormRect(rows);
+  const candidates: OmrNormRect[] = [
+    ...califacilFlatScanTableFrameCandidates(templateFrame),
+    templateFrame,
+  ];
+  if (isReferenceGradeExam(rows, columns) && hasReferenceGradeCalibration()) {
+    if (canvasMatchesReferenceGrade(warped.width, warped.height)) {
+      candidates.unshift(referenceTableFrameNorm());
+    }
+  }
+  let templateProbe: OmrScanMetaResult | null = null;
+  if (opts?.fast) {
+    templateProbe = scanWarpedWithNormTableFrame(warped, columns, rows, templateFrame, {
+      skipControl: true,
+    });
+  }
+  const uniqueFrames = uniqueOmrNormRects(candidates);
+  let bestFrame = templateFrame;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  let bestMeta: OmrScanMetaResult | null = null;
+  let i = 0;
+  for (const frame of uniqueFrames) {
+    if (i++ > 0) await yieldOmrUi();
+    const meta =
+      templateProbe &&
+      frame.x === templateFrame.x &&
+      frame.y === templateFrame.y &&
+      frame.w === templateFrame.w &&
+      frame.h === templateFrame.h
+        ? templateProbe
+        : scanWarpedWithNormTableFrame(warped, columns, rows, frame, { skipControl: true });
+    const score = scoreOmrMetaPicks(meta, rows);
+    if (score > bestScore) {
+      bestScore = score;
+      bestFrame = frame;
+      bestMeta = meta;
+    }
+    if (bestMeta && omrScanHasMinReads(bestMeta, rows, 1)) break;
+  }
+  if (!bestMeta) {
+    bestMeta = scanWarpedWithNormTableFrame(warped, columns, rows, templateFrame, {
+      skipControl: true,
+    });
+    bestFrame = templateFrame;
+  }
+  return attachControlToBestTableFrame(warped, rows, bestMeta, bestFrame);
 }
 
 /**

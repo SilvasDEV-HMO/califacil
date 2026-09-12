@@ -11,6 +11,7 @@ import {
   buildLetterDisplayOverlayGeometry,
   rereadOmrPicksOnGeometry,
   scanWarpedWithBestTableFrame,
+  scanWarpedWithBestTableFrameAsync,
   type CalifacilOmrScanGeometry,
   type CalifacilScanOptions,
   type OmrScanMetaResult,
@@ -339,6 +340,20 @@ function recoverDesktopTableFrame(
   return pickBetterOmrMeta(meta, tableMeta, rows);
 }
 
+async function recoverDesktopTableFrameAsync(
+  displayCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number,
+  meta: OmrScanMetaResult
+): Promise<OmrScanMetaResult> {
+  const tableRaw = await scanWarpedWithBestTableFrameAsync(displayCanvas, columns, rows, {
+    fast: true,
+  });
+  let tableMeta = finalizeUnifiedDisplayMeta(displayCanvas, tableRaw.meta, rows, columns);
+  tableMeta = sanitizeAnswerSheetOmrMeta(tableMeta, rows);
+  return pickBetterOmrMeta(meta, tableMeta, rows);
+}
+
 export function scanDesktopGradeUnifiedOrLegacy(
   displayCanvas: HTMLCanvasElement,
   columns: number,
@@ -358,6 +373,9 @@ export function scanDesktopGradeUnifiedOrLegacy(
       let stripMeta = finalizeUnifiedDisplayMeta(displayCanvas, stripRaw, rows, columns);
       stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
       meta = pickBetterOmrMeta(meta, stripMeta, rows);
+    }
+    if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
+      return meta;
     }
     return recoverDesktopTableFrame(displayCanvas, columns, rows, meta);
   }
@@ -393,7 +411,11 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
       stripMeta = sanitizeAnswerSheetOmrMeta(stripMeta, rows);
       meta = pickBetterOmrMeta(meta, stripMeta, rows);
     }
-    return recoverDesktopTableFrame(displayCanvas, columns, rows, meta);
+    if (isDesktopFastPassEnough(meta, rows, displayCanvas, columns)) {
+      return meta;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    return recoverDesktopTableFrameAsync(displayCanvas, columns, rows, meta);
   }
   return scanCalifacilDesktopGradeDocumentAsync(displayCanvas, columns, rows);
 }

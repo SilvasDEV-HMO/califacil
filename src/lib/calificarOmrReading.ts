@@ -371,16 +371,7 @@ export async function runCalifacilOmrReadingPipeline(
     }
   }
 
-  const shouldRunDesktopRecovery =
-    !isMobile &&
-    !isMobileCamera &&
-    !mostlyBlank &&
-    mapped.resolvedCount < minResolved &&
-    scanCanvas &&
-    mapped.resolvedCount < Math.max(1, Math.ceil(omrRowCount * 0.45)) &&
-    uploadKind !== 'pdf' &&
-    uploadKind !== 'flatDocument';
-  // flatScan: permitir recovery local (antes se saltaba y quedaba 4/30 mal alineado).
+  const shouldRunDesktopRecovery = false;
 
   if (shouldRunDesktopRecovery) {
     let recoveryMeta: OmrScanMetaResult | null = null;
