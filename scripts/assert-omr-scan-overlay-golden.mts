@@ -13,6 +13,10 @@ installNodeCanvasShim();
 
 import { renderPdfPageToJpeg } from '../src/lib/renderPdfPage.server.ts';
 import {
+  classifyDesktopUploadCanvas,
+  normalizeCalifacilGradeDocumentCanvas,
+} from '../src/lib/omr/pipeline.ts';
+import {
   attachAnswerSheetReviewBubbleOverlay,
   getOmrCanvasImageData,
   scaleCanvasToMaxSide,
@@ -186,4 +190,23 @@ if (!existsSync(pngPath)) {
 gradeCanvas(pdfCanvas, 'pdf');
 gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
 gradeCanvas(await canvasFromJpegFile(path.join(fixtures, 'scan-luis-30.jpg')), 'jpg');
+
+const desktopUploadPath = path.join(fixtures, 'scan-luis-desktop-upload.jpg');
+if (existsSync(desktopUploadPath)) {
+  const raw = await canvasFromJpegFile(desktopUploadPath);
+  const cls = classifyDesktopUploadCanvas(raw, COLS);
+  assert(cls === 'flatScan', `desktop-upload class ${cls} != flatScan`);
+  const t0 = Date.now();
+  const norm = normalizeCalifacilGradeDocumentCanvas(raw, COLS, {
+    maxSide: 1600,
+    flatDocument: true,
+    uploadClass: cls,
+    rowCount: ROWS,
+  });
+  const ms = Date.now() - t0;
+  assert(norm.sheetDetected && !!norm.canvas, 'desktop-upload: sheetDetected false');
+  assert(ms < 8000, `desktop-upload normalize too slow: ${ms}ms`);
+  gradeCanvas(norm.canvas!, 'desktop-upload');
+}
+
 console.log('ok: golden overlay PNG+JPG+PDF 30/30');

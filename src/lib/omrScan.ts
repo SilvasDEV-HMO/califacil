@@ -562,7 +562,8 @@ function countDarkCornerPatches(
 
 function isWarpedLetterCanvas(W: number, H: number): boolean {
   const aspect = W / Math.max(1, H);
-  return aspect > 0.72 && aspect < 0.86;
+  // Carta US ~0.773 y A4 ~0.707 (escáneres recortan un poco más estrecho).
+  return aspect > 0.66 && aspect < 0.88;
 }
 
 /** True si el canvas tiene tamaño carta enderezado (850×1100 aprox.). */

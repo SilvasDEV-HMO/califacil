@@ -302,20 +302,17 @@ function isLikelyFlatCalifacilDocument(
   if (!isCalifacilExamSheetLikely(canvas, columns)) return false;
   if (!hasCalifacilAlignStrips(canvas)) return false;
   const aspect = canvas.width / Math.max(1, canvas.height);
-  if (!(aspect > 0.68 && aspect < 0.88)) return false;
+  if (!(aspect > 0.62 && aspect < 0.92)) return false;
 
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
   if (stripQuad) {
     const fill = measureRoiSheetFillRatio(stripQuad, canvas.width, canvas.height);
-    // Mesa alrededor: el quad de franjas no llena el frame.
-    if (fill < 0.72) return false;
+    // Cabecera + márgenes de escáner: la tabla no llena toda la página.
+    if (fill < 0.45) return false;
     return true;
   }
-  // Letter aspect sin stripQuad: solo flat si ya hay ≥3 esquinas (escaneo recortado).
-  if (isCalifacilWarpedLetterCanvas(canvas) && countCalifacilCornerMarkers(canvas) >= 3) {
-    return true;
-  }
-  return countCalifacilCornerMarkers(canvas) >= 3;
+  // A4/carta con franjas y rejilla, aunque el quad de franjas no cierre.
+  return true;
 }
 
 /** Clasifica subidas desktop para enrutar normalización y escaneo OMR. */
@@ -416,6 +413,10 @@ export function normalizeCalifacilGradeDocumentCanvas(
 
   // PDF / escaneo plano: enderezar tilt; preview y OMR comparten el mismo canvas.
   if (useFlatPath) {
+    if (uploadClass === 'flatScan') {
+      return finishOk(base, null, Math.max(base.width, base.height) > maxSide * 1.08);
+    }
+
     const oriented =
       autoOrientCalifacilSheet(base, columns, {
         useGuideCrop: false,
@@ -435,6 +436,11 @@ export function normalizeCalifacilGradeDocumentCanvas(
         !stripsOriented ||
         fillOriented < 0.72 ||
         !isLikelyFlatCalifacilDocument(oriented, columns));
+
+    // Escaneo/PNG plano ya es la hoja: no warpear (congela la UI y acaba en timeout).
+    if (uploadClass === 'flatScan') {
+      return finishOk(oriented, null, oriented !== base);
+    }
 
     if (
       dubiousFlat ||
@@ -464,6 +470,14 @@ export function normalizeCalifacilGradeDocumentCanvas(
   }
 
   // Foto: exigir hoja sola (nunca finish(base) con mesa).
+  if (
+    hasCalifacilAlignStrips(base) &&
+    isCalifacilExamSheetLikely(base, columns) &&
+    isCalifacilWarpedLetterCanvas(base)
+  ) {
+    return finishOk(base, null, Math.max(base.width, base.height) > maxSide * 1.08);
+  }
+
   if (isPhotoSheetWarpAcceptable(base)) {
     const ok = tryPhotoDoc(base, null, Math.max(base.width, base.height) > maxSide * 1.08);
     if (ok) return ok;

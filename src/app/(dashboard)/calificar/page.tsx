@@ -4877,7 +4877,7 @@ export default function CalificarPage() {
                 </div>
               )}
 
-              {!isMobile && exam && supportsCalifacil && canGradeStudents && (
+              {!isMobile && exam && supportsCalifacil && canGradeStudents && phase === 'elegir' && (
                 <div className="space-y-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-4">
                   <p className="text-sm text-gray-700">
                     Sube el escaneo de la hoja de respuestas en <strong>imagen</strong> o{' '}
