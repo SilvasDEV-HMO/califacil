@@ -22,7 +22,7 @@ type Props = {
 
 type BubbleCircle = { cx: number; cy: number; r: number };
 
-const RADIUS_SCALE = 0.36;
+const RADIUS_SCALE = 0.3;
 const SANE_BUBBLE_R_MIN = 0.002;
 const SANE_BUBBLE_R_MAX = 0.06;
 
@@ -67,11 +67,11 @@ function resolveCircle(
 ): BubbleCircle | null {
   const fromCell = cell ? cellToBubbleCircle(cell, imageW, imageH) : null;
   const maxRPx = fromCell?.r ?? Math.min(imageW, imageH) * 0.04;
-  // Preferir anillo del engine si r es sane (mismo canvas que el JPEG).
   if (bubble && isSaneBubbleR(bubble.r)) {
     const fromBubble = bubbleSampleToCircle(bubble, imageW, imageH, maxRPx);
+    // X del anillo; Y del renglón de la celda para que naranja y rojo no se encimen entre filas.
     return fromCell
-      ? { cx: fromBubble.cx, cy: fromBubble.cy, r: Math.min(fromBubble.r, fromCell.r) }
+      ? { cx: fromBubble.cx, cy: fromCell.cy, r: Math.min(fromBubble.r, fromCell.r) }
       : fromBubble;
   }
   return fromCell;
@@ -140,6 +140,10 @@ export function CalifacilOmrReviewOverlay({
           const pickBubble =
             pick !== null && pick >= 0 ? geometry.bubbles?.[row]?.[pick] : null;
           const pickCircle = resolveCircle(pickBubble, pickCell, W, H);
+          const rowCy = pickCircle?.cy ?? expectedCircle?.cy ?? null;
+          const expectedOnRow =
+            expectedCircle && rowCy != null ? { ...expectedCircle, cy: rowCy } : expectedCircle;
+          const pickOnRow = pickCircle && rowCy != null ? { ...pickCircle, cy: rowCy } : pickCircle;
 
           const isCorrect = hasExpected && pick !== null && pick === expectedPick;
           const isWrong = hasExpected && pick !== null && pick !== expectedPick;
@@ -147,11 +151,11 @@ export function CalifacilOmrReviewOverlay({
 
           return (
             <g key={row}>
-              {expectedCircle && !isCorrect ? (
+              {expectedOnRow && !isCorrect ? (
                 <circle
-                  cx={expectedCircle.cx}
-                  cy={expectedCircle.cy}
-                  r={expectedCircle.r}
+                  cx={expectedOnRow.cx}
+                  cy={expectedOnRow.cy}
+                  r={expectedOnRow.r}
                   fill={`rgba(234,88,12,${Math.max(0, Math.min(1, expectedOpacity))})`}
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}
@@ -159,33 +163,33 @@ export function CalifacilOmrReviewOverlay({
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {isCorrect && (pickCircle || expectedCircle) ? (
+              {isCorrect && (pickOnRow || expectedOnRow) ? (
                 <circle
-                  cx={(pickCircle ?? expectedCircle)!.cx}
-                  cy={(pickCircle ?? expectedCircle)!.cy}
-                  r={(pickCircle ?? expectedCircle)!.r}
+                  cx={(pickOnRow ?? expectedOnRow)!.cx}
+                  cy={(pickOnRow ?? expectedOnRow)!.cy}
+                  r={(pickOnRow ?? expectedOnRow)!.r}
                   fill="rgba(22,163,74,0.95)"
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {isWrong && pickCircle ? (
+              {isWrong && pickOnRow ? (
                 <circle
-                  cx={pickCircle.cx}
-                  cy={pickCircle.cy}
-                  r={pickCircle.r}
+                  cx={pickOnRow.cx}
+                  cy={pickOnRow.cy}
+                  r={pickOnRow.r}
                   fill="rgba(220,38,38,0.95)"
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {!hasExpected && pickCircle ? (
+              {!hasExpected && pickOnRow ? (
                 <circle
-                  cx={pickCircle.cx}
-                  cy={pickCircle.cy}
-                  r={pickCircle.r}
+                  cx={pickOnRow.cx}
+                  cy={pickOnRow.cy}
+                  r={pickOnRow.r}
                   fill="rgba(22,163,74,0.9)"
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}

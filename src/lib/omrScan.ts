@@ -5036,6 +5036,11 @@ export function snapReviewOverlayToPrintedRings(
         confidence: 0,
       });
     }
+    const rowCys = rowBubbles.map((b) => b.cy).filter((y) => Number.isFinite(y));
+    if (rowCys.length > 0) {
+      const rowCy = medianNumber(rowCys);
+      for (const b of rowBubbles) b.cy = rowCy;
+    }
     bubbles.push(rowBubbles);
   }
 
