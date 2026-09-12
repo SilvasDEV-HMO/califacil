@@ -16,6 +16,7 @@ import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
 } from '../src/lib/omr/pipeline.ts';
+import { scanDesktopGradeUnifiedOrLegacy } from '../src/lib/omr/unified-grade-scan.ts';
 import {
   attachAnswerSheetReviewBubbleOverlay,
   getOmrCanvasImageData,
@@ -203,6 +204,25 @@ gradeCanvas(pdfCanvas, 'pdf');
   gradeCanvas(pdfNorm.canvas!, 'pdf-normalize');
 }
 gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
+{
+  const png = await canvasFromJpegFile(pngPath);
+  const cls = classifyDesktopUploadCanvas(png, COLS);
+  assert(cls === 'flatScan', `png class ${cls} != flatScan`);
+  const t0 = Date.now();
+  const norm = normalizeCalifacilGradeDocumentCanvas(png, COLS, {
+    maxSide: 1600,
+    uploadClass: cls,
+    rowCount: ROWS,
+  });
+  const ms = Date.now() - t0;
+  assert(norm.sheetDetected && !!norm.canvas, 'png-normalize: sheetDetected false');
+  assert(ms < 4000, `png-normalize too slow (congela desktop): ${ms}ms`);
+  const ui = scanDesktopGradeUnifiedOrLegacy(norm.canvas!, COLS, ROWS);
+  const got = picksKey(ui.picks);
+  const want = GROUND_TRUTH.map((i) => LETTERS[i]).join('');
+  assert(got === want, `png-ui-scan picks ${got} != ${want}`);
+  console.log(`ok: png-ui-scan picks=${got} normalize=${ms}ms`);
+}
 gradeCanvas(await canvasFromJpegFile(path.join(fixtures, 'scan-luis-30.jpg')), 'jpg');
 
 const desktopUploadPath = path.join(fixtures, 'scan-luis-desktop-upload.jpg');

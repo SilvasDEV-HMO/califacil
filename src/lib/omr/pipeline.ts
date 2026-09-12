@@ -303,19 +303,16 @@ function isLikelyFlatCalifacilDocument(
   opts?: { flatDocument?: boolean }
 ): boolean {
   if (opts?.flatDocument) return true;
-  if (!isCalifacilExamSheetLikely(canvas, columns)) return false;
-  if (!hasCalifacilAlignStrips(canvas)) return false;
   const aspect = canvas.width / Math.max(1, canvas.height);
   if (!(aspect > 0.62 && aspect < 0.92)) return false;
-
+  if (!hasCalifacilAlignStrips(canvas)) {
+    return isCalifacilExamSheetLikely(canvas, columns);
+  }
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
   if (stripQuad) {
     const fill = measureRoiSheetFillRatio(stripQuad, canvas.width, canvas.height);
-    // Cabecera + márgenes de escáner: la tabla no llena toda la página.
     if (fill < 0.45) return false;
-    return true;
   }
-  // A4/carta con franjas y rejilla, aunque el quad de franjas no cierre.
   return true;
 }
 
@@ -471,8 +468,8 @@ export function normalizeCalifacilGradeDocumentCanvas(
     return finishOk(oriented, null, oriented !== base);
   }
 
-  // Foto / recorte de tabla (móvil): si hay rejilla de bolitas, no warpear a carta.
-  if (uploadClass === 'photoCrop') {
+  // Recorte de tabla SIN franjas (foto móvil): no warpear. PNG/A4 con franjas ya es flatScan.
+  if (uploadClass === 'photoCrop' && !hasCalifacilAlignStrips(base)) {
     const tableFlat = tryPrintedTableAsFlat(base);
     if (tableFlat) return tableFlat;
   }

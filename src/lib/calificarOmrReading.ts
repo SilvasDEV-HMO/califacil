@@ -693,7 +693,11 @@ export async function runCalifacilOmrReadingPipeline(
         mergedResolved >= Math.max(1, Math.ceil(chunk.length * 0.5))));
 
   const insufficientForReview =
-    !mostlyBlank && mergedResolved < minResolved && !isMobileCamera && !partialDesktopOk;
+    !mostlyBlank &&
+    mergedResolved < minResolved &&
+    !isMobileCamera &&
+    !partialDesktopOk &&
+    isMobile;
 
   return {
     meta,

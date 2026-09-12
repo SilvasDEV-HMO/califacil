@@ -12,6 +12,7 @@ import {
   rereadOmrPicksOnGeometry,
   scanWarpedWithBestTableFrame,
   scanWarpedWithBestTableFrameAsync,
+  hasCalifacilAlignStrips,
   type CalifacilOmrScanGeometry,
   type CalifacilScanOptions,
   type OmrScanMetaResult,
@@ -354,11 +355,43 @@ async function recoverDesktopTableFrameAsync(
   return pickBetterOmrMeta(meta, tableMeta, rows);
 }
 
+function scanDesktopFlatDocument(
+  displayCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number
+): OmrScanMetaResult {
+  const tableRaw = scanWarpedWithBestTableFrame(displayCanvas, columns, rows, { fast: true });
+  let meta = finalizeUnifiedDisplayMeta(displayCanvas, tableRaw.meta, rows, columns, {
+    skipBubbleReattach: true,
+  });
+  return sanitizeAnswerSheetOmrMeta(meta, rows);
+}
+
+async function scanDesktopFlatDocumentAsync(
+  displayCanvas: HTMLCanvasElement,
+  columns: number,
+  rows: number
+): Promise<OmrScanMetaResult> {
+  const tableRaw = await scanWarpedWithBestTableFrameAsync(displayCanvas, columns, rows, {
+    fast: true,
+  });
+  let meta = finalizeUnifiedDisplayMeta(displayCanvas, tableRaw.meta, rows, columns, {
+    skipBubbleReattach: true,
+  });
+  return sanitizeAnswerSheetOmrMeta(meta, rows);
+}
+
 export function scanDesktopGradeUnifiedOrLegacy(
   displayCanvas: HTMLCanvasElement,
   columns: number,
   rows: number
 ): OmrScanMetaResult {
+  if (hasCalifacilAlignStrips(displayCanvas)) {
+    const tableMeta = scanDesktopFlatDocument(displayCanvas, columns, rows);
+    if (isDesktopFastPassEnough(tableMeta, rows, displayCanvas, columns)) {
+      return tableMeta;
+    }
+  }
   const scanCanvas = gradeScanCanvas(displayCanvas, OMR_DESKTOP_DOCUMENT_SCAN_MAX_SIDE);
   if (isUnifiedOmrEngineEnabled()) {
     const fast = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
@@ -395,6 +428,13 @@ export async function scanDesktopGradeUnifiedOrLegacyAsync(
     }
     setTimeout(resolve, 0);
   });
+
+  if (hasCalifacilAlignStrips(displayCanvas)) {
+    const tableMeta = await scanDesktopFlatDocumentAsync(displayCanvas, columns, rows);
+    if (isDesktopFastPassEnough(tableMeta, rows, displayCanvas, columns)) {
+      return tableMeta;
+    }
+  }
 
   if (isUnifiedOmrEngineEnabled()) {
     const fast = runUnifiedOmrPipeline(scanCanvas, columns, rows, {
