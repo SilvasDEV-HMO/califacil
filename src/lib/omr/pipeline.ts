@@ -411,9 +411,9 @@ export function normalizeCalifacilGradeDocumentCanvas(
     (opts?.flatDocument === true &&
       isLikelyFlatCalifacilDocument(base, columns, { flatDocument: true }));
 
-  // PDF / escaneo plano: enderezar tilt; preview y OMR comparten el mismo canvas.
+  // PDF / escaneo plano: no auto-orientar ni warpear (congela la UI y tuerce la hoja).
   if (useFlatPath) {
-    if (uploadClass === 'flatScan') {
+    if (uploadClass === 'flatScan' || uploadClass === 'pdf') {
       return finishOk(base, null, Math.max(base.width, base.height) > maxSide * 1.08);
     }
 

@@ -1439,8 +1439,14 @@ export default function CalificarPage() {
       const preserveCapturedFrame = isMobileCamera
         ? false
         : isMobile || isDesktopFileUpload || gradePreWarped;
+      const skipDesktopAutoOrient =
+        isServerRenderedPdfPage ||
+        classifiedUploadKind === 'pdf' ||
+        classifiedUploadKind === 'flatDocument' ||
+        opts?.uploadKind === 'pdf' ||
+        gradePreWarped;
       const oriented =
-        gradePreWarped
+        skipDesktopAutoOrient
           ? gradeSource
           : isMobileCamera
             ? (autoOrientCalifacilSheet(gradeSource, omrCols, {
@@ -1450,13 +1456,13 @@ export default function CalificarPage() {
             : isDesktopFileUpload
               ? (autoOrientCalifacilSheet(gradeSource, omrCols, {
                   useGuideCrop: false,
-                  allowTiltSweep: true,
+                  allowTiltSweep: false,
                 }) ?? gradeSource)
               : preserveCapturedFrame
                 ? gradeSource
                 : (autoOrientCalifacilSheet(gradeSource, omrCols, {
                     useGuideCrop: false,
-                    allowTiltSweep: true,
+                    allowTiltSweep: false,
                   }) ?? gradeSource);
       const examCanvas =
         oriented instanceof HTMLCanvasElement
@@ -2057,6 +2063,8 @@ export default function CalificarPage() {
       await finalizeCapturedSheet(scanCanvas, pseudoFile, {
         displaySource: scanCanvas,
         skipSheetValidation: true,
+        preWarped: true,
+        uploadKind: 'pdf',
       });
     },
     [finalizeCapturedSheet, omrCols, omrRowCount]

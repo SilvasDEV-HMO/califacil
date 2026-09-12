@@ -188,6 +188,20 @@ if (!existsSync(pngPath)) {
   await writeFile(pngPath, png);
 }
 gradeCanvas(pdfCanvas, 'pdf');
+{
+  const t0 = Date.now();
+  const pdfNorm = normalizeCalifacilGradeDocumentCanvas(pdfCanvas, COLS, {
+    maxSide: 1600,
+    flatDocument: true,
+    uploadClass: 'pdf',
+    rowCount: ROWS,
+  });
+  const ms = Date.now() - t0;
+  assert(pdfNorm.sheetDetected && !!pdfNorm.canvas, 'pdf-normalize: sheetDetected false');
+  assert(pdfNorm.canvas!.height > pdfNorm.canvas!.width * 1.05, 'pdf-normalize rotó a landscape');
+  assert(ms < 8000, `pdf-normalize too slow: ${ms}ms`);
+  gradeCanvas(pdfNorm.canvas!, 'pdf-normalize');
+}
 gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
 gradeCanvas(await canvasFromJpegFile(path.join(fixtures, 'scan-luis-30.jpg')), 'jpg');
 
