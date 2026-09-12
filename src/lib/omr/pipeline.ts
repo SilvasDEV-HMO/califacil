@@ -433,6 +433,7 @@ export function normalizeCalifacilGradeDocumentCanvas(
       return finishOk(base, null, Math.max(base.width, base.height) > maxSide * 1.08);
     }
 
+    // flatDocument sin clasificar como PDF/escaneo: orientar y warpear si hace falta.
     const oriented =
       autoOrientCalifacilSheet(base, columns, {
         useGuideCrop: false,
@@ -445,25 +446,13 @@ export function normalizeCalifacilGradeDocumentCanvas(
       : 0;
     const cornersOriented = countCalifacilCornerMarkers(oriented);
     const stripsOriented = hasCalifacilAlignStrips(oriented);
-    // flatScan dudoso (tilt/mesa/fill): tratar como foto y warp real.
     const dubiousFlat =
-      uploadClass === 'flatScan' &&
-      (cornersOriented < 3 ||
-        !stripsOriented ||
-        fillOriented < 0.72 ||
-        !isLikelyFlatCalifacilDocument(oriented, columns));
-
-    // Escaneo/PNG plano ya es la hoja: no warpear (congela la UI y acaba en timeout).
-    if (uploadClass === 'flatScan') {
-      return finishOk(oriented, null, oriented !== base);
-    }
-
-    if (
-      dubiousFlat ||
       cornersOriented < 3 ||
       !stripsOriented ||
-      !isPhotoSheetWarpAcceptable(oriented)
-    ) {
+      fillOriented < 0.72 ||
+      !isLikelyFlatCalifacilDocument(oriented, columns);
+
+    if (dubiousFlat || !isPhotoSheetWarpAcceptable(oriented)) {
       const fastWarp = warpCalifacilMobileCaptureFast(oriented, { maxErrorPx });
       if (fastWarp.warped) {
         const ok = tryPhotoDoc(fastWarp.warped, fastWarp.alignment, true);
@@ -474,13 +463,10 @@ export function normalizeCalifacilGradeDocumentCanvas(
         const ok = tryPhotoDoc(fullWarp.warped, fullWarp.alignment, true);
         if (ok) return ok;
       }
-      // PDF: permitir orientado aunque el warp falle; foto flat dudosa → no inventar score.
-      if (uploadClass !== 'pdf') {
-        if (isPhotoSheetWarpAcceptable(oriented) || isLikelyFlatCalifacilDocument(oriented, columns)) {
-          return finishOk(oriented, null, oriented !== base);
-        }
-        return finishFail();
+      if (isPhotoSheetWarpAcceptable(oriented) || isLikelyFlatCalifacilDocument(oriented, columns)) {
+        return finishOk(oriented, null, oriented !== base);
       }
+      return finishFail();
     }
     return finishOk(oriented, null, oriented !== base);
   }
