@@ -4541,13 +4541,13 @@ export function refineBubbleCenterInCell(
   width: number,
   height: number,
   cell: OmrNormRect,
-  opts?: { preferInk?: boolean }
+  opts?: { preferInk?: boolean; searchStepDivisor?: number; originPx?: Point }
 ): Point {
+  const cx0 = (cell.x + cell.w * 0.5) * width;
+  const cy0 = (cell.y + cell.h * 0.5) * height;
   if (opts?.preferInk !== false) {
     const inkCenter = findInkCentroidInCell(data, width, height, cell);
     if (inkCenter) {
-      const cx0 = (cell.x + cell.w * 0.5) * width;
-      const cy0 = (cell.y + cell.h * 0.5) * height;
       const cellMin = Math.min(cell.w * width, cell.h * height);
       const maxInkDist = cellMin * 0.38;
       if (Math.hypot(inkCenter.x - cx0, inkCenter.y - cy0) <= maxInkDist) {
@@ -4556,21 +4556,22 @@ export function refineBubbleCenterInCell(
     }
   }
 
-  const cx0 = (cell.x + cell.w * 0.5) * width;
-  const cy0 = (cell.y + cell.h * 0.5) * height;
+  const originX = Number.isFinite(opts?.originPx?.x) ? opts!.originPx!.x : cx0;
+  const originY = Number.isFinite(opts?.originPx?.y) ? opts!.originPx!.y : cy0;
   const cellW = cell.w * width;
   const cellH = cell.h * height;
   const searchR = Math.max(2, Math.round(Math.min(cellW, cellH) * 0.78));
   const diskR = Math.max(1, Math.round(Math.min(cellW, cellH) * 0.24));
   const innerR = Math.max(1, Math.round(diskR * 0.42));
-  const step = Math.max(1, Math.round(searchR / 4));
-  let bestX = cx0;
-  let bestY = cy0;
+  const stepDiv = Math.max(4, Math.round(opts?.searchStepDivisor ?? 4));
+  const step = Math.max(1, Math.round(searchR / stepDiv));
+  let bestX = originX;
+  let bestY = originY;
   let bestScore = Number.NEGATIVE_INFINITY;
   for (let dy = -searchR; dy <= searchR; dy += step) {
     for (let dx = -searchR; dx <= searchR; dx += step) {
-      const px = Math.round(cx0 + dx);
-      const py = Math.round(cy0 + dy);
+      const px = Math.round(originX + dx);
+      const py = Math.round(originY + dy);
       const ringLum = meanDiskLuminance(data, width, height, px, py, diskR);
       const innerLum = meanDiskLuminance(data, width, height, px, py, innerR);
       const ringDark = 255 - ringLum;
@@ -4583,6 +4584,14 @@ export function refineBubbleCenterInCell(
     }
   }
   return { x: bestX, y: bestY };
+}
+
+function medianNumber(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid]!;
+  return (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
 /** 0–1: qué tan bien las celdas coinciden con picos de burbuja impresos (para elegir geometría). */
@@ -4797,7 +4806,7 @@ export function attachAnswerSheetReviewBubbleOverlay(
   meta: OmrScanMetaResult,
   columns: number,
   rowCount: number,
-  opts?: { forceRebuild?: boolean; maxShiftRatio?: number }
+  opts?: { forceRebuild?: boolean; maxShiftRatio?: number; fineSearch?: boolean }
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
   if (!meta.geometry) return meta;
@@ -4868,7 +4877,10 @@ export function attachAnswerSheetReviewBubbleOverlay(
       const cell = rowCells[c];
       if (!cell) continue;
       // Anclar a anillos impresos (nunca preferInk en review).
-      const raw = refineBubbleCenterInCell(data, W, H, cell, { preferInk: false });
+      const raw = refineBubbleCenterInCell(data, W, H, cell, {
+        preferInk: false,
+        searchStepDivisor: opts?.fineSearch ? 10 : 4,
+      });
       const cx0 = (cell.x + cell.w * 0.5) * W;
       const cy0 = (cell.y + cell.h * 0.5) * H;
       const maxDx = cell.w * W * maxShiftRatio;
@@ -4897,6 +4909,103 @@ export function attachAnswerSheetReviewBubbleOverlay(
 
   return {
     ...meta,
+    geometry: {
+      ...geom,
+      bubbles,
+    },
+  };
+}
+
+/**
+ * Overlay-only: ancla bolitas a anillos impresos (paso fino + sesgo mediano).
+ * No relée ni sustituye picks.
+ */
+export function snapReviewOverlayToPrintedRings(
+  canvas: HTMLCanvasElement,
+  meta: OmrScanMetaResult,
+  columns: number,
+  rowCount: number,
+  opts?: { maxShiftRatio?: number; biasRows?: number }
+): OmrScanMetaResult {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const maxShiftRatio = opts?.maxShiftRatio ?? 0.45;
+  const first = attachAnswerSheetReviewBubbleOverlay(canvas, meta, columns, rowCount, {
+    forceRebuild: true,
+    maxShiftRatio,
+    fineSearch: true,
+  });
+  const geom = first.geometry;
+  if (!geom?.cells?.length || !geom.bubbles?.length) return first;
+
+  const W = Math.max(1, canvas.width);
+  const H = Math.max(1, canvas.height);
+  const biasRows = Math.max(1, Math.min(rows, opts?.biasRows ?? rows));
+  const dxs: number[] = [];
+  const dys: number[] = [];
+  for (let r = 0; r < biasRows; r++) {
+    const rowCells = geom.cells[r];
+    const rowBubbles = geom.bubbles[r];
+    if (!rowCells?.length || !rowBubbles?.length) continue;
+    for (let c = 0; c < cols; c++) {
+      const cell = rowCells[c];
+      const b = rowBubbles[c];
+      if (!cell || !b || !Number.isFinite(b.cx) || !Number.isFinite(b.cy)) continue;
+      dxs.push(b.cx - (cell.x + cell.w * 0.5));
+      dys.push(b.cy - (cell.y + cell.h * 0.5));
+    }
+  }
+  const medDx = medianNumber(dxs);
+  const medDy = medianNumber(dys);
+  const data = getOmrCanvasImageData(canvas);
+  const bubbles: CalifacilOmrBubbleSample[][] = [];
+
+  for (let r = 0; r < rows; r++) {
+    const rowCells = geom.cells[r];
+    const rowBubbles: CalifacilOmrBubbleSample[] = [];
+    if (!rowCells?.length) {
+      bubbles.push(rowBubbles);
+      continue;
+    }
+    for (let c = 0; c < cols; c++) {
+      const cell = rowCells[c];
+      if (!cell) continue;
+      const cx0 = (cell.x + cell.w * 0.5) * W;
+      const cy0 = (cell.y + cell.h * 0.5) * H;
+      const origin = { x: cx0 + medDx * W, y: cy0 + medDy * H };
+      const raw = data
+        ? refineBubbleCenterInCell(data, W, H, cell, {
+            preferInk: false,
+            searchStepDivisor: 10,
+            originPx: origin,
+          })
+        : origin;
+      const maxDx = cell.w * W * maxShiftRatio;
+      const maxDy = cell.h * H * maxShiftRatio;
+      const center = {
+        x: Math.max(cx0 - maxDx, Math.min(cx0 + maxDx, raw.x)),
+        y: Math.max(cy0 - maxDy, Math.min(cy0 + maxDy, raw.y)),
+      };
+      const cellW = Math.max(1, cell.w * W);
+      const cellH = Math.max(1, cell.h * H);
+      const rPx = Math.max(3, Math.min(cellW, cellH) * 0.38);
+      rowBubbles.push({
+        cx: center.x / W,
+        cy: center.y / H,
+        r: rPx / Math.min(W, H),
+        bounds: cell,
+        inkFrac: 0,
+        fillDark: 0,
+        ringDark: 0,
+        score: 0,
+        confidence: 0,
+      });
+    }
+    bubbles.push(rowBubbles);
+  }
+
+  return {
+    ...first,
     geometry: {
       ...geom,
       bubbles,

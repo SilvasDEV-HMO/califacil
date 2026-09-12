@@ -18,7 +18,7 @@ import {
 } from '../src/lib/omr/pipeline.ts';
 import { scanDesktopGradeUnifiedOrLegacy } from '../src/lib/omr/unified-grade-scan.ts';
 import {
-  attachAnswerSheetReviewBubbleOverlay,
+  snapReviewOverlayToPrintedRings,
   getOmrCanvasImageData,
   scaleCanvasToMaxSide,
   scanWarpedWithBestTableFrame,
@@ -127,9 +127,9 @@ function gradeCanvas(source: HTMLCanvasElement, label: string) {
   const canvas = scaleCanvasToMaxSide(source, 1600);
   console.log(`${label}: ${source.width}x${source.height} -> ${canvas.width}x${canvas.height}`);
   const { meta } = scanWarpedWithBestTableFrame(canvas, COLS, ROWS, { fast: true });
-  const snapped = attachAnswerSheetReviewBubbleOverlay(canvas, meta, COLS, ROWS, {
-    forceRebuild: true,
-    maxShiftRatio: 0.28,
+  const snapped = snapReviewOverlayToPrintedRings(canvas, meta, COLS, ROWS, {
+    maxShiftRatio: 0.45,
+    biasRows: ROWS,
   });
   assert(
     picksKey(snapped.picks.slice(0, ROWS)) === picksKey(meta.picks.slice(0, ROWS)),
@@ -238,9 +238,9 @@ gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
   const got = picksKey(ui.picks);
   const want = GROUND_TRUTH.map((i) => LETTERS[i]).join('');
   assert(got === want, `png-ui-scan picks ${got} != ${want}`);
-  const uiOverlay = attachAnswerSheetReviewBubbleOverlay(norm.canvas!, ui, COLS, ROWS, {
-    forceRebuild: true,
-    maxShiftRatio: 0.28,
+  const uiOverlay = snapReviewOverlayToPrintedRings(norm.canvas!, ui, COLS, ROWS, {
+    maxShiftRatio: 0.45,
+    biasRows: ROWS,
   });
   assert(picksKey(uiOverlay.picks) === got, 'png-ui overlay attach cambió picks');
   assert((uiOverlay.geometry?.bubbles?.length ?? 0) >= ROWS, 'png-ui overlay sin anillos');

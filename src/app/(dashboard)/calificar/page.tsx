@@ -92,8 +92,7 @@ import {
   cropAnswerSheetNameSnippetDataUrl,
   sanitizeAnswerSheetOmrMeta,
   answerSheetRowInkMedian,
-  rereadOmrPicksOnGeometry,
-  attachAnswerSheetReviewBubbleOverlay,
+  snapReviewOverlayToPrintedRings,
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
   buildAnswerSheetOmrGeometry,
@@ -1645,12 +1644,12 @@ export default function CalificarPage() {
         let geom = meta.geometry;
         if (reviewCanvas instanceof HTMLCanvasElement) {
           if (geom?.cells?.length) {
-            const attached = attachAnswerSheetReviewBubbleOverlay(
+            const attached = snapReviewOverlayToPrintedRings(
               reviewCanvas,
               { ...meta, geometry: geom },
               omrCols,
               omrRowCount,
-              { forceRebuild: true, maxShiftRatio: 0.28 }
+              { maxShiftRatio: 0.45, biasRows: chunk.length }
             );
             geom = attached.geometry ?? geom;
           }
@@ -1747,53 +1746,39 @@ export default function CalificarPage() {
         }
         if (isStaleRead()) return { success: false };
 
-        // Overlay: PDF/escaneo usa la geometría de la tabla leída (no plantilla carta).
+        // Overlay: geometría de tabla si existe (PDF, escaneo o foto); anclar a anillos, sin reléer picks.
         let reviewGeom = meta.geometry;
-        let picksForUi = raw.slice(0, chunk.length);
-        const keepEngineOverlay =
-          Boolean(reviewGeom?.cells?.length) &&
-          (desktopUploadKind === 'pdf' ||
-            desktopUploadKind === 'flatDocument' ||
-            desktopUploadKind === 'flatScan' ||
-            classifiedUploadKind === 'pdf' ||
-            isServerRenderedPdfPage);
-        if (previewCanvas && keepEngineOverlay && reviewGeom) {
+        if (previewCanvas && reviewGeom?.cells?.length) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
             reviewGeom,
             previewCanvas.width,
             previewCanvas.height
           );
-          const attached = attachAnswerSheetReviewBubbleOverlay(
+          const attached = snapReviewOverlayToPrintedRings(
             previewCanvas,
             { ...meta, geometry: reviewGeom, picks: raw },
             omrCols,
             omrRowCount,
-            { forceRebuild: true, maxShiftRatio: 0.28 }
+            { maxShiftRatio: 0.45, biasRows: chunk.length }
           );
           reviewGeom = attached.geometry ?? reviewGeom;
         } else if (previewCanvas) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
-            buildDisplayOverlayGeometry(previewCanvas, omrCols, omrRowCount),
+            buildDisplayOverlayGeometry(previewCanvas, omrCols, omrRowCount, {
+              skipSnap: true,
+            }),
             previewCanvas.width,
             previewCanvas.height
           );
           if (reviewGeom?.cells?.length) {
-            const reread = rereadOmrPicksOnGeometry(
+            const attached = snapReviewOverlayToPrintedRings(
               previewCanvas,
-              reviewGeom,
+              { ...meta, geometry: reviewGeom, picks: raw },
               omrCols,
-              chunk.length,
-              meta
+              omrRowCount,
+              { maxShiftRatio: 0.45, biasRows: chunk.length }
             );
-            const rereadCount = countResolvedOmrPicks(reread.picks.slice(0, chunk.length));
-            const prevCount = countResolvedOmrPicks(picksForUi);
-            if (rereadCount >= Math.max(1, Math.ceil(chunk.length * 0.4)) || rereadCount >= prevCount) {
-              picksForUi = reread.picks.slice(0, chunk.length);
-              raw.splice(0, raw.length, ...reread.picks);
-              setReviewOmrPicks(picksForUi);
-              const remapped = mapRawToDraft(raw, chunk);
-              setDraftSelections(remapped.draft);
-            }
+            reviewGeom = attached.geometry ?? reviewGeom;
           }
         }
         setReviewOmrGeometry(reviewGeom);
