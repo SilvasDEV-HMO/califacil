@@ -105,8 +105,13 @@ export function isQuestionIllustrationImage(value: string): boolean {
 
 export const EXAM_POINTS_CAP = 100;
 
+export function questionPoints(question: { points?: number | null }): number {
+  const p = question.points ?? 1;
+  return p > 0 ? p : 1;
+}
+
 export function examMaxScore(questions: { points?: number | null }[]): number {
-  return questions.reduce((s, q) => s + (q.points ?? 1), 0);
+  return questions.reduce((s, q) => s + questionPoints(q), 0);
 }
 
 /** Reparte 100 puntos enteros entre N preguntas. */
@@ -124,11 +129,6 @@ export function shuffleArray<T>(items: T[]): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
-}
-
-export function questionPoints(question: { points?: number | null }): number {
-  const p = question.points ?? 1;
-  return p > 0 ? p : 1;
 }
 
 export function normalizeAnswerText(value: string | null | undefined): string {
@@ -165,11 +165,17 @@ export function isMultipleChoiceAnswerCorrect(
   studentAnswer: string | null | undefined,
   correctAnswer: string | null | undefined
 ): boolean {
+  const studentRaw = (studentAnswer ?? '').trim();
+  // Vacío / sin marca = incorrecto (nunca acierto por comparar "" === "").
+  if (!studentRaw) return false;
+
   const studentIdx = resolveOptionIndexFromValue(options, studentAnswer);
   const correctIdx = resolveOptionIndexFromValue(options, correctAnswer);
   if (studentIdx !== null && correctIdx !== null) {
     return studentIdx === correctIdx;
   }
+  const correctRaw = (correctAnswer ?? '').trim();
+  if (!correctRaw) return false;
   return normalizeAnswerText(studentAnswer) === normalizeAnswerText(correctAnswer);
 }
 
