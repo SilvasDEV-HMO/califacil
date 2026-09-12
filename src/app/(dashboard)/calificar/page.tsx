@@ -93,6 +93,7 @@ import {
   sanitizeAnswerSheetOmrMeta,
   answerSheetRowInkMedian,
   rereadOmrPicksOnGeometry,
+  attachAnswerSheetReviewBubbleOverlay,
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
   buildAnswerSheetOmrGeometry,
@@ -956,19 +957,14 @@ export default function CalificarPage() {
           ? snap.columnPicks
           : draftSelectionsToColumnPicks(chunk, snap.selectionsByQuestionId);
       const chunkStats = gradeOmrChunkPicksAgainstVirtualKey(chunk, picksRaw, virtualKeyMaps);
-      // Overlay visual: plantilla 30 filas; scoring usa solo el chunk activo.
-      const padToOmr = (arr: (number | null)[]) => {
-        const out = arr.slice(0, omrRowCount);
-        while (out.length < omrRowCount) out.push(null);
-        return out;
-      };
+      const n = Math.max(1, chunk.length);
       return {
         previewUrl: snap.previewUrl,
         nameCropUrl: snap.nameCropUrl,
         geometry: snap.geometry,
-        picks: padToOmr(picksRaw),
-        expectedPicks: padToOmr(expectedPicksRaw),
-        rowCount: omrRowCount,
+        picks: picksRaw.slice(0, n),
+        expectedPicks: expectedPicksRaw.slice(0, n),
+        rowCount: n,
         correct: chunkStats.correct,
         total: chunkStats.total > 0 ? chunkStats.total : chunk.length,
         pct: chunkStats.pct,
@@ -980,7 +976,6 @@ export default function CalificarPage() {
     virtualKeyMaps,
     virtualKeyCorrectIndexByQuestionId,
     mobileResultsDraft,
-    omrRowCount,
   ]);
 
   const currentZipGradeSheet = zipGradeSheets[resultsSheetIdx] ?? null;
@@ -1647,8 +1642,18 @@ export default function CalificarPage() {
         let snapW = 0;
         let snapH = 0;
         let nameCropUrl: string | null = null;
-        const geom = meta.geometry;
+        let geom = meta.geometry;
         if (reviewCanvas instanceof HTMLCanvasElement) {
+          if (geom?.cells?.length) {
+            const attached = attachAnswerSheetReviewBubbleOverlay(
+              reviewCanvas,
+              { ...meta, geometry: geom },
+              omrCols,
+              omrRowCount,
+              { forceRebuild: true, maxShiftRatio: 0.28 }
+            );
+            geom = attached.geometry ?? geom;
+          }
           const preview = canvasPreviewJpeg(reviewCanvas, 900, 0.78);
           if (preview) {
             snapUrl = preview.dataUrl;
@@ -1758,6 +1763,14 @@ export default function CalificarPage() {
             previewCanvas.width,
             previewCanvas.height
           );
+          const attached = attachAnswerSheetReviewBubbleOverlay(
+            previewCanvas,
+            { ...meta, geometry: reviewGeom, picks: raw },
+            omrCols,
+            omrRowCount,
+            { forceRebuild: true, maxShiftRatio: 0.28 }
+          );
+          reviewGeom = attached.geometry ?? reviewGeom;
         } else if (previewCanvas) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
             buildDisplayOverlayGeometry(previewCanvas, omrCols, omrRowCount),
@@ -5150,21 +5163,10 @@ export default function CalificarPage() {
                   >
                     <CalifacilOmrReviewOverlay
                       geometry={reviewOmrGeometry}
-                      picks={(() => {
-                        const picks = draftSelectionsToColumnPicks(
-                          currentChunk,
-                          draftSelections
-                        );
-                        while (picks.length < omrRowCount) picks.push(null);
-                        return picks;
-                      })()}
-                      expectedPicks={(() => {
-                        const picks = [...expectedChunkPicks];
-                        while (picks.length < omrRowCount) picks.push(null);
-                        return picks;
-                      })()}
+                      picks={draftSelectionsToColumnPicks(currentChunk, draftSelections)}
+                      expectedPicks={expectedChunkPicks}
                       expectedOpacity={overlayOpacity / 100}
-                      rowCount={omrRowCount}
+                      rowCount={currentChunk.length}
                       clipRect={null}
                     />
                   </CalifacilReviewImageStack>

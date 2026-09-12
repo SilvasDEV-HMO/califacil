@@ -129,8 +129,16 @@ function gradeCanvas(source: HTMLCanvasElement, label: string) {
   const { meta } = scanWarpedWithBestTableFrame(canvas, COLS, ROWS, { fast: true });
   const snapped = attachAnswerSheetReviewBubbleOverlay(canvas, meta, COLS, ROWS, {
     forceRebuild: true,
-    maxShiftRatio: 0.3,
+    maxShiftRatio: 0.28,
   });
+  assert(
+    picksKey(snapped.picks.slice(0, ROWS)) === picksKey(meta.picks.slice(0, ROWS)),
+    `${label}: attach overlay cambió picks`
+  );
+  assert(
+    (snapped.geometry?.bubbles?.length ?? 0) >= ROWS,
+    `${label}: overlay sin bubbles de anillo`
+  );
   const overlay = syncCalifacilOmrGeometryImageSize(
     snapped.geometry ?? meta.geometry!,
     canvas.width,
@@ -224,10 +232,18 @@ gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
   const ms = Date.now() - t0;
   assert(norm.sheetDetected && !!norm.canvas, 'png-normalize: sheetDetected false');
   assert(ms < 4000, `png-normalize too slow (congela desktop): ${ms}ms`);
-  const ui = scanDesktopGradeUnifiedOrLegacy(norm.canvas!, COLS, ROWS);
+  const ui = scanDesktopGradeUnifiedOrLegacy(norm.canvas!, COLS, ROWS, {
+    tableFrameOnly: true,
+  });
   const got = picksKey(ui.picks);
   const want = GROUND_TRUTH.map((i) => LETTERS[i]).join('');
   assert(got === want, `png-ui-scan picks ${got} != ${want}`);
+  const uiOverlay = attachAnswerSheetReviewBubbleOverlay(norm.canvas!, ui, COLS, ROWS, {
+    forceRebuild: true,
+    maxShiftRatio: 0.28,
+  });
+  assert(picksKey(uiOverlay.picks) === got, 'png-ui overlay attach cambió picks');
+  assert((uiOverlay.geometry?.bubbles?.length ?? 0) >= ROWS, 'png-ui overlay sin anillos');
   console.log(`ok: png-ui-scan picks=${got} normalize=${ms}ms`);
   {
     const tMobile = Date.now();
