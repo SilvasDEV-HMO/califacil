@@ -125,7 +125,6 @@ import {
 import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
-  isMobileLetterGradeCanvasReady,
   isPhotoSheetWarpAcceptable,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
@@ -374,16 +373,6 @@ function resolveCaptureFrameQuad(
 }
 
 /** Foto de cámara subida en desktop: warp vía normalizeCalifacilGradeDocumentCanvas. */
-function defaultDocumentQuad(canvasW: number, canvasH: number): RoiQuad {
-  const m = 0.035;
-  return [
-    { x: canvasW * m, y: canvasH * m },
-    { x: canvasW * (1 - m), y: canvasH * m },
-    { x: canvasW * (1 - m), y: canvasH * (1 - m) },
-    { x: canvasW * m, y: canvasH * (1 - m) },
-  ];
-}
-
 function frameQuadOnFullCanvas(
   roiQuad: RoiQuad,
   roiCapture: MobileGuideRoiCapture,
@@ -864,9 +853,7 @@ export default function CalificarPage() {
       const displayCanvas = prepared.canvas;
 
       const sheetFillOk = (c: HTMLCanvasElement): boolean => {
-        if (isPhotoSheetWarpAcceptable(c) || isMobileLetterGradeCanvasReady(c)) {
-          return true;
-        }
+        if (isPhotoSheetWarpAcceptable(c)) return true;
         if (isMobileWarpedAnswerSheetAcceptable(c)) return true;
         return false;
       };
@@ -1649,7 +1636,7 @@ export default function CalificarPage() {
               { ...meta, geometry: geom },
               omrCols,
               omrRowCount,
-              { maxShiftRatio: 0.45, biasRows: chunk.length }
+              { maxShiftRatio: 0.45, maxShiftRatioY: 0.32, biasRows: omrRowCount }
             );
             geom = attached.geometry ?? geom;
           }
@@ -1759,7 +1746,7 @@ export default function CalificarPage() {
             { ...meta, geometry: reviewGeom, picks: raw },
             omrCols,
             omrRowCount,
-            { maxShiftRatio: 0.45, biasRows: chunk.length }
+            { maxShiftRatio: 0.45, maxShiftRatioY: 0.32, biasRows: omrRowCount }
           );
           reviewGeom = attached.geometry ?? reviewGeom;
         } else if (previewCanvas) {
@@ -1776,7 +1763,7 @@ export default function CalificarPage() {
               { ...meta, geometry: reviewGeom, picks: raw },
               omrCols,
               omrRowCount,
-              { maxShiftRatio: 0.45, biasRows: chunk.length }
+              { maxShiftRatio: 0.45, maxShiftRatioY: 0.32, biasRows: omrRowCount }
             );
             reviewGeom = attached.geometry ?? reviewGeom;
           }
@@ -2172,8 +2159,8 @@ export default function CalificarPage() {
           toast.error('No se pudo leer la imagen.');
           return;
         }
-        // Galería móvil: mismo pipeline que desktop (sin warp de cámara).
-        await finalizeCapturedSheet(fullCanvas, file, { skipReviewUi: true });
+        // Galería móvil: mismo recorte/warp a carta que la cámara.
+        await processMobileCapturedCanvas(fullCanvas, null, { fromGallery: true });
       } else {
         setLiveStatus('Leyendo examen…');
         await yieldForSpinnerPaint();
@@ -3529,10 +3516,9 @@ export default function CalificarPage() {
         return;
       }
 
-      // Galería / live: franjas o frameQuad del gate. Nunca largestQuad (mesa/borde).
+      // Galería / live: franjas o frameQuad del gate. Nunca el fotograma entero.
       const stripQuad = detectAnswerSheetQuadViaAlignStrips(fullCanvas);
-      const frameQuad =
-        opts?.frameQuad ?? stripQuad ?? (guideCropped ? defaultDocumentQuad(fullCanvas.width, fullCanvas.height) : null);
+      const frameQuad = opts?.frameQuad ?? stripQuad ?? null;
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
       let sheetKind: ZipGradeSheetKind =
@@ -3542,32 +3528,27 @@ export default function CalificarPage() {
       let alignment: WarpAlignmentReport | null = null;
 
       if (sheetKind !== 'zipgrade') {
-        // Warp rápido; softAccept solo intenta encuadrar, luego exigimos barra desktop foto.
         const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
           frameQuad: frameQuad ?? undefined,
-          maxErrorPx: guideCropped
-            ? MOBILE_WARP_FALLBACK_MAX_ERROR_PX + 6
-            : MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-          softAccept: guideCropped,
+          maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
         });
         warped = fastWarp.warped;
         alignment = fastWarp.alignment;
         if (!warped) {
           const warpedOnly = warpCalifacilSheetFromCornerMarkers(fullCanvas);
           if (warpedOnly) {
-            const refined = refineWarpedCalifacilSheet(warpedOnly, {
-              maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX + (guideCropped ? 8 : 0),
-              fast: true,
-            });
-            const cand = refined.canvas;
-            if (isPhotoSheetWarpAcceptable(cand) || isMobileWarpedAnswerSheetAcceptable(cand)) {
-              warped = cand;
-              alignment = refined.alignment;
-            }
+            warped = warpedOnly;
+            alignment = null;
           }
         }
-        // Tras softAccept: solo calificar si pasa la misma barra que desktop foto.
-        if (warped && !isPhotoSheetWarpAcceptable(warped) && !isMobileWarpedAnswerSheetAcceptable(warped)) {
+        if (warped) {
+          const refined = refineWarpedCalifacilSheet(warped, {
+            maxAllowedPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
+          });
+          warped = refined.canvas;
+          alignment = refined.alignment;
+        }
+        if (warped && !isMobileWarpedAnswerSheetAcceptable(warped) && !isPhotoSheetWarpAcceptable(warped)) {
           warped = null;
           alignment = null;
         }
@@ -3762,12 +3743,7 @@ export default function CalificarPage() {
             : resolved.geometry;
 
         const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
-        const sameColCap = Math.max(5, Math.round(chunkRows * 0.55));
-        const noColumnCollapse = (warpMeta.maxSameColumnCount ?? 0) <= sameColCap;
-        const tableClear = Boolean(displayGeom?.cells && displayGeom.cells.length >= chunkRows);
-        let trusted =
-          resolvedCount >= Math.ceil(chunkRows * 0.7) ||
-          (tableClear && resolvedCount >= Math.ceil(chunkRows * 0.4) && noColumnCollapse);
+        let trusted = resolvedCount >= Math.ceil(chunkRows * 0.7);
 
         if (trusted) {
           warpMeta = {
@@ -3945,7 +3921,7 @@ export default function CalificarPage() {
         guideCropped = false;
       } else {
         const stripQuad = detectAnswerSheetQuadViaAlignStrips(gradeCanvas);
-        frameQuad = stripQuad ?? defaultDocumentQuad(gradeCanvas.width, gradeCanvas.height);
+        frameQuad = stripQuad;
       }
 
       await processMobileCapturedCanvas(warpSource, video, {

@@ -129,6 +129,7 @@ function gradeCanvas(source: HTMLCanvasElement, label: string) {
   const { meta } = scanWarpedWithBestTableFrame(canvas, COLS, ROWS, { fast: true });
   const snapped = snapReviewOverlayToPrintedRings(canvas, meta, COLS, ROWS, {
     maxShiftRatio: 0.45,
+    maxShiftRatioY: 0.32,
     biasRows: ROWS,
   });
   assert(
@@ -186,6 +187,22 @@ function gradeCanvas(source: HTMLCanvasElement, label: string) {
     }
   }
   assert(overlayMiss.length === 0, `${label} overlay:\n${overlayMiss.join('\n')}`);
+  assert((overlay.cells?.length ?? 0) >= ROWS, `${label}: geometría no tiene 30 renglones`);
+  for (let r = 0; r < 10; r++) {
+    const gt = GROUND_TRUTH[r]!;
+    const ctr = bubbleCenter(overlay, r, gt);
+    const cell = overlay.cells[r]?.[gt];
+    const far = overlay.cells[r + 15]?.[gt];
+    assert(!!ctr && !!cell, `${label}: q${r + 1} overlay 10-row`);
+    const mid = cell!.y + cell!.h * 0.5;
+    if (far) {
+      const farMid = far.y + far.h * 0.5;
+      assert(
+        Math.abs(ctr!.ny - mid) < Math.abs(ctr!.ny - farMid),
+        `${label}: q${r + 1} overlay estirado (ny=${ctr!.ny.toFixed(3)} fila1-10 vs fila ${r + 16})`
+      );
+    }
+  }
   console.log(`ok: ${label} picks=${gotKey}`);
 }
 
@@ -240,6 +257,7 @@ gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
   assert(got === want, `png-ui-scan picks ${got} != ${want}`);
   const uiOverlay = snapReviewOverlayToPrintedRings(norm.canvas!, ui, COLS, ROWS, {
     maxShiftRatio: 0.45,
+    maxShiftRatioY: 0.32,
     biasRows: ROWS,
   });
   assert(picksKey(uiOverlay.picks) === got, 'png-ui overlay attach cambió picks');

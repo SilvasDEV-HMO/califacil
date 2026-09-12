@@ -4925,14 +4925,15 @@ export function snapReviewOverlayToPrintedRings(
   meta: OmrScanMetaResult,
   columns: number,
   rowCount: number,
-  opts?: { maxShiftRatio?: number; biasRows?: number }
+  opts?: { maxShiftRatio?: number; maxShiftRatioY?: number; biasRows?: number }
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const maxShiftRatio = opts?.maxShiftRatio ?? 0.45;
+  const maxShiftRatioY = opts?.maxShiftRatioY ?? 0.32;
   const first = attachAnswerSheetReviewBubbleOverlay(canvas, meta, columns, rowCount, {
     forceRebuild: true,
-    maxShiftRatio,
+    maxShiftRatio: Math.min(maxShiftRatio, maxShiftRatioY),
     fineSearch: true,
   });
   const geom = first.geometry;
@@ -4981,7 +4982,7 @@ export function snapReviewOverlayToPrintedRings(
           })
         : origin;
       const maxDx = cell.w * W * maxShiftRatio;
-      const maxDy = cell.h * H * maxShiftRatio;
+      const maxDy = cell.h * H * maxShiftRatioY;
       const center = {
         x: Math.max(cx0 - maxDx, Math.min(cx0 + maxDx, raw.x)),
         y: Math.max(cy0 - maxDy, Math.min(cy0 + maxDy, raw.y)),
