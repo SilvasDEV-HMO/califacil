@@ -125,11 +125,11 @@ import {
 import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
-  isPhotoSheetWarpAcceptable,
   warpCalifacilMobileCaptureFast,
 } from '@/lib/omr/pipeline';
 import {
   prepareLetterGradeCanvas,
+  gradeLetterCanvas,
   measureLetterGeometryBubbleFit,
   LETTER_GRADE_MIN_BUBBLE_FIT,
 } from '@/lib/omr/grade-letter-canvas';
@@ -138,7 +138,6 @@ import {
   buildDisplayOverlayGeometry,
   isStrongMobileOmrMeta,
   isWeakMobileOmrMeta,
-  isUsableOmrRecoveryMeta,
   scanDesktopGradeUnifiedOrLegacy,
 } from '@/lib/omr/unified-grade-scan';
 import { setCameraTorch, trackReportsTorchCapability } from '@/lib/cameraTorch';
@@ -852,11 +851,8 @@ export default function CalificarPage() {
       });
       const displayCanvas = prepared.canvas;
 
-      const sheetFillOk = (c: HTMLCanvasElement): boolean => {
-        if (isPhotoSheetWarpAcceptable(c)) return true;
-        if (isMobileWarpedAnswerSheetAcceptable(c)) return true;
-        return false;
-      };
+      const sheetFillOk = (c: HTMLCanvasElement): boolean =>
+        isMobileWarpedAnswerSheetAcceptable(c);
 
       const acceptable = sheetFillOk(displayCanvas) || sheetFillOk(warped);
       if (!acceptable) {
@@ -869,12 +865,7 @@ export default function CalificarPage() {
           bubbleFit: 0,
         };
       }
-      if (
-        warpAlignment != null &&
-        !warpAlignment.ok &&
-        !isPhotoSheetWarpAcceptable(displayCanvas) &&
-        !isPhotoSheetWarpAcceptable(warped)
-      ) {
+      if (warpAlignment != null && !warpAlignment.ok && !sheetFillOk(displayCanvas) && !sheetFillOk(warped)) {
         return {
           meta: null as OmrScanMetaResult | null,
           orangeFrameNorm: null as OmrNormRect | null,
@@ -886,20 +877,25 @@ export default function CalificarPage() {
       }
 
       await yieldForSpinnerPaint();
-      const tableMeta = scanDesktopGradeUnifiedOrLegacy(displayCanvas, omrCols, omrRowCount, {
-        tableFrameOnly: true,
+      const letterRead = gradeLetterCanvas(displayCanvas, omrCols, omrRowCount, {
+        geometry: prepared.geometry,
+        lockTemplate: true,
       });
-      const bubbleFit = tableMeta.geometry
-        ? measureLetterGeometryBubbleFit(displayCanvas, tableMeta.geometry, omrRowCount)
-        : 0;
+      const overlayMeta = snapReviewOverlayToPrintedRings(
+        displayCanvas,
+        letterRead.meta,
+        omrCols,
+        omrRowCount,
+        { maxShiftRatio: 0.45, maxShiftRatioY: 0.32 }
+      );
       const orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
       return {
-        meta: tableMeta,
+        meta: { ...overlayMeta, picks: letterRead.picks, rows: letterRead.meta.rows },
         orangeFrameNorm,
         docCanvas: displayCanvas,
         displayCanvas,
         rejectedCorners: false as const,
-        bubbleFit,
+        bubbleFit: letterRead.bubbleFit,
       };
     },
     [omrCols, omrRowCount]
@@ -3548,7 +3544,7 @@ export default function CalificarPage() {
           warped = refined.canvas;
           alignment = refined.alignment;
         }
-        if (warped && !isMobileWarpedAnswerSheetAcceptable(warped) && !isPhotoSheetWarpAcceptable(warped)) {
+        if (warped && !isMobileWarpedAnswerSheetAcceptable(warped)) {
           warped = null;
           alignment = null;
         }
@@ -3667,10 +3663,7 @@ export default function CalificarPage() {
       const resolvedFast = califacilFastScan?.meta
         ? countResolvedOmrPicks(califacilFastScan.meta.picks.slice(0, chunkRows))
         : 0;
-      const usableFast =
-        Boolean(califacilFastScan?.meta) &&
-        (isUsableOmrRecoveryMeta(califacilFastScan!.meta!, chunkRows) ||
-          resolvedFast >= minResolvedForGrade);
+      const usableFast = Boolean(califacilFastScan?.meta) && resolvedFast >= minResolvedForGrade;
       const blankFast =
         Boolean(califacilFastScan?.meta) &&
         isAnswerSheetOmrMostlyBlank(califacilFastScan!.meta!, chunkRows);

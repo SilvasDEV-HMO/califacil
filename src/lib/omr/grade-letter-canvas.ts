@@ -4,6 +4,7 @@
  */
 import {
   buildAnswerSheetOmrGeometry,
+  buildLockedAnswerSheetOmrGeometry,
   geometryCellsForBubbleSampling,
   isAnswerSheetOmrMostlyBlank,
   isCalifacilWarpedLetterCanvas,
@@ -67,9 +68,11 @@ function readWithCellGeometry(
   geometry: CalifacilOmrScanGeometry,
   cols: number,
   rows: number,
-  baseMeta?: OmrScanMetaResult | null
+  baseMeta?: OmrScanMetaResult | null,
+  opts?: { expandCells?: boolean }
 ): OmrScanMetaResult {
-  const sampleGeom = geometryCellsForBubbleSampling(geometry);
+  const sampleGeom =
+    opts?.expandCells === false ? geometry : geometryCellsForBubbleSampling(geometry);
   const meta = rereadOmrPicksOnGeometry(canvas, sampleGeom, cols, rows, baseMeta ?? null);
   return {
     ...meta,
@@ -102,7 +105,7 @@ export function prepareLetterGradeCanvas(
     // Carta ya warpeada: usar tal cual (sin segundo refine/trim).
   }
   const geometry = syncCalifacilOmrGeometryImageSize(
-    buildAnswerSheetOmrGeometry(rowCount, columns, canvas.width, canvas.height),
+    buildLockedAnswerSheetOmrGeometry(rowCount, columns, canvas.width, canvas.height),
     canvas.width,
     canvas.height
   );
@@ -121,23 +124,30 @@ export function gradeLetterCanvas(
   canvas: HTMLCanvasElement,
   columns: number,
   rowCount: number = LETTER_GRID_ROWS,
-  opts?: { geometry?: CalifacilOmrScanGeometry }
+  opts?: { geometry?: CalifacilOmrScanGeometry; lockTemplate?: boolean }
 ): LetterGradeReadResult {
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const rows = Math.max(1, Math.min(LETTER_GRID_ROWS, rowCount));
-  const base =
-    opts?.geometry ??
-    syncCalifacilOmrGeometryImageSize(
-      buildAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height),
-      canvas.width,
-      canvas.height
-    );
-
-  let geometry = optimizeAnswerSheetGeometryBubbleFit(canvas, base, rows);
+  const lockTemplate = opts?.lockTemplate === true;
+  const base = syncCalifacilOmrGeometryImageSize(
+    lockTemplate
+      ? buildLockedAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height)
+      : (opts?.geometry ??
+          buildAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height)),
+    canvas.width,
+    canvas.height
+  );
+  let geometry = lockTemplate ? base : optimizeAnswerSheetGeometryBubbleFit(canvas, base, rows);
   let fit = measureLetterGeometryBubbleFit(canvas, geometry, rows);
-  let meta = readWithCellGeometry(canvas, geometry, cols, rows, null);
+  let meta = readWithCellGeometry(canvas, geometry, cols, rows, null, {
+    expandCells: !lockTemplate,
+  });
 
-  if (fit < LETTER_GRADE_MIN_BUBBLE_FIT && !isAnswerSheetOmrMostlyBlank(meta, rows)) {
+  if (
+    !lockTemplate &&
+    fit < LETTER_GRADE_MIN_BUBBLE_FIT &&
+    !isAnswerSheetOmrMostlyBlank(meta, rows)
+  ) {
     const snapped = refineAnswerSheetGeometryToBubblePeaks(canvas, geometry, null, {
       preferInk: false,
       maxShiftRatio: 0.28,

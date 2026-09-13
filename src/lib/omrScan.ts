@@ -5632,9 +5632,10 @@ export function refineWarpedCalifacilSheet(
     }
   );
   if (opts?.fast) {
+    const letter = warpToExactLetterSize(refined.canvas);
     return {
-      canvas: refined.canvas,
-      alignment: measureWarpedFiducialAlignment(refined.canvas, maxAllowedPx),
+      canvas: letter,
+      alignment: measureWarpedFiducialAlignment(letter, maxAllowedPx),
       iterations: refined.iterations,
     };
   }
@@ -5657,11 +5658,32 @@ export function refineWarpedCalifacilSheet(
       maxAllowedPx,
     }
   );
+  const letter = warpToExactLetterSize(deskewRefined.canvas);
   return {
-    canvas: deskewRefined.canvas,
-    alignment: measureWarpedFiducialAlignment(deskewRefined.canvas, maxAllowedPx),
+    canvas: letter,
+    alignment: measureWarpedFiducialAlignment(letter, maxAllowedPx),
     iterations: refined.iterations + deskewRefined.iterations,
   };
+}
+
+/** Tras deskew el canvas puede crecer; vuelve a carta 850×1100 con fiduciales. */
+function warpToExactLetterSize(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  if (
+    canvas.width === CALIFACIL_WARP_LETTER_WIDTH &&
+    canvas.height === CALIFACIL_WARP_LETTER_HEIGHT
+  ) {
+    return canvas;
+  }
+  const quad = detectCalifacilQuadFromCornerMarkers(canvas);
+  if (!quad) return canvas;
+  return (
+    warpPerspectiveToRect(
+      canvas,
+      quad,
+      CALIFACIL_WARP_LETTER_WIDTH,
+      CALIFACIL_WARP_LETTER_HEIGHT
+    ) ?? canvas
+  );
 }
 
 export type PrepareMobileCameraScanOptions = {
@@ -6968,6 +6990,28 @@ export type AnswerSheetTemplateGuide = {
 };
 
 /**
+ * Rejilla impresa 30×4 (Luis). Fija: no se redetecta la tabla en cada foto.
+ */
+const LOCKED_PRINTED_ROW_Y = [
+  0.115625, 0.14125, 0.1675, 0.19375, 0.219375, 0.245625, 0.27125, 0.2975, 0.323125,
+  0.349375, 0.375625, 0.40125, 0.4275, 0.453125, 0.479375, 0.505, 0.53125, 0.5575,
+  0.583125, 0.609375, 0.635, 0.66125, 0.686875, 0.713125, 0.739375, 0.765, 0.79125,
+  0.816875, 0.843125, 0.86875,
+] as const;
+const LOCKED_PRINTED_ROW_H = [
+  0.025625, 0.02625, 0.02625, 0.025625, 0.02625, 0.025625, 0.02625, 0.025625, 0.02625,
+  0.02625, 0.025625, 0.02625, 0.025625, 0.02625, 0.025625, 0.02625, 0.02625, 0.025625,
+  0.02625, 0.025625, 0.02625, 0.025625, 0.02625, 0.02625, 0.025625, 0.02625, 0.025625,
+  0.02625, 0.025625, 0.02625,
+] as const;
+const LOCKED_PRINTED_COL_X = [
+  0.19432120674356698, 0.36024844720496896, 0.5252883762200532, 0.6903283052351376,
+] as const;
+const LOCKED_PRINTED_COL_W = [
+  0.16592724046140195, 0.1650399290150843, 0.1650399290150843, 0.16592724046140195,
+] as const;
+
+/**
  * Cuadrícula OMR de hoja de respuestas alineada con el marco naranja (plantilla PDF base).
  */
 export function buildAnswerSheetOmrGeometry(
@@ -7013,6 +7057,36 @@ export function buildAnswerSheetOmrGeometry(
     cells.push(rowRects);
   }
 
+  return { imageWidth: width, imageHeight: height, cells };
+}
+
+/** Rejilla fija 30×4 calibrada a la tabla impresa (móvil lockTemplate). */
+export function buildLockedAnswerSheetOmrGeometry(
+  rowCount: number,
+  columns: number,
+  imageWidth: number,
+  imageHeight: number
+): CalifacilOmrScanGeometry {
+  const rows = clampCalifacilOmrRowCount(rowCount);
+  const cols = Math.max(2, Math.min(5, Math.round(columns)));
+  const width = Math.max(1, imageWidth);
+  const height = Math.max(1, imageHeight);
+  const cells: OmrNormRect[][] = [];
+  for (let row = 0; row < rows; row++) {
+    const y = LOCKED_PRINTED_ROW_Y[row] ?? LOCKED_PRINTED_ROW_Y[LOCKED_PRINTED_ROW_Y.length - 1]!;
+    const h = LOCKED_PRINTED_ROW_H[row] ?? LOCKED_PRINTED_ROW_H[LOCKED_PRINTED_ROW_H.length - 1]!;
+    const rowRects: OmrNormRect[] = [];
+    for (let c = 0; c < cols; c++) {
+      const col = Math.min(c, LOCKED_PRINTED_COL_X.length - 1);
+      rowRects.push({
+        x: LOCKED_PRINTED_COL_X[col]!,
+        y,
+        w: LOCKED_PRINTED_COL_W[col]!,
+        h,
+      });
+    }
+    cells.push(rowRects);
+  }
   return { imageWidth: width, imageHeight: height, cells };
 }
 

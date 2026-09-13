@@ -17,6 +17,7 @@ import {
   normalizeCalifacilGradeDocumentCanvas,
 } from '../src/lib/omr/pipeline.ts';
 import { scanDesktopGradeUnifiedOrLegacy } from '../src/lib/omr/unified-grade-scan.ts';
+import { gradeLetterCanvas } from '../src/lib/omr/grade-letter-canvas.ts';
 import {
   snapReviewOverlayToPrintedRings,
   getOmrCanvasImageData,
@@ -293,14 +294,30 @@ gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
   assert((uiOverlay.geometry?.bubbles?.length ?? 0) >= ROWS, 'png-ui overlay sin anillos');
   console.log(`ok: png-ui-scan picks=${got} normalize=${ms}ms`);
   {
-    const tMobile = Date.now();
-    const mobile = scanDesktopGradeUnifiedOrLegacy(norm.canvas!, COLS, ROWS, {
-      tableFrameOnly: true,
+    const locked = gradeLetterCanvas(norm.canvas!, COLS, ROWS, { lockTemplate: true });
+    assert(
+      picksKey(locked.picks) === want,
+      `lockTemplate picks ${picksKey(locked.picks)} != ${want}`
+    );
+    const lockOverlay = snapReviewOverlayToPrintedRings(norm.canvas!, locked.meta, COLS, ROWS, {
+      maxShiftRatio: 0.45,
+      maxShiftRatioY: 0.32,
+      biasRows: ROWS,
     });
+    assert(
+      picksKey(lockOverlay.picks) === picksKey(locked.picks),
+      'lockTemplate overlay cambió picks'
+    );
+    assert((lockOverlay.geometry?.cells?.length ?? 0) >= ROWS, 'lockTemplate overlay sin 30 filas');
+    console.log(`ok: lockTemplate picks=${picksKey(locked.picks)}`);
+  }
+  {
+    const tMobile = Date.now();
+    const mobile = gradeLetterCanvas(norm.canvas!, COLS, ROWS, { lockTemplate: true });
     const mobileMs = Date.now() - tMobile;
-    assert(picksKey(mobile.picks) === want, `mobile-table-frame picks ${picksKey(mobile.picks)} != ${want}`);
-    assert(mobileMs < 8000, `mobile-table-frame too slow: ${mobileMs}ms`);
-    console.log(`ok: mobile-table-frame picks=${picksKey(mobile.picks)} ${mobileMs}ms`);
+    assert(picksKey(mobile.picks) === want, `mobile-lockTemplate picks ${picksKey(mobile.picks)} != ${want}`);
+    assert(mobileMs < 8000, `mobile-lockTemplate too slow: ${mobileMs}ms`);
+    console.log(`ok: mobile-lockTemplate picks=${picksKey(mobile.picks)} ${mobileMs}ms`);
   }
 }
 gradeCanvas(await canvasFromJpegFile(path.join(fixtures, 'scan-luis-30.jpg')), 'jpg');
