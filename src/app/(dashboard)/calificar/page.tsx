@@ -248,6 +248,44 @@ function isDesktopFolderGradeFile(file: File): boolean {
   return /\.(jpe?g|png|webp|pdf)$/i.test(name);
 }
 
+type DirectoryHandleLike = {
+  name: string;
+  kind?: string;
+  values?: () => AsyncIterable<{
+    name: string;
+    kind: string;
+    getFile?: () => Promise<File>;
+    values?: DirectoryHandleLike['values'];
+  }>;
+};
+
+async function collectGradeFilesFromDirectoryHandle(
+  dir: DirectoryHandleLike,
+  prefix = '',
+  acc: File[] = [],
+  depth = 0
+): Promise<File[]> {
+  if (depth > 4 || acc.length >= FOLDER_BATCH_MAX_FILES * 2) return acc;
+  if (typeof dir.values !== 'function') return acc;
+  for await (const entry of dir.values()) {
+    if (entry.kind === 'file' && typeof entry.getFile === 'function') {
+      const file = await entry.getFile();
+      if (!isDesktopFolderGradeFile(file)) continue;
+      const rel = prefix ? `${prefix}/${file.name}` : file.name;
+      try {
+        Object.defineProperty(file, 'webkitRelativePath', { value: rel });
+      } catch {
+        /* ignore */
+      }
+      acc.push(file);
+    } else if (entry.kind === 'directory' && typeof entry.values === 'function') {
+      const nextPrefix = prefix ? `${prefix}/${entry.name}` : entry.name;
+      await collectGradeFilesFromDirectoryHandle(entry, nextPrefix, acc, depth + 1);
+    }
+  }
+  return acc;
+}
+
 function folderFileLabel(file: File): string {
   const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
   return rel && rel.trim() ? rel : file.name;
@@ -360,8 +398,6 @@ const MOBILE_CORNER_LOOP_MS = 50;
 const DOCUMENT_POLYGON_HOLD_MS = 420;
 /** Tiempo mínimo de espera con hoja alineada antes de auto-captura. */
 const MOBILE_ALIGN_HOLD_MS = CAPTURE_STABLE_TICKS_REQUIRED * MOBILE_CORNER_LOOP_MS;
-/** Tolerancia de alineación fiducial en captura móvil (más permisivo que escritorio). */
-const MOBILE_WARP_FALLBACK_MAX_ERROR_PX = 10;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
 const MIN_FRAME_LUMINANCE = 0.11;
 /** Superpone plantilla PDF y error fiducial en px (`.env`: `NEXT_PUBLIC_CALIFACIL_OMR_DEBUG=true`). */
@@ -3386,7 +3422,7 @@ export default function CalificarPage() {
       folderFileLabel(a).localeCompare(folderFileLabel(b), 'es', { numeric: true })
     );
     if (all.length === 0) {
-      toast.error('La carpeta no tiene PNG, JPG ni PDF.');
+      toast.error('La carpeta no tiene PDF (ni JPG/PNG) para calificar.');
       return;
     }
     const skipped = all.length > FOLDER_BATCH_MAX_FILES ? all.length - FOLDER_BATCH_MAX_FILES : 0;
@@ -3610,29 +3646,17 @@ export default function CalificarPage() {
 
   const pickGradeFiles = async () => {
     const picker = window as Window & {
-      showOpenFilePicker?: (opts: {
-        multiple?: boolean;
-        types?: { description: string; accept: Record<string, string[]> }[];
-      }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+      showDirectoryPicker?: (opts?: { mode?: 'read' }) => Promise<DirectoryHandleLike>;
     };
-    if (typeof picker.showOpenFilePicker === 'function') {
+    if (typeof picker.showDirectoryPicker === 'function') {
       try {
-        const handles = await picker.showOpenFilePicker({
-          multiple: true,
-          types: [
-            {
-              description: 'Hojas CaliFacil',
-              accept: {
-                'image/png': ['.png'],
-                'image/jpeg': ['.jpg', '.jpeg'],
-                'image/webp': ['.webp'],
-                'application/pdf': ['.pdf'],
-              },
-            },
-          ],
-        });
-        const files = await Promise.all(handles.map((h) => h.getFile()));
-        if (files.length > 0) await ingestPickedDesktopFiles(files);
+        const dir = await picker.showDirectoryPicker({ mode: 'read' });
+        const files = await collectGradeFilesFromDirectoryHandle(dir);
+        if (files.length === 0) {
+          toast.error('La carpeta no tiene PDF (ni JPG/PNG) para calificar.');
+          return;
+        }
+        await ingestPickedDesktopFiles(files);
         return;
       } catch (err) {
         const name = err instanceof DOMException ? err.name : '';
@@ -3893,8 +3917,8 @@ export default function CalificarPage() {
       if (sheetKind !== 'zipgrade') {
         const canonical = prepareCanonicalCalifacilLetterCanvas(fullCanvas, {
           frameQuad: frameQuad ?? undefined,
-          maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-          fast: true,
+          maxErrorPx: MAX_WARP_ALIGNMENT_ERROR_PX,
+          fast: false,
           forceWarp: true,
         });
         if (canonical) {
@@ -3969,11 +3993,21 @@ export default function CalificarPage() {
 
       if (sheetKind === 'califacil') {
         califacilFastScan = await runFastWarpedScan(warped, alignment, chunkRows);
-        scanCanvas = califacilFastScan.docCanvas;
-        displayCanvas = califacilFastScan.displayCanvas;
-        if (!isForcedWarpGradeCanvas(displayCanvas, alignment)) {
+        scanCanvas = warped;
+        displayCanvas = warped;
+        if (
+          califacilFastScan.docCanvas instanceof HTMLCanvasElement &&
+          isForcedWarpGradeCanvas(califacilFastScan.docCanvas, alignment)
+        ) {
+          scanCanvas = califacilFastScan.docCanvas;
+        }
+        if (
+          califacilFastScan.displayCanvas instanceof HTMLCanvasElement &&
+          isForcedWarpGradeCanvas(califacilFastScan.displayCanvas, alignment)
+        ) {
+          displayCanvas = califacilFastScan.displayCanvas;
+        } else {
           displayCanvas = warped;
-          scanCanvas = warped;
         }
         if (califacilFastScan.rejectedCorners) {
           clearPreview();
@@ -3992,17 +4026,16 @@ export default function CalificarPage() {
           if (video) resumeLiveVideoAfterScan(video);
           return;
         }
-        // Sustituir freeze crudo por hoja sola warpeada (1230×1600).
-        const letterFreeze = canvasPreviewJpeg(warped, 900, 0.7);
+        // Preview + overlay = misma carta warpeada (plantilla PDF, no foto cruda).
+        const letterFreeze = canvasPreviewJpeg(displayCanvas, 900, 0.7);
         if (letterFreeze) setMobileScanPreviewUrl(letterFreeze.dataUrl);
-        if (califacilFastScan.meta?.geometry?.cells?.length) {
-          setMobileScanPreviewGeometry(
-            syncCalifacilOmrGeometryImageSize(
-              califacilFastScan.meta.geometry,
-              letterFreeze?.width ?? warped.width,
-              letterFreeze?.height ?? warped.height
-            )
-          );
+        const overlayGeom = syncCalifacilOmrGeometryImageSize(
+          buildDisplayOverlayGeometry(displayCanvas, omrCols, omrRowCount, { skipSnap: true }),
+          letterFreeze?.width ?? displayCanvas.width,
+          letterFreeze?.height ?? displayCanvas.height
+        );
+        setMobileScanPreviewGeometry(overlayGeom);
+        if (califacilFastScan.meta?.picks?.length) {
           setMobileScanPreviewPicks(califacilFastScan.meta.picks.slice(0, chunkRows));
         }
       } else {
@@ -4069,22 +4102,11 @@ export default function CalificarPage() {
           rows: califacilFastScan.meta.rows.slice(0, Math.max(chunkRows, omrRowCount)),
         };
 
-        // Overlay = geometría de la tabla leída (no plantilla carta).
-        const resolved = resolveMobileGradeDisplay(
-          warped,
-          warped,
-          omrCols,
-          omrRowCount,
-          warpMeta
+        const displayGeom = syncCalifacilOmrGeometryImageSize(
+          buildDisplayOverlayGeometry(warped, omrCols, omrRowCount, { skipSnap: true }),
+          warped.width,
+          warped.height
         );
-        let displayGeom =
-          warpMeta.geometry?.cells?.length
-            ? syncCalifacilOmrGeometryImageSize(
-                warpMeta.geometry,
-                warped.width,
-                warped.height
-              )
-            : syncCalifacilOmrGeometryImageSize(resolved.geometry, warped.width, warped.height);
 
         const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
         let trusted = resolvedCount >= Math.ceil(chunkRows * 0.7);
@@ -4148,7 +4170,10 @@ export default function CalificarPage() {
         );
       }
 
-      const result = await finalizeCapturedSheet(scanCanvas, undefined, {
+      const result = await finalizeCapturedSheet(
+        sheetKind === 'califacil' ? warped : scanCanvas,
+        undefined,
+        {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
@@ -4810,7 +4835,7 @@ export default function CalificarPage() {
       className={cn(
         'mx-auto flex min-h-full w-full max-w-7xl flex-col gap-3 pb-6 sm:gap-4 sm:pb-8',
         isMobile && 'max-w-none gap-0 pb-0 lg:gap-3 lg:pb-8',
-        isMobile && phase === 'elegir' && 'lg:bg-transparent'
+        isMobile && phase === 'elegir' && 'h-full min-h-0 lg:h-auto lg:bg-transparent'
       )}
     >
       <Dialog open={autoGradeDialogOpen} onOpenChange={setAutoGradeDialogOpen}>
@@ -5047,7 +5072,6 @@ export default function CalificarPage() {
           }}
           onSelectStudent={handleStudentChange}
           onScan={openMobileCapture}
-          onImportPhoto={() => galleryInputRef.current?.click()}
         />
       )}
 
@@ -5084,6 +5108,8 @@ export default function CalificarPage() {
             multiple
             className="hidden"
             aria-hidden
+            // Carpeta completa (Chrome/Edge). Fallback si no hay showDirectoryPicker.
+            {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
             onChange={handleFolderFiles}
           />
         </>
@@ -5094,12 +5120,12 @@ export default function CalificarPage() {
           isMobile && (phase === 'elegir' || phase === 'ver_resultados') && 'hidden lg:block'
         )}
       >
-      <div>
+      <div className="mb-5 sm:mb-6">
         <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Calificar</h1>
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
             ? 'Cámara a pantalla completa: encuadra toda la hoja impresa. Captura automática al detectar respuestas, o pulsa el botón naranja.'
-            : 'En ordenador sube exámenes escaneados (JPG, PNG o PDF) para leer la tabla CaliFacil y calificar automáticamente.'}
+            : 'En ordenador sube PDF escaneados, o una carpeta con todos los PDF, para calificar automáticamente.'}
         </p>
       </div>
 
@@ -5207,26 +5233,11 @@ export default function CalificarPage() {
               {!isMobile && exam && supportsCalifacil && canGradeStudents && phase === 'elegir' && (
                 <div className="space-y-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-4">
                   <p className="text-sm text-gray-700">
-                    Sube el escaneo de la hoja de respuestas en <strong>imagen</strong> o{' '}
-                    <strong>PDF</strong> (una página por hoja del examen), o elige una{' '}
-                    <strong>carpeta</strong> con todos los escaneos para calificarlos de un tiro.
+                    Sube el escaneo de la hoja de respuestas en <strong>PDF</strong> (una
+                    página por hoja del examen), o elige una <strong>carpeta</strong> con
+                    todos los PDF para calificarlos de un tiro.
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      className="bg-orange-600 hover:bg-orange-700"
-                      disabled={scanBusy}
-                      onClick={() => galleryInputRef.current?.click()}
-                    >
-                      {scanBusy ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-                          Leyendo examen…
-                        </>
-                      ) : (
-                        'Elegir imagen…'
-                      )}
-                    </Button>
                     <Button
                       type="button"
                       variant="outline"
@@ -5239,17 +5250,17 @@ export default function CalificarPage() {
                     </Button>
                     <Button
                       type="button"
-                      variant="outline"
-                      className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                      className="bg-orange-600 hover:bg-orange-700"
                       disabled={scanBusy || !canGradeStudents}
                       onClick={() => void pickGradeFiles()}
                     >
                       <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
-                      {scanBusy ? 'Calificando archivos…' : 'Elegir archivos…'}
+                      {scanBusy ? 'Calificando carpeta…' : 'Elegir carpeta…'}
                     </Button>
                   </div>
                   <p className="text-[11px] text-gray-500">
-                    PNG, JPG o PDF: uno, varios o Ctrl+A para toda la carpeta.
+                    Elige la carpeta: se califican todos los PDF que hay dentro (también JPG/PNG si
+                    hay).
                   </p>
                   {scanBusy && liveStatus ? (
                     <p className="text-xs font-medium text-orange-800">{liveStatus}</p>
@@ -5503,33 +5514,10 @@ export default function CalificarPage() {
                 <div className="space-y-3">
                   <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-6 text-center">
                     <p className="text-sm text-gray-700">
-                      Sube una foto de la <strong>hoja impresa completa</strong> (como la que genera
-                      CaliFácil con preguntas y tabla al pie), un recorte del recuadro CaliFacil, o un{' '}
-                      <strong>PDF</strong> escaneado. Se leen las casillas A–D y al guardar se califica
-                      comparando con la clave del examen.
+                      Sube un <strong>PDF</strong> escaneado (una página por hoja), o elige una{' '}
+                      <strong>carpeta</strong> con todos los PDF para calificarlos de un tiro.
                     </p>
                     <div className="mt-4 flex flex-wrap justify-center gap-2">
-                      <Button
-                        type="button"
-                        className={cn(
-                          'bg-orange-600 hover:bg-orange-700',
-                          scanBusy && 'disabled:opacity-100'
-                        )}
-                        disabled={scanBusy}
-                        onClick={() => galleryInputRef.current?.click()}
-                      >
-                        {scanBusy ? (
-                          <>
-                            <Loader2
-                              className="mr-2 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none [animation-duration:750ms]"
-                              aria-hidden
-                            />
-                            Leyendo examen…
-                          </>
-                        ) : (
-                          'Elegir imagen…'
-                        )}
-                      </Button>
                       <Button
                         type="button"
                         variant="outline"
@@ -5542,17 +5530,17 @@ export default function CalificarPage() {
                       </Button>
                       <Button
                         type="button"
-                        variant="outline"
-                        className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                        className="bg-orange-600 hover:bg-orange-700"
                         disabled={scanBusy || !canGradeStudents}
                         onClick={() => void pickGradeFiles()}
                       >
                         <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
-                        {scanBusy ? 'Calificando archivos…' : 'Elegir archivos…'}
+                        {scanBusy ? 'Calificando carpeta…' : 'Elegir carpeta…'}
                       </Button>
                     </div>
                     <p className="text-[11px] text-gray-500">
-                      PNG, JPG o PDF: uno, varios o Ctrl+A para toda la carpeta.
+                      Elige la carpeta: se califican todos los PDF que hay dentro (también JPG/PNG
+                      si hay).
                     </p>
                   </div>
                 </div>

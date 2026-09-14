@@ -10,7 +10,6 @@ import {
   detectAnswerSheetQuadViaAlignStrips,
   detectCalifacilSheetCornerQuadRobust,
   detectCalifacilQuadFromCornerMarkers,
-  detectCalifacilQuad,
   isCalifacilExamSheetLikely,
   isCalifacilWarpedLetterCanvas,
   hasCalifacilAlignStrips,
@@ -101,9 +100,13 @@ export function isPrintedCalifacilLetterAfterWarp(canvas: HTMLCanvasElement): bo
 
 export function isForcedWarpGradeCanvas(
   canvas: HTMLCanvasElement,
-  _alignment?: WarpAlignmentReport | null
+  alignment?: WarpAlignmentReport | null
 ): boolean {
-  return isPrintedCalifacilLetterAfterWarp(canvas);
+  if (!isPrintedCalifacilLetterAfterWarp(canvas)) return false;
+  if (alignment?.ok) return true;
+  const corners = countCalifacilCornerMarkers(canvas);
+  if (corners >= 4 && alignment && !alignment.ok) return false;
+  return corners >= 3 && countCalifacilAlignStrips(canvas) >= 2;
 }
 
 /**
@@ -172,43 +175,50 @@ export function prepareCanonicalCalifacilLetterCanvas(
     list.push(quad);
   };
 
+  const markerQuad = detectCalifacilQuadFromCornerMarkers(warpSrc);
   const quads: RoiQuad[] = [];
-  pushUniqueQuad(quads, detectCalifacilQuadFromCornerMarkers(warpSrc));
-  if (opts?.frameQuad) pushUniqueQuad(quads, opts.frameQuad);
-  if (forceWarp) {
-    pushUniqueQuad(quads, detectCalifacilQuad(warpSrc));
-    pushUniqueQuad(quads, detectCalifacilSheetCornerQuadRobust(warpSrc, { skipPreprocess: true }));
-  }
-  if (countCalifacilCornerMarkers(warpSrc) >= 3) {
-    pushUniqueQuad(quads, detectAnswerSheetQuadViaAlignStrips(warpSrc));
-  }
+  pushUniqueQuad(quads, markerQuad);
 
   if (forceWarp) {
+    const tryQuads: RoiQuad[] = [];
+    pushUniqueQuad(tryQuads, markerQuad);
+    if (!markerQuad) {
+      if (opts?.frameQuad) pushUniqueQuad(tryQuads, opts.frameQuad);
+      if (countCalifacilCornerMarkers(warpSrc) >= 3) {
+        pushUniqueQuad(tryQuads, detectAnswerSheetQuadViaAlignStrips(warpSrc));
+      }
+    }
+
     let best: {
       canvas: HTMLCanvasElement;
       alignment: WarpAlignmentReport;
       score: number;
     } | null = null;
-    for (const q of quads) {
+    for (const q of tryQuads) {
       const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast });
       if (!result.warped) continue;
-      if (!isPrintedCalifacilLetterAfterWarp(result.warped)) continue;
       const alignment =
         result.alignment ?? measureWarpedFiducialAlignment(result.warped, maxErrorPx);
-      const corners = countCalifacilCornerMarkers(result.warped);
-      const strips = countCalifacilAlignStrips(result.warped);
-      const paper = estimateCanvasCenterLuminance(result.warped);
+      const finished = finishCanonical(result.warped, alignment);
+      if (!finished) continue;
+      const a = finished.alignment;
+      const corners = countCalifacilCornerMarkers(finished.canvas);
+      const strips = countCalifacilAlignStrips(finished.canvas);
       const score =
-        (alignment.ok ? 80 : 0) +
+        (a.ok ? 200 : 0) +
         corners * 12 +
-        strips * 25 +
-        paper * 40 -
-        (Number.isFinite(alignment.maxErrorPx) ? Math.min(40, alignment.maxErrorPx) : 40);
+        strips * 25 -
+        (Number.isFinite(a.maxErrorPx) ? Math.min(80, a.maxErrorPx) : 80);
       if (!best || score > best.score) {
-        best = { canvas: result.warped, alignment, score };
+        best = { canvas: finished.canvas, alignment: a, score };
       }
     }
     return best ? { canvas: best.canvas, alignment: best.alignment } : null;
+  }
+
+  if (opts?.frameQuad) pushUniqueQuad(quads, opts.frameQuad);
+  if (countCalifacilCornerMarkers(warpSrc) >= 3) {
+    pushUniqueQuad(quads, detectAnswerSheetQuadViaAlignStrips(warpSrc));
   }
 
   let quad: RoiQuad | null = quads[0] ?? null;

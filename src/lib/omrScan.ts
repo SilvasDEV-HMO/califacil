@@ -2540,8 +2540,15 @@ export function detectCalifacilQuadFromCornerMarkers(
   if (expectedQuad) return expectedQuad;
 
   const tryPageCornerMarkers = (): [Point, Point, Point, Point] | null => {
-    const fracs = [0.045, 0.07, 0.1, 0.14, 0.2, 0.28, 0.38];
-    const insets = [0, Math.round(Math.min(width, height) * 0.02), Math.round(Math.min(width, height) * 0.05)];
+    const minDim = Math.min(width, height);
+    const fracs = [0.14, 0.2, 0.28, 0.1, 0.07, 0.38, 0.045];
+    const insets = [
+      Math.round(minDim * 0.14),
+      Math.round(minDim * 0.1),
+      Math.round(minDim * 0.06),
+      Math.round(minDim * 0.03),
+      0,
+    ];
     for (const inset of insets) {
       for (const frac of fracs) {
         const quad = tryCornerRegions(frac, inset, inset);

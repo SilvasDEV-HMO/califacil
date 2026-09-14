@@ -1,11 +1,11 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Camera, CheckCircle2, ChevronRight, Image as ImageIcon, Loader2, ScanLine } from 'lucide-react';
+import { Camera, CheckCircle2, ChevronRight, Loader2, ScanLine } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Exam, Student } from '@/types';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MobileZipGradeStudentPicker } from '@/components/mobile-zipgrade-results';
 import { CALIFICAR_AUTO_STUDENT_ID } from '@/lib/calificarStudentMode';
 
@@ -31,7 +31,6 @@ type Props = {
   onSelectExam: (id: string) => void;
   onSelectStudent: (id: string) => void;
   onScan: () => void;
-  onImportPhoto?: () => void;
 };
 
 function ConfigRow({
@@ -94,7 +93,6 @@ export function CalificarMobileHome({
   onSelectExam,
   onSelectStudent,
   onScan,
-  onImportPhoto,
 }: Props) {
   const [examPickerOpen, setExamPickerOpen] = useState(false);
   const [studentPickerOpen, setStudentPickerOpen] = useState(false);
@@ -134,9 +132,6 @@ export function CalificarMobileHome({
         <Card className="shadow-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Configuración</CardTitle>
-            <CardDescription>
-              Elige el examen; el alumno se detecta por el número de control de la hoja.
-            </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             <ConfigRow
@@ -200,11 +195,8 @@ export function CalificarMobileHome({
         ) : null}
       </div>
 
-      <div
-        className="shrink-0 border-t border-orange-100/90 bg-white/95 px-4 py-3 shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur-md"
-        style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
-      >
-        <div className="mx-auto w-full max-w-lg space-y-2">
+      <div className="shrink-0 border-t border-orange-100/90 bg-white px-4 py-3">
+        <div className="mx-auto w-full max-w-lg">
           <Button
             type="button"
             disabled={!readyToScan || scanBusy}
@@ -218,22 +210,6 @@ export function CalificarMobileHome({
             )}
             {scanBusy ? busyLabel || 'Calificando…' : 'Tomar foto'}
           </Button>
-          {onImportPhoto ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!readyToScan || scanBusy}
-              onClick={onImportPhoto}
-              className="h-11 w-full border-orange-200 bg-white text-orange-900 hover:bg-orange-50"
-            >
-              {scanBusy ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <ImageIcon className="mr-2 h-4 w-4" strokeWidth={2.25} />
-              )}
-              Subir fotos
-            </Button>
-          ) : null}
         </div>
       </div>
 
