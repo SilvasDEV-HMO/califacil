@@ -42,6 +42,10 @@ import {
   scaleReferenceColEdges,
   scaleReferenceLineYs,
 } from '@/lib/omr/reference-grade-merge';
+import {
+  REFERENCE_GRADE_HEIGHT,
+  REFERENCE_GRADE_WIDTH,
+} from '@/lib/omr/reference-grade-calibration';
 
 export const CALIFACIL_OMR_DEFAULT_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
 export const CALIFACIL_OMR_MAX_ROWS = CALIFACIL_PRINT_MAX_QUESTIONS;
@@ -5692,19 +5696,42 @@ export function scaleQuadToCanvas(
   return quad.map((p) => ({ x: p.x * sx, y: p.y * sy })) as [Point, Point, Point, Point];
 }
 
-/** Endereza la hoja con un cuadrilátero ya detectado (tras captura en alta resolución). */
-export function califacilWarpLetterPixelSize(sourceWidth: number, sourceHeight: number): {
+/** Destino de warp = canvas de referencia del PDF (1230×1600). */
+export function califacilWarpLetterPixelSize(
+  _sourceWidth?: number,
+  _sourceHeight?: number
+): {
   width: number;
   height: number;
 } {
-  const scale = Math.max(
-    1,
-    Math.max(sourceWidth, sourceHeight) / CALIFACIL_WARP_LETTER_HEIGHT
-  );
   return {
-    width: Math.round(CALIFACIL_WARP_LETTER_WIDTH * scale),
-    height: Math.round(CALIFACIL_WARP_LETTER_HEIGHT * scale),
+    width: REFERENCE_GRADE_WIDTH,
+    height: REFERENCE_GRADE_HEIGHT,
   };
+}
+
+/** Reescribe el bitmap al tamaño exacto (p. ej. 1230×1600) sin cambiar coords normalizadas. */
+export function scaleCanvasToExactSize(
+  source: HTMLCanvasElement,
+  width: number,
+  height: number
+): HTMLCanvasElement {
+  const w = Math.max(1, Math.round(width));
+  const h = Math.max(1, Math.round(height));
+  if (source.width === w && source.height === h) return source;
+  if (source.width < 40 || source.height < 40) return source;
+  if (typeof document === 'undefined') return source;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return source;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, w, h);
+  return canvas;
 }
 
 /** Endereza la hoja con un cuadrilátero ya detectado (tras captura en alta resolución). */

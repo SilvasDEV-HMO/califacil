@@ -25,10 +25,15 @@ import {
   warpCalifacilSheetFromCornerMarkers,
   warpCalifacilSheetFromQuad,
   califacilWarpLetterPixelSize,
+  scaleCanvasToExactSize,
   measureRoiSheetFillRatio,
   type MobileGuideRoiCapture,
   type Point,
 } from '@/lib/omrScan';
+import {
+  canvasMatchesReferenceGrade,
+  canvasNearReferenceGrade,
+} from '@/lib/omr/reference-grade-merge';
 
 /** Misma resolución que el PDF rasterizado en calificar (referencia visual + OMR). */
 export const CALIFACIL_GRADE_DOCUMENT_MAX_SIDE = 1600;
@@ -47,6 +52,22 @@ export type NormalizeGradeDocumentResult = {
 
 export type RoiQuad = [Point, Point, Point, Point];
 
+function distPoint(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** Quad casi rectangular: escaneo plano, no foto con perspectiva. */
+function quadLooksFrontal(quad: RoiQuad): boolean {
+  const [tl, tr, br, bl] = quad;
+  const top = distPoint(tl, tr);
+  const bot = distPoint(bl, br);
+  const left = distPoint(tl, bl);
+  const right = distPoint(tr, br);
+  const maxTB = Math.max(top, bot, 1);
+  const maxLR = Math.max(left, right, 1);
+  return Math.min(top, bot) / maxTB > 0.92 && Math.min(left, right) / maxLR > 0.92;
+}
+
 export type MobileWarpPipelineResult = {
   warped: HTMLCanvasElement | null;
   alignment: WarpAlignmentReport | null;
@@ -55,7 +76,7 @@ export type MobileWarpPipelineResult = {
 };
 
 /**
- * Cualquier origen (PNG, PDF, cámara) → 4 cuadros (o 3 + franjas) → carta 850×1100.
+ * Cualquier origen (PNG, PDF, cámara) → 4 cuadros → canvas de referencia 1230×1600.
  * No degrada a leer la tabla en la foto cruda.
  */
 export function prepareCanonicalCalifacilLetterCanvas(
@@ -68,17 +89,61 @@ export function prepareCanonicalCalifacilLetterCanvas(
 ): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport } | null {
   const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
   const fast = opts?.fast !== false;
+  const expected = califacilWarpLetterPixelSize();
+  const finishCanonical = (
+    canvas: HTMLCanvasElement,
+    alignment: WarpAlignmentReport
+  ): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport } | null => {
+    const nearRef =
+      canvasMatchesReferenceGrade(canvas.width, canvas.height) ||
+      canvasNearReferenceGrade(canvas.width, canvas.height);
+    const sized = nearRef
+      ? canvas
+      : canvas.width === expected.width && canvas.height === expected.height
+        ? canvas
+        : scaleCanvasToExactSize(canvas, expected.width, expected.height);
+    const aligned =
+      sized === canvas ? alignment : measureWarpedFiducialAlignment(sized, maxErrorPx);
+    if (nearRef) {
+      return { canvas: sized, alignment: aligned };
+    }
+    if (isMobileWarpedAnswerSheetAcceptable(sized)) {
+      return { canvas: sized, alignment: aligned };
+    }
+    if (
+      hasCalifacilAlignStrips(sized) &&
+      Number.isFinite(aligned.maxErrorPx) &&
+      aligned.maxErrorPx <= 14
+    ) {
+      return { canvas: sized, alignment: aligned };
+    }
+    return null;
+  };
+
+  const sourceNearRef =
+    canvasMatchesReferenceGrade(source.width, source.height) ||
+    canvasNearReferenceGrade(source.width, source.height);
+  if (sourceNearRef) {
+    return finishCanonical(source, measureWarpedFiducialAlignment(source, maxErrorPx));
+  }
+
   const quad = opts?.frameQuad ?? detectCalifacilSheetCornerQuadRobust(source);
   if (!quad) return null;
+
   const fill = measureRoiSheetFillRatio(quad, source.width, source.height);
-  if (fill >= 0.86) {
-    const alignment = measureWarpedFiducialAlignment(source, maxErrorPx);
-    const sized = scaleCanvasToMaxSide(source, Math.max(source.width, source.height, 1600));
-    return { canvas: sized, alignment };
+  if (fill >= 0.86 && quadLooksFrontal(quad)) {
+    const sized = scaleCanvasToMaxSide(source, expected.height);
+    return finishCanonical(sized, measureWarpedFiducialAlignment(sized, maxErrorPx));
   }
+
+  const alreadyPrinted = measureWarpedFiducialAlignment(source, maxErrorPx);
+  if (alreadyPrinted.ok) {
+    const sized = scaleCanvasToMaxSide(source, expected.height);
+    return finishCanonical(sized, measureWarpedFiducialAlignment(sized, maxErrorPx));
+  }
+
   const result = warpAndValidateCalifacilSheet(source, quad, maxErrorPx, { fast });
   if (!result.warped) return null;
-  const expected = califacilWarpLetterPixelSize(source.width, source.height);
   const canvas =
     result.warped.width === expected.width && result.warped.height === expected.height
       ? result.warped
@@ -100,17 +165,7 @@ export function prepareCanonicalCalifacilLetterCanvas(
     }
   }
   const alignment = result.alignment ?? measureWarpedFiducialAlignment(canvas, maxErrorPx);
-  if (isMobileWarpedAnswerSheetAcceptable(canvas)) {
-    return { canvas, alignment };
-  }
-  if (
-    hasCalifacilAlignStrips(canvas) &&
-    Number.isFinite(alignment.maxErrorPx) &&
-    alignment.maxErrorPx <= 14
-  ) {
-    return { canvas, alignment };
-  }
-  return null;
+  return finishCanonical(canvas, alignment);
 }
 
 function alignmentScore(alignment: WarpAlignmentReport | null): number {
