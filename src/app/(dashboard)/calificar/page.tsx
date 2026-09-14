@@ -122,7 +122,8 @@ import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
   prepareCanonicalCalifacilLetterCanvas,
-  isReferenceGradeLetterCanvas,
+  isCanonicalGradeCanvasReady,
+  isPhotoSheetWarpAcceptable,
 } from '@/lib/omr/pipeline';
 import {
   prepareLetterGradeCanvas,
@@ -232,6 +233,8 @@ type BatchGradeItem = {
   studentName?: string;
   pct?: number;
   error?: string;
+  pendingStudent?: boolean;
+  mergedDraft?: Record<string, string>;
 };
 
 const FOLDER_BATCH_MAX_FILES = 80;
@@ -245,6 +248,29 @@ function isDesktopFolderGradeFile(file: File): boolean {
 function folderFileLabel(file: File): string {
   const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
   return rel && rel.trim() ? rel : file.name;
+}
+
+function isPdfGradeFile(file: File): boolean {
+  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+}
+
+function matchStudentFromScanFileName(fileName: string, students: Student[]): Student | null {
+  const stem = fileName
+    .replace(/^.*[/\\]/, '')
+    .replace(/\.[^.]+$/, '');
+  const compact = stem.toLowerCase().replace(/[^a-z0-9áéíóúüñ]/gi, '');
+  if (compact.length < 3) return null;
+  const byControl = students.filter((s) => {
+    const cn = (s.control_number || '').replace(/\D/g, '');
+    return cn.length >= 4 && compact.includes(cn.toLowerCase());
+  });
+  if (byControl.length === 1) return byControl[0] ?? null;
+  const byName = students.filter((s) => {
+    const n = s.name.toLowerCase().replace(/[^a-z0-9áéíóúüñ]/gi, '');
+    return n.length >= 4 && (compact.includes(n) || n.includes(compact));
+  });
+  if (byName.length === 1) return byName[0] ?? null;
+  return null;
 }
 
 type FlashMode = 'auto' | 'on' | 'off';
@@ -865,21 +891,12 @@ export default function CalificarPage() {
       });
       const displayCanvas = prepared.canvas;
 
-      const sheetFillOk = (c: HTMLCanvasElement): boolean =>
-        isReferenceGradeLetterCanvas(c);
-
-      const acceptable = sheetFillOk(displayCanvas) || sheetFillOk(warped);
+      const acceptable =
+        isCanonicalGradeCanvasReady(displayCanvas, warpAlignment ?? null) ||
+        isCanonicalGradeCanvasReady(warped, warpAlignment ?? null) ||
+        isPhotoSheetWarpAcceptable(displayCanvas) ||
+        isPhotoSheetWarpAcceptable(warped);
       if (!acceptable) {
-        return {
-          meta: null as OmrScanMetaResult | null,
-          orangeFrameNorm: null as OmrNormRect | null,
-          docCanvas: displayCanvas,
-          displayCanvas,
-          rejectedCorners: true as const,
-          bubbleFit: 0,
-        };
-      }
-      if (warpAlignment != null && !warpAlignment.ok && !sheetFillOk(displayCanvas) && !sheetFillOk(warped)) {
         return {
           meta: null as OmrScanMetaResult | null,
           orangeFrameNorm: null as OmrNormRect | null,
@@ -2057,15 +2074,25 @@ export default function CalificarPage() {
     async (rawCanvas: HTMLCanvasElement, pageNumber: number) => {
       const scanCanvas =
         downscaleCanvasForOmrScan(rawCanvas, PDF_OMR_RENDER_MAX_SIDE) ?? rawCanvas;
+      const canonical = prepareCanonicalCalifacilLetterCanvas(scanCanvas, { fast: true });
+      if (!canonical) {
+        toast.error(
+          'No se ven los 4 cuadritos negros de las esquinas. Sube la hoja completa, con buena luz.'
+        );
+        return;
+      }
+      const gradeCanvas = canonical.canvas;
       const pseudoFile = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], `pdf-pagina-${pageNumber}.jpg`, {
         type: 'image/jpeg',
       });
       flushSync(() => setLiveStatus('Leyendo examen…'));
       await yieldForSpinnerPaint();
-      await finalizeCapturedSheet(scanCanvas, pseudoFile, {
-        displaySource: scanCanvas,
+      await finalizeCapturedSheet(gradeCanvas, pseudoFile, {
+        displaySource: gradeCanvas,
         skipSheetValidation: true,
         uploadKind: 'pdf',
+        preWarped: true,
+        warpAlignment: canonical.alignment,
       });
     },
     [finalizeCapturedSheet]
@@ -2163,10 +2190,7 @@ export default function CalificarPage() {
     });
   };
 
-  const handleGalleryFile = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
+  const ingestDesktopImageFile = async (file: File) => {
     if (!examId || !exam || !supportsCalifacil) {
       toast.error('Selecciona primero un examen válido.');
       return;
@@ -2227,10 +2251,14 @@ export default function CalificarPage() {
     }
   };
 
-  const handlePdfFile = async (e: ChangeEvent<HTMLInputElement>) => {
+  const handleGalleryFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    await ingestDesktopImageFile(file);
+  };
+
+  const ingestDesktopPdfFile = async (file: File) => {
     if (!examId || !exam || !supportsCalifacil) {
       toast.error('Selecciona primero un examen válido.');
       return;
@@ -2305,6 +2333,13 @@ export default function CalificarPage() {
         if (gradeReadAbortRef.current === abort) gradeReadAbortRef.current = null;
       }
     }
+  };
+
+  const handlePdfFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    await ingestDesktopPdfFile(file);
   };
 
   const startLiveCamera = useCallback(async (opts?: { skipPhaseGuard?: boolean }): Promise<boolean> => {
@@ -3405,12 +3440,27 @@ export default function CalificarPage() {
                       .canvas;
               if (gen !== gradeReadGenRef.current) return;
               const scanCanvas = downscaleCanvasForOmrScan(raw, PDF_OMR_RENDER_MAX_SIDE) ?? raw;
-              const read = await finalizeCapturedSheet(scanCanvas, pdfPseudo(p), {
+              const canonical = prepareCanonicalCalifacilLetterCanvas(scanCanvas, { fast: true });
+              if (!canonical) {
+                results.push({
+                  fileName: label,
+                  ok: false,
+                  error:
+                    p > 1
+                      ? `Página ${p}: no se ven los 4 cuadritos negros`
+                      : 'No se ven los 4 cuadritos negros de las esquinas',
+                });
+                pdfFailed = true;
+                break;
+              }
+              const read = await finalizeCapturedSheet(canonical.canvas, pdfPseudo(p), {
                 skipReviewUi: true,
                 silentBatch: true,
                 skipSheetValidation: true,
                 uploadKind: 'pdf',
-                displaySource: scanCanvas,
+                displaySource: canonical.canvas,
+                preWarped: true,
+                warpAlignment: canonical.alignment,
               });
               if (!read.success || !read.chunkDraft) {
                 results.push({
@@ -3446,16 +3496,22 @@ export default function CalificarPage() {
           if (!studentId && controlNumber) {
             studentId = findStudentByControlNumber(sortedStudents, controlNumber)?.id ?? null;
           }
-          const student = studentId
+          let student = studentId
             ? sortedStudents.find((s) => s.id === studentId) ?? null
             : findStudentByControlNumber(sortedStudents, controlNumber);
+          if (!student) {
+            student = matchStudentFromScanFileName(label, sortedStudents);
+            if (student) studentId = student.id;
+          }
+          const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
           if (!student) {
             results.push({
               fileName: label,
               ok: false,
-              error: controlNumber
-                ? `Control ${controlNumber} no coincide con ningún alumno`
-                : 'Sin número de control',
+              pendingStudent: true,
+              mergedDraft: { ...merged },
+              pct: previewStats.pct,
+              error: 'Elige al alumno para guardar',
             });
             continue;
           }
@@ -3490,11 +3546,12 @@ export default function CalificarPage() {
         setLiveStatus('');
         setBatchSummary(results);
         const saved = results.filter((r) => r.ok).length;
-        const pending = results.length - saved;
+        const pending = results.filter((r) => r.pendingStudent).length;
+        const failed = results.length - saved - pending;
         toast.message(
-          pending === 0
+          failed === 0 && pending === 0
             ? `Carpeta lista: ${saved} calificación(es) guardada(s).`
-            : `Carpeta lista: ${saved} guardada(s), ${pending} pendiente(s).`
+            : `Carpeta lista: ${saved} guardada(s), ${pending} sin alumno, ${failed} con error.`
         );
       }
     }
@@ -3504,7 +3561,45 @@ export default function CalificarPage() {
     const list = e.target.files;
     e.target.value = '';
     if (!list || list.length === 0) return;
-    await gradeDesktopFolderFiles(Array.from(list));
+    await ingestPickedDesktopFiles(Array.from(list));
+  };
+
+  const ingestPickedDesktopFiles = async (picked: File[]) => {
+    const all = picked.filter(isDesktopFolderGradeFile);
+    if (all.length === 1) {
+      const file = all[0]!;
+      if (isPdfGradeFile(file)) await ingestDesktopPdfFile(file);
+      else await ingestDesktopImageFile(file);
+      return;
+    }
+    await gradeDesktopFolderFiles(picked);
+  };
+
+  const persistPendingBatchStudent = async (rowIndex: number, studentId: string) => {
+    const row = batchSummary?.[rowIndex];
+    if (!row?.pendingStudent || !row.mergedDraft) return;
+    const student = sortedStudents.find((s) => s.id === studentId);
+    if (!student) return;
+    try {
+      setScanBusy(true);
+      const stats = await persistStudentAnswers(row.mergedDraft, student.id);
+      setBatchSummary((prev) => {
+        if (!prev) return prev;
+        const next = [...prev];
+        next[rowIndex] = {
+          fileName: row.fileName,
+          ok: true,
+          studentName: student.name,
+          pct: stats.pct,
+        };
+        return next;
+      });
+      toast.success(`Guardado: ${student.name}`);
+    } catch {
+      toast.error('No se pudo guardar esta hoja.');
+    } finally {
+      setScanBusy(false);
+    }
   };
 
   const pickGradeFiles = async () => {
@@ -3531,7 +3626,7 @@ export default function CalificarPage() {
           ],
         });
         const files = await Promise.all(handles.map((h) => h.getFile()));
-        if (files.length > 0) await gradeDesktopFolderFiles(files);
+        if (files.length > 0) await ingestPickedDesktopFiles(files);
         return;
       } catch (err) {
         const name = err instanceof DOMException ? err.name : '';
@@ -3799,7 +3894,7 @@ export default function CalificarPage() {
           warped = canonical.canvas;
           alignment = canonical.alignment;
         }
-        if (!warped || !isReferenceGradeLetterCanvas(warped)) {
+        if (!warped || !isCanonicalGradeCanvasReady(warped, alignment)) {
           warped = null;
           alignment = null;
         }
@@ -3869,7 +3964,7 @@ export default function CalificarPage() {
         califacilFastScan = await runFastWarpedScan(warped, alignment, chunkRows);
         scanCanvas = califacilFastScan.docCanvas;
         displayCanvas = califacilFastScan.displayCanvas;
-        if (!isReferenceGradeLetterCanvas(displayCanvas)) {
+        if (!isCanonicalGradeCanvasReady(displayCanvas, alignment)) {
           displayCanvas = warped;
           scanCanvas = warped;
         }
@@ -3977,7 +4072,7 @@ export default function CalificarPage() {
           warpMeta
         );
         mobileDisplaySource = resolved.previewCanvas;
-        if (!isReferenceGradeLetterCanvas(mobileDisplaySource)) {
+        if (!isCanonicalGradeCanvasReady(mobileDisplaySource, alignment)) {
           mobileDisplaySource = warped;
         }
         let displayGeom =
@@ -4866,7 +4961,7 @@ export default function CalificarPage() {
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
-              Se guardó solo si el número de control de la hoja coincidió con un alumno del examen.
+              Se guarda al identificar al alumno (número de control, nombre del archivo o el selector).
             </DialogDescription>
           </DialogHeader>
           {batchSummary && batchSummary.length > 0 ? (
@@ -4886,10 +4981,32 @@ export default function CalificarPage() {
                         {row.fileName}
                       </td>
                       <td className="px-2 py-1.5">
-                        {row.ok ? row.studentName ?? '—' : row.error ?? 'Pendiente'}
+                        {row.ok ? (
+                          row.studentName ?? '—'
+                        ) : row.pendingStudent ? (
+                          <Select
+                            disabled={scanBusy}
+                            onValueChange={(id) => {
+                              if (id) void persistPendingBatchStudent(idx, id);
+                            }}
+                          >
+                            <SelectTrigger className="h-8 min-w-[10rem] text-xs">
+                              <SelectValue placeholder="Elegir alumno…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {sortedStudents.map((s) => (
+                                <SelectItem key={s.id} value={s.id}>
+                                  {s.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          row.error ?? 'Pendiente'
+                        )}
                       </td>
                       <td className="px-2 py-1.5 tabular-nums">
-                        {row.ok && typeof row.pct === 'number' ? `${row.pct}%` : '—'}
+                        {typeof row.pct === 'number' ? `${row.pct}%` : '—'}
                       </td>
                     </tr>
                   ))}

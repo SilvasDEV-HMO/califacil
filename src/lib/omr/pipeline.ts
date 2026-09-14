@@ -67,9 +67,23 @@ export type MobileWarpPipelineResult = {
   source: 'roi' | 'full_res' | 'corner_markers' | 'strips' | 'none';
 };
 
+/** Carta lista para OMR: fiduciales en sitio, o 3–4 cuadritos + franjas. El tamaño solo no basta. */
+export function isCanonicalGradeCanvasReady(
+  canvas: HTMLCanvasElement,
+  alignment: WarpAlignmentReport | null
+): boolean {
+  if (alignment?.ok) return true;
+  if (isMobileWarpedAnswerSheetAcceptable(canvas)) return true;
+  return (
+    isCalifacilWarpedLetterCanvas(canvas) &&
+    hasCalifacilAlignStrips(canvas) &&
+    countCalifacilCornerMarkers(canvas) >= 3
+  );
+}
+
 /**
- * Cualquier origen (PNG, JPG, cámara) → 4 cuadritos negros → canvas 1230×1600.
- * No califica la foto cruda. Solo omite warp si los fiduciales ya están en sitio.
+ * Cualquier origen (PNG, JPG, cámara, PDF raster) → 4 cuadritos negros → canvas de referencia.
+ * No califica la foto cruda. Solo omite warp si los fiduciales ya están en las posiciones impresas.
  */
 export function prepareCanonicalCalifacilLetterCanvas(
   source: HTMLCanvasElement,
@@ -94,13 +108,12 @@ export function prepareCanonicalCalifacilLetterCanvas(
           : scaleCanvasToExactSize(canvas, expected.width, expected.height);
     const aligned =
       sized === canvas ? alignment : measureWarpedFiducialAlignment(sized, maxErrorPx);
-    if (
+    const letterSized =
       isReferenceGradeLetterCanvas(sized) ||
-      (sized.width === expected.width && sized.height === expected.height)
-    ) {
-      return { canvas: sized, alignment: aligned };
-    }
-    return null;
+      (sized.width === expected.width && sized.height === expected.height);
+    if (!letterSized) return null;
+    if (!isCanonicalGradeCanvasReady(sized, aligned)) return null;
+    return { canvas: sized, alignment: aligned };
   };
 
   const base =
@@ -108,18 +121,19 @@ export function prepareCanonicalCalifacilLetterCanvas(
       ? scaleCanvasToMaxSide(source, expected.height)
       : source;
 
-  const parked = measureWarpedFiducialAlignment(base, maxErrorPx);
+  // Presupuesto relativo: raster PDF ~1127×1600 puede estar a ~15 px; una foto torcida, a cientos.
+  const parkedBudget = Math.max(
+    maxErrorPx,
+    Math.round(Math.min(base.width, base.height) * 0.02)
+  );
+  const parked = measureWarpedFiducialAlignment(base, parkedBudget);
   if (parked.ok) {
-    return finishCanonical(base, parked);
-  }
-  // PDF / PNG raster ya en tamaño de referencia: no warpear (homografía inventada = 15/30).
-  if (isReferenceGradeLetterCanvas(base)) {
     return finishCanonical(base, parked);
   }
 
   const warpSrc = opts?.frameQuad ? source : base;
   let quad: RoiQuad | null = detectCalifacilQuadFromCornerMarkers(warpSrc);
-  if (!quad && opts?.frameQuad) {
+  if (!quad && opts?.frameQuad && countCalifacilCornerMarkers(warpSrc) >= 3) {
     quad = opts.frameQuad;
   }
   if (!quad) {
@@ -129,6 +143,21 @@ export function prepareCanonicalCalifacilLetterCanvas(
     }
   }
   if (!quad) return null;
+
+  // PDF/escáner plano: la hoja YA es la página (cuadritos en las esquinas, poco sesgo).
+  // Warpear a 1230×1600 inventa homografía y tira el golden a 15/30.
+  // Foto con mesa/fondo: el quad no llena la página → sí warpear.
+  const fill = measureRoiSheetFillRatio(quad, warpSrc.width, warpSrc.height);
+  const skewPx = Math.max(
+    Math.abs(quad[0].y - quad[1].y),
+    Math.abs(quad[3].y - quad[2].y),
+    Math.abs(quad[0].x - quad[3].x),
+    Math.abs(quad[1].x - quad[2].x)
+  );
+  const skewOk = skewPx <= Math.max(14, Math.min(warpSrc.width, warpSrc.height) * 0.02);
+  if (fill >= 0.82 && skewOk && isReferenceGradeLetterCanvas(warpSrc)) {
+    return { canvas: warpSrc, alignment: parked };
+  }
 
   const result = warpAndValidateCalifacilSheet(warpSrc, quad, maxErrorPx, { fast });
   if (!result.warped) return null;
