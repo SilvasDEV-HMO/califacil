@@ -6,7 +6,9 @@ import 'server-only';
  * - `sb_secret_…` (API keys nuevas)
  * NO vale `sb_publishable_…` ni la anon JWT (`"role":"anon"`).
  */
-export function isUsableSupabaseServiceRoleKey(key: string | undefined | null): boolean {
+export function isUsableSupabaseServiceRoleKey(
+  key: string | undefined | null,
+): key is string {
   const k = (key ?? '').trim();
   if (!k) return false;
   if (k.startsWith('sb_publishable_')) return false;
