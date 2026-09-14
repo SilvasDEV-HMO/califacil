@@ -130,7 +130,9 @@ export default function LandingPage() {
           <p className="mt-0.5 text-[clamp(0.6rem,1.2vh,0.875rem)] leading-snug text-gray-600 sm:mt-1.5 sm:text-sm">
             Herramienta creada por{' '}
             <Link
-              href="https://silvasdev.vercel.app/"
+              href="https://www.silvasdev.com/"
+              target="_blank"
+              rel="noopener noreferrer"
               className="font-medium text-orange-600 hover:text-orange-700 hover:underline"
             >
               Silvas Dev

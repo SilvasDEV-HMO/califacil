@@ -238,6 +238,8 @@ type BatchGradeItem = {
   error?: string;
   pendingStudent?: boolean;
   mergedDraft?: Record<string, string>;
+  /** Recorte del nombre manuscrito en la hoja. */
+  nameCropUrl?: string | null;
 };
 
 const FOLDER_BATCH_MAX_FILES = 80;
@@ -3461,6 +3463,7 @@ export default function CalificarPage() {
           const merged: Record<string, string> = {};
           let controlNumber: string | null = null;
           let studentId: string | null = null;
+          let nameCropUrl: string | null = null;
 
           if (isPdf) {
             const first = await renderPdfGradingPageCanvas(file, 1, undefined, {
@@ -3495,6 +3498,9 @@ export default function CalificarPage() {
                 pdfFailed = true;
                 break;
               }
+              if (p === 1) {
+                nameCropUrl = cropAnswerSheetNameSnippetDataUrl(canonical.canvas, 420);
+              }
               const read = await finalizeCapturedSheet(canonical.canvas, pdfPseudo(p), {
                 skipReviewUi: true,
                 silentBatch: true,
@@ -3522,6 +3528,17 @@ export default function CalificarPage() {
             sheetIndexRef.current = 0;
             const img = await fileToImage(file);
             if (gen !== gradeReadGenRef.current) return;
+            const rawCanvas = prepareCalifacilScanInput(img, { useGuideCrop: false });
+            if (rawCanvas) {
+              const canonical = prepareCanonicalCalifacilLetterCanvas(rawCanvas, {
+                fast: true,
+                forceWarp: true,
+              });
+              nameCropUrl = cropAnswerSheetNameSnippetDataUrl(
+                canonical?.canvas ?? rawCanvas,
+                420
+              );
+            }
             const read = await finalizeCapturedSheet(img, file, {
               skipReviewUi: true,
               silentBatch: true,
@@ -3553,6 +3570,7 @@ export default function CalificarPage() {
               pendingStudent: true,
               mergedDraft: { ...merged },
               pct: previewStats.pct,
+              nameCropUrl,
               error: 'Elige al alumno para guardar',
             });
             continue;
@@ -3564,6 +3582,7 @@ export default function CalificarPage() {
             ok: true,
             studentName: student.name,
             pct: stats.pct,
+            nameCropUrl,
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Error al calificar';
@@ -3633,6 +3652,7 @@ export default function CalificarPage() {
           ok: true,
           studentName: student.name,
           pct: stats.pct,
+          nameCropUrl: row.nameCropUrl,
         };
         return next;
       });
@@ -4980,19 +5000,20 @@ export default function CalificarPage() {
           if (!open) setBatchSummary(null);
         }}
       >
-        <DialogContent className="max-h-[min(90vh,640px)] sm:max-w-lg">
+        <DialogContent className="max-h-[min(90vh,720px)] sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
-              Se guarda al identificar al alumno (número de control, nombre del archivo o el selector).
+              Identifica al alumno por el nombre escrito en la hoja y, si hace falta, elige en el
+              selector.
             </DialogDescription>
           </DialogHeader>
           {batchSummary && batchSummary.length > 0 ? (
-            <div className="max-h-[min(50vh,420px)] overflow-auto rounded-md border">
+            <div className="max-h-[min(55vh,480px)] overflow-auto rounded-md border">
               <table className="w-full text-left text-sm">
                 <thead className="sticky top-0 bg-gray-50">
                   <tr>
-                    <th className="px-2 py-1.5 font-medium">Archivo</th>
+                    <th className="px-2 py-1.5 font-medium">Nombre en la hoja</th>
                     <th className="px-2 py-1.5 font-medium">Alumno</th>
                     <th className="px-2 py-1.5 font-medium">Nota</th>
                   </tr>
@@ -5000,8 +5021,20 @@ export default function CalificarPage() {
                 <tbody>
                   {batchSummary.map((row, idx) => (
                     <tr key={`${row.fileName}-${idx}`} className="border-t">
-                      <td className="max-w-[10rem] truncate px-2 py-1.5" title={row.fileName}>
-                        {row.fileName}
+                      <td className="px-2 py-1.5">
+                        {row.nameCropUrl ? (
+                          /* eslint-disable-next-line @next/next/no-img-element */
+                          <img
+                            src={row.nameCropUrl}
+                            alt={`Nombre escrito (${row.fileName})`}
+                            title={row.fileName}
+                            className="h-10 max-w-[min(100%,18rem)] rounded border border-gray-200 bg-white object-contain object-left"
+                          />
+                        ) : (
+                          <span className="max-w-[10rem] truncate text-xs text-gray-500" title={row.fileName}>
+                            {row.fileName}
+                          </span>
+                        )}
                       </td>
                       <td className="px-2 py-1.5">
                         {row.ok ? (

@@ -14,6 +14,7 @@ export function toSpanishAuthMessage(raw: string | undefined | null): string {
     'Signup requires a valid password': 'La contraseña no es válida.',
     'Unable to validate email address: invalid format': 'El formato del correo no es válido.',
     'Email rate limit exceeded': 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.',
+    LOGIN_LOCKED: 'Demasiados intentos fallidos. Espera antes de volver a intentar.',
     'For security purposes, you can only request this after': 'Por seguridad, debes esperar antes de volver a intentarlo.',
   };
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -8,63 +8,136 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { useAuth } from '@/hooks/useAuth';
 import { BrandWordmark } from '@/components/brand-wordmark';
 import { Mail, Lock, Loader2, Eye, EyeOff } from 'lucide-react';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { supabase } from '@/lib/supabase';
 import { isCalifacilSuperUserEmail, isSubscriptionActive } from '@/lib/billing';
 
+type LoginApiResponse = {
+  ok?: boolean;
+  error?: string;
+  hint?: string;
+  locked?: boolean;
+  retryAfterSeconds?: number;
+  attemptsLeft?: number;
+  nextLockMinutes?: number;
+  message?: string | null;
+  access_token?: string;
+  refresh_token?: string;
+  user?: { id: string | null; email: string | null };
+};
+
+function formatWait(totalSec: number): string {
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes} min ${seconds.toString().padStart(2, '0')}s`;
+}
+
 export default function LoginPage() {
   const router = useRouter();
-  const { signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [lockSeconds, setLockSeconds] = useState(0);
+
+  const refreshLock = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/login', { method: 'GET', cache: 'no-store' });
+      const payload = (await res.json().catch(() => ({}))) as LoginApiResponse;
+      if (payload.locked && (payload.retryAfterSeconds ?? 0) > 0) {
+        setLockSeconds(payload.retryAfterSeconds ?? 0);
+      } else {
+        setLockSeconds(0);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshLock();
+  }, [refreshLock]);
+
+  useEffect(() => {
+    if (!locked) return;
+    const id = window.setInterval(() => {
+      setLockSeconds((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [locked]);
+
+  const locked = lockSeconds > 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (locked) return;
     setLoading(true);
 
     try {
-      const { data, error } = await signIn(email, password);
-      if (error) {
-        toast.error('Error al iniciar sesión', {
-          description: toSpanishAuthMessage(error.message),
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as LoginApiResponse;
+
+      if (payload.locked && (payload.retryAfterSeconds ?? 0) > 0) {
+        setLockSeconds(payload.retryAfterSeconds ?? 0);
+        toast.error('Acceso bloqueado', {
+          description: payload.error || 'Espera antes de volver a intentar.',
         });
-      } else {
-        const userId = data.user?.id;
-        if (!userId) {
-          toast.error('No se pudo validar tu sesion.');
-          return;
-        }
-
-        const { data: billingRow, error: billingError } = await supabase
-          .from('teacher_billing')
-          .select('is_active,subscription_status')
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        if (billingError) {
-          toast.error('Error al validar tu suscripcion', {
-            description: toSpanishAuthMessage(billingError.message),
-          });
-          return;
-        }
-
-        if (
-          !isCalifacilSuperUserEmail(data.user?.email) &&
-          !isSubscriptionActive(billingRow)
-        ) {
-          toast.message('Tu cuenta esta creada, pero aun no tiene un plan activo.');
-          router.push('/billing');
-          return;
-        }
-
-        toast.success('¡Bienvenido de vuelta!');
-        router.push('/dashboard');
+        return;
       }
+
+      if (!res.ok || !payload.ok || !payload.access_token || !payload.refresh_token) {
+        toast.error('Error al iniciar sesión', {
+          description: toSpanishAuthMessage(payload.error),
+        });
+        return;
+      }
+
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: payload.access_token,
+        refresh_token: payload.refresh_token,
+      });
+      if (sessionError) {
+        toast.error('No se pudo guardar la sesión', {
+          description: toSpanishAuthMessage(sessionError.message),
+        });
+        return;
+      }
+
+      const userId = payload.user?.id;
+      const userEmail = payload.user?.email;
+      if (!userId) {
+        toast.error('No se pudo validar tu sesion.');
+        return;
+      }
+
+      const { data: billingRow, error: billingError } = await supabase
+        .from('teacher_billing')
+        .select('is_active,subscription_status')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (billingError) {
+        toast.error('Error al validar tu suscripcion', {
+          description: toSpanishAuthMessage(billingError.message),
+        });
+        return;
+      }
+
+      if (!isCalifacilSuperUserEmail(userEmail) && !isSubscriptionActive(billingRow)) {
+        toast.message('Tu cuenta esta creada, pero aun no tiene un plan activo.');
+        router.push('/billing');
+        return;
+      }
+
+      toast.success('¡Bienvenido de vuelta!');
+      router.push('/dashboard');
     } catch {
       toast.error('Error inesperado', {
         description: 'Inténtalo de nuevo en unos momentos.',
@@ -116,6 +189,8 @@ export default function LoginPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="h-11 pl-9 text-base sm:h-10 sm:text-sm"
+                    disabled={locked}
+                    autoComplete="username"
                     required
                   />
                 </div>
@@ -133,6 +208,8 @@ export default function LoginPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="h-11 pl-9 pr-10 text-base sm:h-10 sm:text-sm"
+                    disabled={locked}
+                    autoComplete="current-password"
                     required
                   />
                   <button
@@ -152,17 +229,25 @@ export default function LoginPage() {
               <Button
                 type="submit"
                 className="h-11 w-full bg-orange-600 text-sm font-semibold hover:bg-orange-700 sm:h-10"
-                disabled={loading}
+                disabled={loading || locked}
               >
                 {loading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     Iniciando sesión...
                   </>
+                ) : locked ? (
+                  `Espera ${formatWait(lockSeconds)}`
                 ) : (
                   'Iniciar Sesión'
                 )}
               </Button>
+              {locked ? (
+                <p className="text-center text-xs text-amber-800 sm:text-sm">
+                  Esta red superó 3 intentos fallidos. El bloqueo aumenta 10 minutos cada vez (10,
+                  20, 30…).
+                </p>
+              ) : null}
             </form>
             <p className="text-center text-xs text-gray-600 sm:text-sm">
               ¿No tienes cuenta?{' '}

@@ -74,29 +74,12 @@
     max-height: 100dvh;
     overflow: hidden;
     touch-action: pan-x pan-y;
-    /* Cursor lápiz en toda la app; hotspot en la punta del lápiz */
-    cursor: url('/cursors/pencil.svg') 4 28, auto;
   }
   body {
     @apply bg-background text-foreground;
     height: 100dvh;
     max-height: 100dvh;
     overflow: hidden;
-  }
-  /* Campos de texto: cursor de edición */
-  input[type='text'],
-  input[type='email'],
-  input[type='password'],
-  input[type='search'],
-  input[type='url'],
-  input[type='tel'],
-  input[type='number'],
-  input[type='date'],
-  input[type='time'],
-  textarea,
-  select,
-  [contenteditable='true'] {
-    cursor: text;
   }
   /* iOS zoom al enfocar si el input es < 16px; se queda pegado hasta pellizcar. */
   @media (max-width: 767px) {
@@ -108,20 +91,66 @@
       font-size: 16px !important;
     }
   }
-  /* Controles que no son “escritura” */
+}
+
+/* Escritorio: lápiz en toda la app; borrador al escribir */
+@media (hover: hover) and (pointer: fine) {
+  html,
+  body {
+    cursor: url('/cursors/pencil.png') 0 0, auto;
+  }
+
+  a,
+  button,
+  label,
+  summary,
+  [role='button'],
+  [role='menuitem'],
+  [role='option'],
+  [role='tab'],
+  [role='checkbox'],
+  [role='radio'],
+  [role='switch'],
   input[type='checkbox'],
   input[type='radio'],
   input[type='range'],
   input[type='file'],
-  input[type='color'] {
-    cursor: url('/cursors/pencil.svg') 4 28, pointer;
+  input[type='color'],
+  select {
+    cursor: url('/cursors/pencil.png') 0 0, pointer;
+  }
+
+  input:not([type]),
+  input[type='text'],
+  input[type='email'],
+  input[type='password'],
+  input[type='search'],
+  input[type='url'],
+  input[type='tel'],
+  input[type='number'],
+  input[type='date'],
+  input[type='time'],
+  input[type='datetime-local'],
+  textarea,
+  [contenteditable='true'],
+  [role='textbox'],
+  [role='combobox'],
+  [role='searchbox'] {
+    cursor: url('/cursors/eraser.png') 7 7, text;
   }
 }
 
-/* Sustituir manitas de Tailwind / componentes por el mismo lápiz */
-@layer utilities {
-  .cursor-pointer {
-    cursor: url('/cursors/pencil.svg') 4 28, pointer !important;
+/* Sustituir manitas de Tailwind / componentes por el mismo lápiz (solo escritorio) */
+@media (hover: hover) and (pointer: fine) {
+  .cursor-pointer,
+  .cursor-text {
+    cursor: url('/cursors/pencil.png') 0 0, pointer !important;
+  }
+  input.cursor-text,
+  textarea.cursor-text,
+  [contenteditable='true'].cursor-text,
+  [role='textbox'].cursor-text {
+    cursor: url('/cursors/eraser.png') 7 7, text !important;
   }
 }
 
@@ -371,7 +400,7 @@ html.calificar-scanner-open [data-sonner-toaster] {
 }
 
 .exam-scanner-hud-btn {
-  cursor: pointer;
+  cursor: url('/cursors/pencil.png') 0 0, pointer;
   -webkit-user-select: none;
   user-select: none;
 }
