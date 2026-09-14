@@ -66,15 +66,12 @@ function resolveCircle(
   imageH: number
 ): BubbleCircle | null {
   const fromCell = cell ? cellToBubbleCircle(cell, imageW, imageH) : null;
-  const maxRPx = fromCell?.r ?? Math.min(imageW, imageH) * 0.04;
+  if (fromCell) return fromCell;
+  const maxRPx = Math.min(imageW, imageH) * 0.04;
   if (bubble && isSaneBubbleR(bubble.r)) {
-    const fromBubble = bubbleSampleToCircle(bubble, imageW, imageH, maxRPx);
-    // X del anillo; Y del renglón de la celda para que naranja y rojo no se encimen entre filas.
-    return fromCell
-      ? { cx: fromBubble.cx, cy: fromCell.cy, r: Math.min(fromBubble.r, fromCell.r) }
-      : fromBubble;
+    return bubbleSampleToCircle(bubble, imageW, imageH, maxRPx);
   }
-  return fromCell;
+  return null;
 }
 
 /**

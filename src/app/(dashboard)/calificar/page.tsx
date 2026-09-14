@@ -89,6 +89,7 @@ import {
   cropAnswerSheetNameSnippetDataUrl,
   sanitizeAnswerSheetOmrMeta,
   answerSheetRowInkMedian,
+  rereadOmrPicksOnGeometry,
   snapReviewOverlayToPrintedRings,
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
@@ -977,12 +978,21 @@ export default function CalificarPage() {
         { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
       );
       const overlayGeom = overlayMeta.geometry ?? letterRead.geometry;
+      const reread = overlayGeom
+        ? rereadOmrPicksOnGeometry(
+            displayCanvas,
+            overlayGeom,
+            omrCols,
+            omrRowCount,
+            overlayMeta
+          )
+        : overlayMeta;
       const orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
       return {
         meta: {
-          ...letterRead.meta,
-          picks: letterRead.picks,
-          rows: letterRead.meta.rows,
+          ...reread,
+          picks: reread.picks,
+          rows: reread.rows,
           geometry: overlayGeom,
           reviewSourceCanvas: displayCanvas,
         },
@@ -1774,10 +1784,11 @@ export default function CalificarPage() {
         }
         const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
         const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
-        // Overlay = plantilla impresa (lockTemplate), misma que el PDF.
-        const overlayGeom = buildDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount, {
-          skipSnap: true,
-        });
+        // Overlay = geometría anclada a anillos (misma carta que el JPEG).
+        const overlayGeom =
+          meta.geometry?.cells?.length
+            ? meta.geometry
+            : buildDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount);
         const geomClone = overlayGeom
           ? syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH)
           : emptyOverlayGeometry(previewW, previewH);
@@ -4102,8 +4113,13 @@ export default function CalificarPage() {
           isForcedWarpGradeCanvas(califacilFastScan.displayCanvas, alignment)
         ) {
           displayCanvas = califacilFastScan.displayCanvas;
-        } else {
-          displayCanvas = warped;
+          scanCanvas = displayCanvas;
+        } else if (
+          califacilFastScan.docCanvas instanceof HTMLCanvasElement &&
+          isForcedWarpGradeCanvas(califacilFastScan.docCanvas, alignment)
+        ) {
+          displayCanvas = califacilFastScan.docCanvas;
+          scanCanvas = displayCanvas;
         }
         if (califacilFastScan.rejectedCorners) {
           clearPreview();
@@ -4125,8 +4141,10 @@ export default function CalificarPage() {
         // Preview + overlay = misma carta warpeada (plantilla PDF, no foto cruda).
         const letterFreeze = canvasPreviewJpeg(displayCanvas, 900, 0.7);
         if (letterFreeze) setMobileScanPreviewUrl(letterFreeze.dataUrl);
+        const snappedGeom = califacilFastScan.meta?.geometry ?? null;
         const overlayGeom = syncCalifacilOmrGeometryImageSize(
-          buildDisplayOverlayGeometry(displayCanvas, omrCols, omrRowCount, { skipSnap: true }),
+          snappedGeom ??
+            buildDisplayOverlayGeometry(displayCanvas, omrCols, omrRowCount),
           letterFreeze?.width ?? displayCanvas.width,
           letterFreeze?.height ?? displayCanvas.height
         );
@@ -4191,43 +4209,30 @@ export default function CalificarPage() {
           alignment
         );
       } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
-        // Conservar picks del fast scan; no sanitize-wipe hasta decidir trusted.
-        let warpMeta = {
-          ...califacilFastScan.meta,
-          picks: califacilFastScan.meta.picks.slice(0, Math.max(chunkRows, omrRowCount)),
-          rows: califacilFastScan.meta.rows.slice(0, Math.max(chunkRows, omrRowCount)),
-        };
+        const letterCanvas = displayCanvas;
+        let warpMeta = sanitizeAnswerSheetOmrMeta(
+          {
+            ...califacilFastScan.meta,
+            picks: califacilFastScan.meta.picks.slice(0, Math.max(chunkRows, omrRowCount)),
+            rows: califacilFastScan.meta.rows.slice(0, Math.max(chunkRows, omrRowCount)),
+            reviewSourceCanvas: letterCanvas,
+            geometry: califacilFastScan.meta.geometry,
+          },
+          chunkRows
+        );
 
         const displayGeom = syncCalifacilOmrGeometryImageSize(
-          buildDisplayOverlayGeometry(warped, omrCols, omrRowCount, { skipSnap: true }),
-          warped.width,
-          warped.height
+          warpMeta.geometry ??
+            buildDisplayOverlayGeometry(letterCanvas, omrCols, omrRowCount),
+          letterCanvas.width,
+          letterCanvas.height
         );
 
         const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
-        let trusted = resolvedCount >= Math.ceil(chunkRows * 0.7);
+        const blankSheet = isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows);
+        let trusted = resolvedCount >= Math.ceil(chunkRows * 0.7) && !blankSheet;
 
-        if (trusted) {
-          warpMeta = {
-            ...warpMeta,
-            picks: warpMeta.picks.slice(0, chunkRows),
-            rows: warpMeta.rows.slice(0, chunkRows),
-            reviewSourceCanvas: warped,
-            geometry: displayGeom,
-          };
-        } else if (isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
-          const inkMid = answerSheetRowInkMedian(warpMeta, chunkRows);
-          const falseBlank =
-            countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows)) === 0 && inkMid >= 0.11;
-          if (falseBlank) {
-            clearPreview();
-            toast.error(
-              'No se leyeron las marcas. Acerca la hoja al marco naranja e intenta otra vez.'
-            );
-            setLiveStatus('Lectura fallida — vuelve a encuadrar.');
-            if (video) resumeLiveVideoAfterScan(video);
-            return;
-          }
+        if (blankSheet) {
           warpMeta = {
             ...warpMeta,
             picks: Array(chunkRows).fill(null) as (number | null)[],
@@ -4238,11 +4243,19 @@ export default function CalificarPage() {
             })),
             maxSameColumnCount: 0,
             needsVisionAssist: false,
-            reviewSourceCanvas: warped,
+            reviewSourceCanvas: letterCanvas,
+            geometry: displayGeom,
+          };
+          trusted = false;
+        } else if (trusted) {
+          warpMeta = {
+            ...warpMeta,
+            picks: warpMeta.picks.slice(0, chunkRows),
+            rows: warpMeta.rows.slice(0, chunkRows),
+            reviewSourceCanvas: letterCanvas,
             geometry: displayGeom,
           };
         } else {
-          // Lectura débil / colapso / mal alineada: no calificar % inventado.
           clearPreview();
           toast.error(
             'No se pudo alinear la tabla. Alinea los 4 cuadritos negros con las esquinas naranjas.'
@@ -4255,26 +4268,26 @@ export default function CalificarPage() {
         readingOverride = buildCalifacilOmrReadingOverride(
           {
             ...warpMeta,
-            reviewSourceCanvas: warped,
+            reviewSourceCanvas: letterCanvas,
             geometry: displayGeom,
           },
           chunk,
-          warped,
+          letterCanvas,
           liveLockedAnswersRef.current,
           alignment,
-          { trustedMobileRead: trusted }
+          { trustedMobileRead: trusted || blankSheet }
         );
       }
 
       const result = await finalizeCapturedSheet(
-        sheetKind === 'califacil' ? warped : scanCanvas,
+        sheetKind === 'califacil' ? displayCanvas : scanCanvas,
         undefined,
         {
         preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        displaySource: warped,
+        displaySource: displayCanvas,
         readingOverride,
         uploadKind: sheetKind === 'califacil' ? 'flatDocument' : undefined,
       });

@@ -203,7 +203,8 @@ export function prepareCanonicalCalifacilLetterCanvas(
     } | null = null;
     for (const q of tryQuads) {
       const fill = measureRoiSheetFillRatio(q, warpSrc.width, warpSrc.height);
-      if (fill > 0.85) continue;
+      // Solo ignorar un quad que es toda la foto (no los 4 negros de una hoja a recorte completo).
+      if (fill > 0.985) continue;
       const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast });
       if (!result.warped) continue;
       const alignment =
