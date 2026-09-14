@@ -149,7 +149,16 @@ export function prepareCanonicalCalifacilLetterCanvas(
     if (!letterSized) return null;
     if (forceWarp && !exactRef) return null;
     if (forceWarp && !aligned.ok) return null;
-    if (!forceWarp && !isCanonicalGradeCanvasReady(sized, aligned)) return null;
+    if (!forceWarp) {
+      if (isCanonicalGradeCanvasReady(sized, aligned)) {
+        return { canvas: sized, alignment: aligned };
+      }
+      /* PDF/escáner: la página ya es la hoja; no exigir 4 fiduciales a 8 px. */
+      if (exactRef || isReferenceGradeLetterCanvas(sized) || isCalifacilWarpedLetterCanvas(sized)) {
+        return { canvas: sized, alignment: aligned };
+      }
+      return null;
+    }
     return { canvas: sized, alignment: aligned };
   };
 
@@ -234,15 +243,18 @@ export function prepareCanonicalCalifacilLetterCanvas(
       Math.abs(sheet[1].x - sheet[2].x)
     );
     const skewOk = skewPx <= Math.max(14, Math.min(warpSrc.width, warpSrc.height) * 0.02);
-    const letterish =
-      isReferenceGradeLetterCanvas(warpSrc) || isCalifacilWarpedLetterCanvas(warpSrc);
-    if (fill >= 0.82 && skewOk && letterish) {
+    if (fill >= 0.75 && skewOk) {
       const parkedPage = finishCanonical(warpSrc, parked);
       if (parkedPage) return parkedPage;
     }
   }
 
-  if (!quad) return null;
+  if (!quad) {
+    if (!forceWarp) {
+      return finishCanonical(warpSrc, parked);
+    }
+    return null;
+  }
 
   const result = warpAndValidateCalifacilSheet(warpSrc, quad, maxErrorPx, { fast });
   if (!result.warped) return null;
