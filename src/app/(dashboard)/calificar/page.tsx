@@ -123,6 +123,7 @@ import {
   normalizeCalifacilGradeDocumentCanvas,
   prepareCanonicalCalifacilLetterCanvas,
   isCanonicalGradeCanvasReady,
+  isForcedWarpGradeCanvas,
   isPhotoSheetWarpAcceptable,
 } from '@/lib/omr/pipeline';
 import {
@@ -3889,12 +3890,13 @@ export default function CalificarPage() {
           frameQuad: frameQuad ?? undefined,
           maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
           fast: true,
+          forceWarp: true,
         });
         if (canonical) {
           warped = canonical.canvas;
           alignment = canonical.alignment;
         }
-        if (!warped || !isCanonicalGradeCanvasReady(warped, alignment)) {
+        if (!warped || !isForcedWarpGradeCanvas(warped, alignment)) {
           warped = null;
           alignment = null;
         }
@@ -3942,7 +3944,7 @@ export default function CalificarPage() {
         setFlashOn(false);
       }
 
-      // Mantener freeze de captura; no regenerar JPEG warped (ahorra toDataURL).
+      // Preview = hoja warpeada (nunca el freeze del visor).
       setLiveStatus('Calificando…');
       await yieldForSpinnerPaint();
 
@@ -3964,7 +3966,7 @@ export default function CalificarPage() {
         califacilFastScan = await runFastWarpedScan(warped, alignment, chunkRows);
         scanCanvas = califacilFastScan.docCanvas;
         displayCanvas = califacilFastScan.displayCanvas;
-        if (!isCanonicalGradeCanvasReady(displayCanvas, alignment)) {
+        if (!isForcedWarpGradeCanvas(displayCanvas, alignment)) {
           displayCanvas = warped;
           scanCanvas = warped;
         }
@@ -3985,15 +3987,15 @@ export default function CalificarPage() {
           if (video) resumeLiveVideoAfterScan(video);
           return;
         }
-        // Sustituir freeze crudo por hoja sola lo antes posible (mismo canvas + geometría).
-        const letterFreeze = canvasPreviewJpeg(displayCanvas, 900, 0.7);
+        // Sustituir freeze crudo por hoja sola warpeada (1230×1600).
+        const letterFreeze = canvasPreviewJpeg(warped, 900, 0.7);
         if (letterFreeze) setMobileScanPreviewUrl(letterFreeze.dataUrl);
         if (califacilFastScan.meta?.geometry?.cells?.length) {
           setMobileScanPreviewGeometry(
             syncCalifacilOmrGeometryImageSize(
               califacilFastScan.meta.geometry,
-              letterFreeze?.width ?? displayCanvas.width,
-              letterFreeze?.height ?? displayCanvas.height
+              letterFreeze?.width ?? warped.width,
+              letterFreeze?.height ?? warped.height
             )
           );
           setMobileScanPreviewPicks(califacilFastScan.meta.picks.slice(0, chunkRows));
@@ -4032,7 +4034,6 @@ export default function CalificarPage() {
       // El preview del modal se genera ligero dentro de finalizeCapturedSheet.
 
       let readingOverride: CalifacilOmrReadingResult | undefined;
-      let mobileDisplaySource: HTMLCanvasElement = displayCanvas;
       if (sheetKind === 'zipgrade' && zipPreviewMeta) {
         const zgRows = Array.from({ length: chunkRows }, () => ({
           pick: null as number | null,
@@ -4065,24 +4066,20 @@ export default function CalificarPage() {
 
         // Overlay = geometría de la tabla leída (no plantilla carta).
         const resolved = resolveMobileGradeDisplay(
-          displayCanvas,
-          displayCanvas,
+          warped,
+          warped,
           omrCols,
           omrRowCount,
           warpMeta
         );
-        mobileDisplaySource = resolved.previewCanvas;
-        if (!isCanonicalGradeCanvasReady(mobileDisplaySource, alignment)) {
-          mobileDisplaySource = warped;
-        }
         let displayGeom =
           warpMeta.geometry?.cells?.length
             ? syncCalifacilOmrGeometryImageSize(
                 warpMeta.geometry,
-                resolved.previewCanvas.width,
-                resolved.previewCanvas.height
+                warped.width,
+                warped.height
               )
-            : resolved.geometry;
+            : syncCalifacilOmrGeometryImageSize(resolved.geometry, warped.width, warped.height);
 
         const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
         let trusted = resolvedCount >= Math.ceil(chunkRows * 0.7);
@@ -4092,7 +4089,7 @@ export default function CalificarPage() {
             ...warpMeta,
             picks: warpMeta.picks.slice(0, chunkRows),
             rows: warpMeta.rows.slice(0, chunkRows),
-            reviewSourceCanvas: resolved.previewCanvas,
+            reviewSourceCanvas: warped,
             geometry: displayGeom,
           };
         } else if (isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows)) {
@@ -4118,7 +4115,7 @@ export default function CalificarPage() {
             })),
             maxSameColumnCount: 0,
             needsVisionAssist: false,
-            reviewSourceCanvas: resolved.previewCanvas,
+            reviewSourceCanvas: warped,
             geometry: displayGeom,
           };
         } else {
@@ -4135,11 +4132,11 @@ export default function CalificarPage() {
         readingOverride = buildCalifacilOmrReadingOverride(
           {
             ...warpMeta,
-            reviewSourceCanvas: resolved.previewCanvas,
+            reviewSourceCanvas: warped,
             geometry: displayGeom,
           },
           chunk,
-          displayCanvas,
+          warped,
           liveLockedAnswersRef.current,
           alignment,
           { trustedMobileRead: trusted }
@@ -4151,7 +4148,7 @@ export default function CalificarPage() {
         warpAlignment: alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        displaySource: mobileDisplaySource,
+        displaySource: warped,
         readingOverride,
         uploadKind: sheetKind === 'califacil' ? 'flatDocument' : undefined,
       });
@@ -4252,18 +4249,14 @@ export default function CalificarPage() {
       });
       await yieldForSpinnerPaint();
 
-      // P0: usar el roiQuad live que disparó 4/4 (no re-detectar strips/page y descartarlo).
+      // P0: usar el roiQuad live que disparó 4/4 (esquinas, no franjas).
       let warpSource: HTMLCanvasElement = gradeCanvas;
       let frameQuad: RoiQuad | null = null;
       let guideCropped = usedGuideCrop;
       if (opts?.roiQuad && opts?.roiCapture) {
         warpSource = fullCanvas;
         frameQuad = frameQuadOnFullCanvas(opts.roiQuad, opts.roiCapture, fullCanvas);
-        // Quad live ya en espacio del sensor: no softAccept de crop naranja.
         guideCropped = false;
-      } else {
-        const stripQuad = detectAnswerSheetQuadViaAlignStrips(gradeCanvas);
-        frameQuad = stripQuad;
       }
 
       await processMobileCapturedCanvas(warpSource, video, {
