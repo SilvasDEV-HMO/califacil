@@ -86,8 +86,7 @@ export async function POST(request: Request) {
     if (locked.message === 'LOGIN_LOCKED' && locked.status) {
       return jsonError(formatLoginLockMessage(locked.status), 429, { throttle: locked.status });
     }
-    const message = err instanceof Error ? err.message : 'No se pudo validar el límite de login.';
-    return jsonError(message, 503);
+    /* Sin service_role válida el anti-fuerza bruta no corre; el login con anon sí. */
   }
 
   const auth = supabaseAuthServer();

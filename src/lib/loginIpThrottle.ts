@@ -67,16 +67,13 @@ function statusFromRow(row: ThrottleRow, now: Date): LoginThrottleStatus {
   };
 }
 
-function requireAdmin() {
-  const admin = createServiceRoleClient();
-  if (!admin) {
-    throw new Error(supabaseServiceRoleConfigError() ?? 'Falta SUPABASE_SERVICE_ROLE_KEY.');
-  }
-  return admin;
+function adminOrNull() {
+  return createServiceRoleClient();
 }
 
 async function loadRow(ipHash: string): Promise<ThrottleRow | null> {
-  const admin = requireAdmin();
+  const admin = adminOrNull();
+  if (!admin) return null;
   const { data, error } = await admin
     .from('login_ip_throttle')
     .select('ip_hash,fail_count,lock_round,locked_until,updated_at')
@@ -87,7 +84,10 @@ async function loadRow(ipHash: string): Promise<ThrottleRow | null> {
 }
 
 async function saveRow(row: Omit<ThrottleRow, 'updated_at'>): Promise<ThrottleRow> {
-  const admin = requireAdmin();
+  const admin = adminOrNull();
+  if (!admin) {
+    throw new Error(supabaseServiceRoleConfigError() ?? 'Falta SUPABASE_SERVICE_ROLE_KEY.');
+  }
   const payload = { ...row, updated_at: new Date().toISOString() };
   const { data, error } = await admin
     .from('login_ip_throttle')
@@ -99,9 +99,13 @@ async function saveRow(row: Omit<ThrottleRow, 'updated_at'>): Promise<ThrottleRo
 }
 
 export async function getLoginThrottle(ip: string): Promise<LoginThrottleStatus> {
-  const row = await loadRow(hashIp(ip));
-  if (!row) return emptyStatus();
-  return statusFromRow(row, new Date());
+  try {
+    const row = await loadRow(hashIp(ip));
+    if (!row) return emptyStatus();
+    return statusFromRow(row, new Date());
+  } catch {
+    return emptyStatus();
+  }
 }
 
 export async function assertLoginNotLocked(ip: string): Promise<LoginThrottleStatus> {
