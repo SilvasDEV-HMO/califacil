@@ -12,6 +12,7 @@ export {
   prepareCalifacilGradeScanCanvases,
   isMobileLetterGradeCanvasReady,
   isPhotoSheetWarpAcceptable,
+  isReferenceGradeLetterCanvas,
   type CalifacilGradeScanCanvases,
   type MobileWarpPipelineResult,
   type NormalizeGradeDocumentResult,

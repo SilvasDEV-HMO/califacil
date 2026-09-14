@@ -52,20 +52,11 @@ export type NormalizeGradeDocumentResult = {
 
 export type RoiQuad = [Point, Point, Point, Point];
 
-function distPoint(a: Point, b: Point): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-/** Quad casi rectangular: escaneo plano, no foto con perspectiva. */
-function quadLooksFrontal(quad: RoiQuad): boolean {
-  const [tl, tr, br, bl] = quad;
-  const top = distPoint(tl, tr);
-  const bot = distPoint(bl, br);
-  const left = distPoint(tl, bl);
-  const right = distPoint(tr, br);
-  const maxTB = Math.max(top, bot, 1);
-  const maxLR = Math.max(left, right, 1);
-  return Math.min(top, bot) / maxTB > 0.92 && Math.min(left, right) / maxLR > 0.92;
+export function isReferenceGradeLetterCanvas(canvas: HTMLCanvasElement): boolean {
+  return (
+    canvasMatchesReferenceGrade(canvas.width, canvas.height) ||
+    canvasNearReferenceGrade(canvas.width, canvas.height)
+  );
 }
 
 export type MobileWarpPipelineResult = {
@@ -94,55 +85,41 @@ export function prepareCanonicalCalifacilLetterCanvas(
     canvas: HTMLCanvasElement,
     alignment: WarpAlignmentReport
   ): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport } | null => {
-    const nearRef =
-      canvasMatchesReferenceGrade(canvas.width, canvas.height) ||
-      canvasNearReferenceGrade(canvas.width, canvas.height);
-    const sized = nearRef
+    const sized = isReferenceGradeLetterCanvas(canvas)
       ? canvas
       : canvas.width === expected.width && canvas.height === expected.height
         ? canvas
         : scaleCanvasToExactSize(canvas, expected.width, expected.height);
     const aligned =
       sized === canvas ? alignment : measureWarpedFiducialAlignment(sized, maxErrorPx);
-    if (nearRef) {
-      return { canvas: sized, alignment: aligned };
-    }
-    if (isMobileWarpedAnswerSheetAcceptable(sized)) {
-      return { canvas: sized, alignment: aligned };
-    }
-    if (
-      hasCalifacilAlignStrips(sized) &&
-      Number.isFinite(aligned.maxErrorPx) &&
-      aligned.maxErrorPx <= 14
-    ) {
+    if (isReferenceGradeLetterCanvas(sized)) {
       return { canvas: sized, alignment: aligned };
     }
     return null;
   };
 
-  const sourceNearRef =
-    canvasMatchesReferenceGrade(source.width, source.height) ||
-    canvasNearReferenceGrade(source.width, source.height);
-  if (sourceNearRef) {
+  if (isReferenceGradeLetterCanvas(source)) {
     return finishCanonical(source, measureWarpedFiducialAlignment(source, maxErrorPx));
   }
 
-  const quad = opts?.frameQuad ?? detectCalifacilSheetCornerQuadRobust(source);
+  const working = scaleCanvasToMaxSide(source, expected.height);
+  if (isReferenceGradeLetterCanvas(working)) {
+    const scanAspect = working.width / Math.max(1, working.height);
+    // Escaneo tipo PDF Luis (~0.70), no foto 3:4 (~0.75).
+    if (scanAspect < 0.73) {
+      return finishCanonical(working, measureWarpedFiducialAlignment(working, maxErrorPx));
+    }
+  }
+
+  const warpSrc = opts?.frameQuad
+    ? source
+    : working.width >= source.width
+      ? working
+      : source;
+  const quad = opts?.frameQuad ?? detectCalifacilSheetCornerQuadRobust(warpSrc);
   if (!quad) return null;
 
-  const fill = measureRoiSheetFillRatio(quad, source.width, source.height);
-  if (fill >= 0.86 && quadLooksFrontal(quad)) {
-    const sized = scaleCanvasToMaxSide(source, expected.height);
-    return finishCanonical(sized, measureWarpedFiducialAlignment(sized, maxErrorPx));
-  }
-
-  const alreadyPrinted = measureWarpedFiducialAlignment(source, maxErrorPx);
-  if (alreadyPrinted.ok) {
-    const sized = scaleCanvasToMaxSide(source, expected.height);
-    return finishCanonical(sized, measureWarpedFiducialAlignment(sized, maxErrorPx));
-  }
-
-  const result = warpAndValidateCalifacilSheet(source, quad, maxErrorPx, { fast });
+  const result = warpAndValidateCalifacilSheet(warpSrc, quad, maxErrorPx, { fast });
   if (!result.warped) return null;
   const canvas =
     result.warped.width === expected.width && result.warped.height === expected.height

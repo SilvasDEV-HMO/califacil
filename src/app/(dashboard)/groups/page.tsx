@@ -130,11 +130,11 @@ export default function GroupsPage() {
                 >
                   <CardContent className="p-3 sm:p-4">
                     <div className="flex min-w-0 items-center justify-between gap-2">
-                      <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-100">
                           <GraduationCap className="h-5 w-5 text-orange-600" />
                         </div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <h3 className="truncate font-semibold text-gray-900">{group.name}</h3>
                           <p className="truncate text-sm text-gray-500">
                             Creado el {new Date(group.created_at).toLocaleDateString('es-ES')}
@@ -144,7 +144,7 @@ export default function GroupsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                        className="h-9 w-9 shrink-0 p-0 text-red-500 hover:bg-red-50 hover:text-red-700"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeleteGroup(group.id);
@@ -347,14 +347,16 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
 
   return (
     <>
-      <Card className="min-w-0">
-      <CardHeader className="min-w-0">
-        <CardTitle className="min-w-0 break-words">Estudiantes - {groupName}</CardTitle>
+      <Card className="min-w-0 overflow-hidden">
+      <CardHeader className="min-w-0 px-3 sm:px-6">
+        <CardTitle className="min-w-0 break-words text-base sm:text-lg">
+          Estudiantes - {groupName}
+        </CardTitle>
         <CardDescription>
           {students.length} estudiantes en este grupo
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="min-w-0 space-y-4 overflow-hidden px-3 sm:px-6">
         {/* Add Student */}
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input
@@ -433,20 +435,20 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
             {searchTerm ? 'No se encontraron estudiantes' : 'No hay estudiantes en este grupo'}
           </div>
         ) : (
-          <div className="divide-y rounded-lg border">
+          <div className="min-w-0 divide-y overflow-hidden rounded-lg border">
             {filteredStudents.map((student) => (
               <div 
                 key={student.id} 
-                className="flex items-center justify-between gap-2 p-3 hover:bg-gray-50"
+                className="flex min-w-0 items-center gap-2 p-3 hover:bg-gray-50"
               >
-                <div className="flex min-w-0 items-center gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100">
                     <span className="text-sm font-medium text-gray-600">
                       {student.name.charAt(0).toUpperCase()}
                     </span>
                   </div>
-                  <div className="min-w-0">
-                    <span className="truncate font-medium">{student.name}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="line-clamp-2 break-words font-medium leading-snug">{student.name}</p>
                     {student.control_number ? (
                       <p className="truncate text-xs text-gray-500">Control: {student.control_number}</p>
                     ) : null}
@@ -455,12 +457,12 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="shrink-0 text-red-500 hover:bg-red-50 hover:text-red-700"
+                  className="h-9 w-9 shrink-0 p-0 text-red-500 hover:bg-red-50 hover:text-red-700"
                   type="button"
                   aria-label={`Eliminar a ${student.name}`}
                   onClick={() => setStudentPendingDelete({ id: student.id, name: student.name })}
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
             ))}

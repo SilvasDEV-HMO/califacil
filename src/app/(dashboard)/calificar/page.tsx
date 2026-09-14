@@ -72,8 +72,6 @@ import {
   MOBILE_LIVE_MIN_FIDUCIAL_CORNERS,
   MOBILE_MIN_ROI_FILL_RATIO,
   isMobileExamSheetReadyForCapture,
-  isCalifacilWarpedLetterCanvas,
-  isMobileWarpedAnswerSheetAcceptable,
   countCalifacilCornerMarkers,
   hasCalifacilAlignStrips,
   MOBILE_ROI_DETECT_MAX_SIDE,
@@ -125,6 +123,7 @@ import {
   normalizeCalifacilGradeDocumentCanvas,
   prepareCanonicalCalifacilLetterCanvas,
   warpCalifacilMobileCaptureFast,
+  isReferenceGradeLetterCanvas,
 } from '@/lib/omr/pipeline';
 import {
   prepareLetterGradeCanvas,
@@ -868,7 +867,7 @@ export default function CalificarPage() {
       const displayCanvas = prepared.canvas;
 
       const sheetFillOk = (c: HTMLCanvasElement): boolean =>
-        isMobileWarpedAnswerSheetAcceptable(c);
+        isReferenceGradeLetterCanvas(c);
 
       const acceptable = sheetFillOk(displayCanvas) || sheetFillOk(warped);
       if (!acceptable) {
@@ -3773,7 +3772,7 @@ export default function CalificarPage() {
           warped = fastWarp.warped;
           alignment = fastWarp.alignment;
         }
-        if (warped && !isMobileWarpedAnswerSheetAcceptable(warped)) {
+        if (!warped || !isReferenceGradeLetterCanvas(warped)) {
           warped = null;
           alignment = null;
         }
@@ -3843,13 +3842,9 @@ export default function CalificarPage() {
         califacilFastScan = await runFastWarpedScan(warped, alignment, chunkRows);
         scanCanvas = califacilFastScan.docCanvas;
         displayCanvas = califacilFastScan.displayCanvas;
-        // Preview debe ser hoja carta enderezada (no foto cruda del monitor/mesa).
-        if (
-          !isCalifacilWarpedLetterCanvas(displayCanvas) &&
-          isCalifacilWarpedLetterCanvas(warped)
-        ) {
-          displayCanvas =
-            prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: true }) ?? warped;
+        if (!isReferenceGradeLetterCanvas(displayCanvas)) {
+          displayCanvas = warped;
+          scanCanvas = warped;
         }
         if (califacilFastScan.rejectedCorners) {
           clearPreview();
@@ -3955,6 +3950,9 @@ export default function CalificarPage() {
           warpMeta
         );
         mobileDisplaySource = resolved.previewCanvas;
+        if (!isReferenceGradeLetterCanvas(mobileDisplaySource)) {
+          mobileDisplaySource = warped;
+        }
         let displayGeom =
           warpMeta.geometry?.cells?.length
             ? syncCalifacilOmrGeometryImageSize(
@@ -5102,18 +5100,15 @@ export default function CalificarPage() {
                       variant="outline"
                       className="border-orange-300 text-orange-900 hover:bg-orange-50"
                       disabled={scanBusy || !canGradeStudents}
-                      onClick={() => {
-                        const el = folderInputRef.current;
-                        if (!el) return;
-                        el.setAttribute('webkitdirectory', '');
-                        el.setAttribute('directory', '');
-                        el.click();
-                      }}
+                      onClick={() => folderInputRef.current?.click()}
                     >
                       <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
-                      {scanBusy ? 'Calificando carpeta…' : 'Calificar carpeta…'}
+                      {scanBusy ? 'Calificando archivos…' : 'Elegir archivos…'}
                     </Button>
                   </div>
+                  <p className="text-[11px] text-gray-500">
+                    PNG, JPG o PDF: uno, varios o Ctrl+A para toda la carpeta.
+                  </p>
                   {scanBusy && liveStatus ? (
                     <p className="text-xs font-medium text-orange-800">{liveStatus}</p>
                   ) : null}
@@ -5408,18 +5403,15 @@ export default function CalificarPage() {
                         variant="outline"
                         className="border-orange-300 text-orange-900 hover:bg-orange-50"
                         disabled={scanBusy || !canGradeStudents}
-                        onClick={() => {
-                          const el = folderInputRef.current;
-                          if (!el) return;
-                          el.setAttribute('webkitdirectory', '');
-                          el.setAttribute('directory', '');
-                          el.click();
-                        }}
+                        onClick={() => folderInputRef.current?.click()}
                       >
                         <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
-                        {scanBusy ? 'Calificando carpeta…' : 'Calificar carpeta…'}
+                        {scanBusy ? 'Calificando archivos…' : 'Elegir archivos…'}
                       </Button>
                     </div>
+                    <p className="text-[11px] text-gray-500">
+                      PNG, JPG o PDF: uno, varios o Ctrl+A para toda la carpeta.
+                    </p>
                   </div>
                 </div>
               </div>
