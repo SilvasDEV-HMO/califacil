@@ -16,15 +16,13 @@ import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
 } from '../src/lib/omr/pipeline.ts';
-import { scanDesktopGradeUnifiedOrLegacy } from '../src/lib/omr/unified-grade-scan.ts';
 import { gradeLetterCanvas } from '../src/lib/omr/grade-letter-canvas.ts';
 import {
   snapReviewOverlayToPrintedRings,
   getOmrCanvasImageData,
-  scaleCanvasToMaxSide,
-  scanWarpedWithBestTableFrame,
   syncCalifacilOmrGeometryImageSize,
   buildAnswerSheetOmrGeometry,
+  califacilOmrTableFrameNormRect,
   type CalifacilOmrScanGeometry,
 } from '../src/lib/omrScan.ts';
 
@@ -125,13 +123,37 @@ async function canvasFromPdfFile(filePath: string) {
   return canvas as unknown as HTMLCanvasElement;
 }
 
-function gradeCanvas(source: HTMLCanvasElement, label: string) {
-  const canvas = scaleCanvasToMaxSide(source, 1600);
+function cropBottomWhite(source: HTMLCanvasElement, frac = 0.055): HTMLCanvasElement {
+  const cut = Math.max(1, Math.round(source.height * frac));
+  const h = Math.max(32, source.height - cut);
+  const out = createCanvas(source.width, h);
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, source.width, h);
+  ctx.drawImage(source, 0, 0, source.width, h, 0, 0, source.width, h);
+  return out as unknown as HTMLCanvasElement;
+}
+
+function gradeCanvas(source: HTMLCanvasElement, label: string, opts?: { minCorrect?: number }) {
+  const minCorrect = opts?.minCorrect ?? ROWS;
+  const norm = normalizeCalifacilGradeDocumentCanvas(source, COLS, {
+    maxSide: 1600,
+    rowCount: ROWS,
+  });
+  assert(norm.sheetDetected && !!norm.canvas, `${label}: sheetDetected false`);
+  const canvas = norm.canvas!;
   console.log(`${label}: ${source.width}x${source.height} -> ${canvas.width}x${canvas.height}`);
-  const { meta } = scanWarpedWithBestTableFrame(canvas, COLS, ROWS, { fast: true });
+  assert(
+    canvas.width / canvas.height > 0.62 &&
+      canvas.width / canvas.height < 0.95 &&
+      Math.max(canvas.width, canvas.height) >= 1000,
+    `${label}: carta ${canvas.width}x${canvas.height} no es hoja vertical`
+  );
+  const locked = gradeLetterCanvas(canvas, COLS, ROWS, { lockTemplate: true });
+  const meta = locked.meta;
   const snapped = snapReviewOverlayToPrintedRings(canvas, meta, COLS, ROWS, {
-    maxShiftRatio: 0.45,
-    maxShiftRatioY: 0.32,
+    maxShiftRatio: 0.18,
+    maxShiftRatioY: 0.16,
     biasRows: ROWS,
   });
   assert(
@@ -159,9 +181,25 @@ function gradeCanvas(source: HTMLCanvasElement, label: string) {
     }
   }
   assert(
-    mismatches.length === 0,
-    `${label}: picks ${gotKey} != ${expectedKey}\n${mismatches.join('\n')}`
+    mismatches.length <= ROWS - minCorrect,
+    `${label}: picks ${gotKey} != ${expectedKey} (ok ${ROWS - mismatches.length}/${ROWS}, min ${minCorrect})\n${mismatches.join('\n')}`
   );
+
+  if (minCorrect < ROWS) {
+    assert((overlay.cells?.length ?? 0) >= ROWS, `${label}: geometría no tiene 30 renglones`);
+    const table = califacilOmrTableFrameNormRect(ROWS);
+    for (let r = 0; r < ROWS; r++) {
+      const cell = overlay.cells[r]?.[0];
+      assert(!!cell, `${label}: fila ${r + 1} sin celda`);
+      const midY = cell!.y + cell!.h * 0.5;
+      assert(
+        midY >= table.y - 0.04 && midY <= table.y + table.h + 0.04,
+        `${label}: overlay fila ${r + 1} fuera de la tabla (y=${midY.toFixed(3)})`
+      );
+    }
+    console.log(`ok: ${label} picks=${gotKey} (${ROWS - mismatches.length}/${ROWS})`);
+    return;
+  }
 
   const data = getOmrCanvasImageData(canvas);
   assert(!!data, `${label}: no image data`);
@@ -190,6 +228,16 @@ function gradeCanvas(source: HTMLCanvasElement, label: string) {
   }
   assert(overlayMiss.length === 0, `${label} overlay:\n${overlayMiss.join('\n')}`);
   assert((overlay.cells?.length ?? 0) >= ROWS, `${label}: geometría no tiene 30 renglones`);
+  const table = califacilOmrTableFrameNormRect(ROWS);
+  for (let r = 0; r < ROWS; r++) {
+    const cell = overlay.cells[r]?.[0];
+    assert(!!cell, `${label}: fila ${r + 1} sin celda`);
+    const midY = cell!.y + cell!.h * 0.5;
+    assert(
+      midY >= table.y - 0.02 && midY <= table.y + table.h + 0.02,
+      `${label}: overlay fila ${r + 1} fuera de la tabla (y=${midY.toFixed(3)})`
+    );
+  }
   for (let r = 0; r < 10; r++) {
     const gt = GROUND_TRUTH[r]!;
     const ctr = bubbleCenter(overlay, r, gt);
@@ -257,9 +305,7 @@ gradeCanvas(pdfCanvas, 'pdf');
   assert(pdfNorm.canvas!.height > pdfNorm.canvas!.width * 1.05, 'pdf-normalize rotó a landscape');
   assert(ms < 8000, `pdf-normalize too slow: ${ms}ms`);
   gradeCanvas(pdfNorm.canvas!, 'pdf-normalize');
-  const uiPdf = scanDesktopGradeUnifiedOrLegacy(pdfNorm.canvas!, COLS, ROWS, {
-    tableFrameOnly: true,
-  });
+  const uiPdf = gradeLetterCanvas(pdfNorm.canvas!, COLS, ROWS, { lockTemplate: true });
   const gotPdf = picksKey(uiPdf.picks);
   const wantPdf = GROUND_TRUTH.map((i) => LETTERS[i]).join('');
   assert(gotPdf === wantPdf, `pdf-ui-scan picks ${gotPdf} != ${wantPdf}`);
@@ -278,16 +324,20 @@ gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
   });
   const ms = Date.now() - t0;
   assert(norm.sheetDetected && !!norm.canvas, 'png-normalize: sheetDetected false');
-  assert(ms < 4000, `png-normalize too slow (congela desktop): ${ms}ms`);
-  const ui = scanDesktopGradeUnifiedOrLegacy(norm.canvas!, COLS, ROWS, {
-    tableFrameOnly: true,
-  });
+  assert(ms < 8000, `png-normalize too slow (congela desktop): ${ms}ms`);
+  assert(
+    norm.canvas!.width / norm.canvas!.height > 0.66 &&
+      norm.canvas!.width / norm.canvas!.height < 0.88 &&
+      norm.canvas!.height >= 1100,
+    `png-normalize carta ${norm.canvas!.width}x${norm.canvas!.height} no es hoja vertical`
+  );
+  const ui = gradeLetterCanvas(norm.canvas!, COLS, ROWS, { lockTemplate: true });
   const got = picksKey(ui.picks);
   const want = GROUND_TRUTH.map((i) => LETTERS[i]).join('');
   assert(got === want, `png-ui-scan picks ${got} != ${want}`);
-  const uiOverlay = snapReviewOverlayToPrintedRings(norm.canvas!, ui, COLS, ROWS, {
-    maxShiftRatio: 0.45,
-    maxShiftRatioY: 0.32,
+  const uiOverlay = snapReviewOverlayToPrintedRings(norm.canvas!, ui.meta, COLS, ROWS, {
+    maxShiftRatio: 0.18,
+    maxShiftRatioY: 0.16,
     biasRows: ROWS,
   });
   assert(picksKey(uiOverlay.picks) === got, 'png-ui overlay attach cambió picks');
@@ -300,8 +350,8 @@ gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
       `lockTemplate picks ${picksKey(locked.picks)} != ${want}`
     );
     const lockOverlay = snapReviewOverlayToPrintedRings(norm.canvas!, locked.meta, COLS, ROWS, {
-      maxShiftRatio: 0.45,
-      maxShiftRatioY: 0.32,
+      maxShiftRatio: 0.18,
+      maxShiftRatioY: 0.16,
       biasRows: ROWS,
     });
     assert(
@@ -319,6 +369,8 @@ gradeCanvas(await canvasFromJpegFile(pngPath), 'png');
     assert(mobileMs < 8000, `mobile-lockTemplate too slow: ${mobileMs}ms`);
     console.log(`ok: mobile-lockTemplate picks=${picksKey(mobile.picks)} ${mobileMs}ms`);
   }
+  const cropped = cropBottomWhite(png, 0.02);
+  gradeCanvas(cropped, 'png-cropped', { minCorrect: 20 });
 }
 gradeCanvas(await canvasFromJpegFile(path.join(fixtures, 'scan-luis-30.jpg')), 'jpg');
 

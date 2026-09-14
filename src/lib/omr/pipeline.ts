@@ -1,12 +1,9 @@
 import { preprocessForSheetDetection } from '@/lib/omr/preprocess';
 import { prepareReferenceGradeCanvas } from '@/lib/omr/reference-grade';
-import {
-  cropCanvasToPrintedBubbleTable,
-  detectCircleGridGeometry,
-} from '@/lib/omr/engine/detect-circles-grid';
 import type { WarpAlignmentReport } from '@/lib/omrScan';
 import {
   MAX_WARP_ALIGNMENT_ERROR_PX,
+  CALIFACIL_WARP_LETTER_HEIGHT,
   autoOrientCalifacilSheet,
   captureImageFullFrame,
   countCalifacilCornerMarkers,
@@ -26,6 +23,8 @@ import {
   scaleQuadToCanvas,
   warpAndValidateCalifacilSheet,
   warpCalifacilSheetFromCornerMarkers,
+  warpCalifacilSheetFromQuad,
+  califacilWarpLetterPixelSize,
   measureRoiSheetFillRatio,
   type MobileGuideRoiCapture,
   type Point,
@@ -54,6 +53,65 @@ export type MobileWarpPipelineResult = {
   /** Origen del cuadrilátero ganador (diagnóstico). */
   source: 'roi' | 'full_res' | 'corner_markers' | 'strips' | 'none';
 };
+
+/**
+ * Cualquier origen (PNG, PDF, cámara) → 4 cuadros (o 3 + franjas) → carta 850×1100.
+ * No degrada a leer la tabla en la foto cruda.
+ */
+export function prepareCanonicalCalifacilLetterCanvas(
+  source: HTMLCanvasElement,
+  opts?: {
+    frameQuad?: RoiQuad | null;
+    maxErrorPx?: number;
+    fast?: boolean;
+  }
+): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport } | null {
+  const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
+  const fast = opts?.fast !== false;
+  const quad = opts?.frameQuad ?? detectCalifacilSheetCornerQuadRobust(source);
+  if (!quad) return null;
+  const fill = measureRoiSheetFillRatio(quad, source.width, source.height);
+  if (fill >= 0.86) {
+    const alignment = measureWarpedFiducialAlignment(source, maxErrorPx);
+    const sized = scaleCanvasToMaxSide(source, Math.max(source.width, source.height, 1600));
+    return { canvas: sized, alignment };
+  }
+  const result = warpAndValidateCalifacilSheet(source, quad, maxErrorPx, { fast });
+  if (!result.warped) return null;
+  const expected = califacilWarpLetterPixelSize(source.width, source.height);
+  const canvas =
+    result.warped.width === expected.width && result.warped.height === expected.height
+      ? result.warped
+      : warpCalifacilSheetFromQuad(
+          result.warped,
+          detectCalifacilSheetCornerQuadRobust(result.warped) ?? [
+            { x: 0, y: 0 },
+            { x: result.warped.width, y: 0 },
+            { x: result.warped.width, y: result.warped.height },
+            { x: 0, y: result.warped.height },
+          ]
+        ) ?? result.warped;
+  if (canvas.width !== expected.width || canvas.height !== expected.height) {
+    if (
+      Math.abs(canvas.width / canvas.height - 8.5 / 11) > 0.04 ||
+      canvas.height < CALIFACIL_WARP_LETTER_HEIGHT * 0.9
+    ) {
+      return null;
+    }
+  }
+  const alignment = result.alignment ?? measureWarpedFiducialAlignment(canvas, maxErrorPx);
+  if (isMobileWarpedAnswerSheetAcceptable(canvas)) {
+    return { canvas, alignment };
+  }
+  if (
+    hasCalifacilAlignStrips(canvas) &&
+    Number.isFinite(alignment.maxErrorPx) &&
+    alignment.maxErrorPx <= 14
+  ) {
+    return { canvas, alignment };
+  }
+  return null;
+}
 
 function alignmentScore(alignment: WarpAlignmentReport | null): number {
   if (!alignment) return Number.POSITIVE_INFINITY;
@@ -107,6 +165,19 @@ export function warpCalifacilMobileCaptureFast(
   const maxErrorPx = opts?.maxErrorPx ?? MAX_WARP_ALIGNMENT_ERROR_PX;
   const fallbackMaxErrorPx = maxErrorPx + 8;
   const softAccept = opts?.softAccept === true;
+
+  const canonical = prepareCanonicalCalifacilLetterCanvas(fullCanvas, {
+    frameQuad: opts?.frameQuad,
+    maxErrorPx,
+    fast: true,
+  });
+  if (canonical) {
+    return {
+      warped: canonical.canvas,
+      alignment: canonical.alignment,
+      source: opts?.frameQuad ? 'full_res' : 'corner_markers',
+    };
+  }
 
   const isAcceptable = (warped: HTMLCanvasElement): boolean => {
     if (isMobileWarpedAnswerSheetAcceptable(warped)) return true;
@@ -360,7 +431,10 @@ export function normalizeCalifacilGradeDocumentCanvas(
     alignment: WarpAlignmentReport | null,
     normalized: boolean
   ): NormalizeGradeDocumentResult => {
-    const display = scaleCanvasToMaxSide(canvas, maxSide);
+    const letterLike =
+      Math.abs(canvas.width / Math.max(1, canvas.height) - 8.5 / 11) < 0.04 &&
+      canvas.height >= CALIFACIL_WARP_LETTER_HEIGHT * 0.9;
+    const display = letterLike ? canvas : scaleCanvasToMaxSide(canvas, maxSide);
     // Un solo canvas carta (sin prepareReferenceGrade): preview = OMR = overlay.
     return {
       canvas: display,
@@ -391,7 +465,6 @@ export function normalizeCalifacilGradeDocumentCanvas(
     if (isPhotoSheetWarpAcceptable(warped)) {
       const cropped =
         prepareMobileScannedDocumentCanvasFast(warped, { skipPrintCrop: false }) ?? warped;
-      // Exigir Acceptable o soft fill; no aceptar solo por aspect carta.
       if (isPhotoSheetWarpAcceptable(cropped)) {
         return finishOk(
           cropped,
@@ -404,86 +477,28 @@ export function normalizeCalifacilGradeDocumentCanvas(
   };
 
   const base = captureImageFullFrame(source, { maxSide: Math.max(maxSide, 2400) }) ?? source;
-  const uploadClass =
-    opts?.uploadClass ?? classifyDesktopUploadCanvas(base, columns);
-  const rowCount = Math.max(2, Math.min(30, Math.round(opts?.rowCount ?? 30)));
-  const useFlatPath =
-    uploadClass === 'pdf' ||
-    uploadClass === 'flatScan' ||
-    (opts?.flatDocument === true &&
-      isLikelyFlatCalifacilDocument(base, columns, { flatDocument: true }));
+  void opts?.uploadClass;
+  void opts?.flatDocument;
+  void opts?.rowCount;
 
-  const tryPrintedTableAsFlat = (
-    canvas: HTMLCanvasElement
-  ): NormalizeGradeDocumentResult | null => {
-    const tableCrop = cropCanvasToPrintedBubbleTable(canvas);
-    const grid = detectCircleGridGeometry(tableCrop, columns, rowCount);
-    if (grid && grid.bubbleFit >= 0.5) {
-      return finishOk(tableCrop, null, tableCrop !== canvas);
-    }
-    return null;
-  };
-
-  // PDF / escaneo plano: no auto-orientar ni warpear (congela la UI y tuerce la hoja).
-  if (useFlatPath) {
-    if (uploadClass === 'flatScan' || uploadClass === 'pdf') {
-      return finishOk(base, null, Math.max(base.width, base.height) > maxSide * 1.08);
-    }
-
-    // flatDocument sin clasificar como PDF/escaneo: orientar y warpear si hace falta.
-    const oriented =
-      autoOrientCalifacilSheet(base, columns, {
-        useGuideCrop: false,
-        allowTiltSweep: true,
-      }) ?? base;
-
-    const stripQuadOriented = detectAnswerSheetQuadViaAlignStrips(oriented);
-    const fillOriented = stripQuadOriented
-      ? measureRoiSheetFillRatio(stripQuadOriented, oriented.width, oriented.height)
-      : 0;
-    const cornersOriented = countCalifacilCornerMarkers(oriented);
-    const stripsOriented = hasCalifacilAlignStrips(oriented);
-    const dubiousFlat =
-      cornersOriented < 3 ||
-      !stripsOriented ||
-      fillOriented < 0.72 ||
-      !isLikelyFlatCalifacilDocument(oriented, columns);
-
-    if (dubiousFlat || !isPhotoSheetWarpAcceptable(oriented)) {
-      const fastWarp = warpCalifacilMobileCaptureFast(oriented, { maxErrorPx });
-      if (fastWarp.warped) {
-        const ok = tryPhotoDoc(fastWarp.warped, fastWarp.alignment, true);
-        if (ok) return ok;
-      }
-      const fullWarp = warpCalifacilMobileCapture(oriented, { maxErrorPx });
-      if (fullWarp.warped) {
-        const ok = tryPhotoDoc(fullWarp.warped, fullWarp.alignment, true);
-        if (ok) return ok;
-      }
-      if (isPhotoSheetWarpAcceptable(oriented) || isLikelyFlatCalifacilDocument(oriented, columns)) {
-        return finishOk(oriented, null, oriented !== base);
-      }
-      return finishFail();
-    }
-    return finishOk(oriented, null, oriented !== base);
+  const canonical = prepareCanonicalCalifacilLetterCanvas(base, { maxErrorPx, fast: true });
+  if (canonical) {
+    return finishOk(canonical.canvas, canonical.alignment, true);
   }
 
-  // Recorte de tabla SIN franjas (foto móvil): no warpear. PNG/A4 con franjas ya es flatScan.
-  if (uploadClass === 'photoCrop' && !hasCalifacilAlignStrips(base)) {
-    const tableFlat = tryPrintedTableAsFlat(base);
-    if (tableFlat) return tableFlat;
-  }
-  if (
-    hasCalifacilAlignStrips(base) &&
-    isCalifacilExamSheetLikely(base, columns) &&
-    isCalifacilWarpedLetterCanvas(base)
-  ) {
-    return finishOk(base, null, Math.max(base.width, base.height) > maxSide * 1.08);
-  }
-
-  if (isPhotoSheetWarpAcceptable(base)) {
-    const ok = tryPhotoDoc(base, null, Math.max(base.width, base.height) > maxSide * 1.08);
-    if (ok) return ok;
+  const oriented =
+    autoOrientCalifacilSheet(base, columns, {
+      useGuideCrop: false,
+      allowTiltSweep: false,
+    }) ?? base;
+  if (oriented !== base) {
+    const orientedCanonical = prepareCanonicalCalifacilLetterCanvas(oriented, {
+      maxErrorPx,
+      fast: true,
+    });
+    if (orientedCanonical) {
+      return finishOk(orientedCanonical.canvas, orientedCanonical.alignment, true);
+    }
   }
 
   const fastWarp = warpCalifacilMobileCaptureFast(base, { maxErrorPx });
@@ -492,48 +507,12 @@ export function normalizeCalifacilGradeDocumentCanvas(
     if (ok) return ok;
   }
 
-  // Fallback más completo antes de rechazar (fotos con perspectiva/luz media).
   const fullWarp = warpCalifacilMobileCapture(base, { maxErrorPx });
   if (fullWarp.warped) {
     const ok = tryPhotoDoc(fullWarp.warped, fullWarp.alignment, true);
     if (ok) return ok;
   }
 
-  const corner = warpCalifacilSheetFromCornerMarkers(base);
-  if (corner) {
-    const refined = refineWarpedCalifacilSheet(corner, { fast: true });
-    const alignment = measureWarpedFiducialAlignment(refined.canvas, maxErrorPx);
-    const ok = tryPhotoDoc(refined.canvas, alignment, true);
-    if (ok) return ok;
-  }
-
-  const oriented = autoOrientCalifacilSheet(base, columns, {
-    useGuideCrop: false,
-    allowTiltSweep: false,
-  });
-  if (oriented && oriented !== base) {
-    if (isPhotoSheetWarpAcceptable(oriented)) {
-      const ok = tryPhotoDoc(oriented, null, true);
-      if (ok) return ok;
-    }
-    const orientedWarp = warpCalifacilMobileCaptureFast(oriented, { maxErrorPx });
-    if (orientedWarp.warped) {
-      const ok = tryPhotoDoc(orientedWarp.warped, orientedWarp.alignment, true);
-      if (ok) return ok;
-    }
-    const orientedFull = warpCalifacilMobileCapture(oriented, { maxErrorPx });
-    if (orientedFull.warped) {
-      const ok = tryPhotoDoc(orientedFull.warped, orientedFull.alignment, true);
-      if (ok) return ok;
-    }
-    const orientedCorner = warpCalifacilSheetFromCornerMarkers(oriented);
-    if (orientedCorner) {
-      const refined = refineWarpedCalifacilSheet(orientedCorner, { fast: true });
-      const alignment = measureWarpedFiducialAlignment(refined.canvas, maxErrorPx);
-      const ok = tryPhotoDoc(refined.canvas, alignment, true);
-      if (ok) return ok;
-    }
-  }
   return finishFail();
 }
 

@@ -5,6 +5,7 @@ export { validateAnswerSheetGeometry, type AnswerSheetGeometryValidation } from 
 export {
   warpCalifacilMobileCapture,
   warpCalifacilMobileCaptureFast,
+  prepareCanonicalCalifacilLetterCanvas,
   normalizeCalifacilGradeDocumentCanvas,
   CALIFACIL_GRADE_DOCUMENT_MAX_SIDE,
   prepareCalifacilGradeScanCanvas,

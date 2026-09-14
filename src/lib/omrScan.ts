@@ -29,6 +29,7 @@ import {
   REFINE_WARP_TARGET_MAX_ERROR_PX,
   refineWarpedSheetFiducials,
 } from '@/lib/omr/refine-warp';
+import { computeHomographySrcToDst, warpCanvasWithHomography } from '@/lib/omr/homography';
 import {
   hasReferenceGradeCalibration,
   isReferenceGradeExam,
@@ -2123,6 +2124,32 @@ function detectCalifacilQuadFromDarkInk(
 }
 
 /** Centro del parche más oscuro en una esquina (fiducial impreso, no texto del examen). */
+function darkRunLength(
+  d: Uint8ClampedArray,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  darkCut: number,
+  maxSteps: number
+): number {
+  let n = 0;
+  let px = Math.round(x);
+  let py = Math.round(y);
+  for (let i = 0; i < maxSteps; i++) {
+    px += dx;
+    py += dy;
+    if (px < 0 || py < 0 || px >= width || py >= height) break;
+    const i4 = (py * width + px) * 4;
+    const lum = d[i4]! * 0.299 + d[i4 + 1]! * 0.587 + d[i4 + 2]! * 0.114;
+    if (lum >= darkCut) break;
+    n++;
+  }
+  return n;
+}
+
 function findCornerMarkerPoint(
   d: Uint8ClampedArray,
   width: number,
@@ -2131,7 +2158,7 @@ function findCornerMarkerPoint(
   regionY: number,
   regionW: number,
   regionH: number,
-  opts?: { topCornerGlare?: boolean }
+  opts?: { topCornerGlare?: boolean; prefer?: 'tl' | 'tr' | 'br' | 'bl' }
 ): Point | null {
   const x0 = Math.max(0, regionX);
   const y0 = Math.max(0, regionY);
@@ -2142,14 +2169,14 @@ function findCornerMarkerPoint(
   if (rw < 8 || rh < 8) return null;
 
   const topGlare = Boolean(opts?.topCornerGlare);
-  const patchSize = Math.max(4, Math.round(Math.min(rw, rh) * (topGlare ? 0.18 : 0.22)));
-  const step = Math.max(2, Math.floor(patchSize / 2));
-  let bestScore = 0;
+  const expected = Math.max(8, Math.round(Math.min(width, height) * 0.028));
+  const patchSize = Math.max(4, Math.min(expected, Math.round(Math.min(rw, rh) * 0.35)));
+  const step = Math.max(1, Math.floor(patchSize / 3));
+  let bestScore = -1e9;
   let bestCenter: Point | null = null;
   let regionLumSum = 0;
   let regionN = 0;
 
-  // Primera pasada: media de región para umbral adaptativo (glare arriba).
   for (let py = y0; py <= y1 - 1; py += Math.max(2, step)) {
     for (let px = x0; px <= x1 - 1; px += Math.max(2, step)) {
       const i = (py * width + px) * 4;
@@ -2161,6 +2188,10 @@ function findCornerMarkerPoint(
   const darkCut = topGlare
     ? Math.min(120, Math.max(70, regionMean * 0.72 + 8))
     : 100;
+
+  const prefer = opts?.prefer;
+  const cornerX = prefer === 'tr' || prefer === 'br' ? x1 : x0;
+  const cornerY = prefer === 'bl' || prefer === 'br' ? y1 : y0;
 
   for (let py = y0; py <= y1 - patchSize; py += step) {
     for (let px = x0; px <= x1 - patchSize; px += step) {
@@ -2176,21 +2207,34 @@ function findCornerMarkerPoint(
         }
       }
       const mean = lumSum / total;
-      // Preferir núcleos compactos más oscuros que la región (no mesa entera).
-      const score = dark / total + (regionMean - mean) / 180;
+      const cx = px + patchSize / 2;
+      const cy = py + patchSize / 2;
+      const maxRun = Math.max(rw, rh);
+      const left = darkRunLength(d, width, height, cx, cy, -1, 0, darkCut, maxRun);
+      const right = darkRunLength(d, width, height, cx, cy, 1, 0, darkCut, maxRun);
+      const up = darkRunLength(d, width, height, cx, cy, 0, -1, darkCut, maxRun);
+      const down = darkRunLength(d, width, height, cx, cy, 0, 1, darkCut, maxRun);
+      const spanX = left + right + 1;
+      const spanY = up + down + 1;
+      if (spanY > spanX * 2.8 || spanX > spanY * 2.8) continue;
+      if (spanX > expected * 4.5 || spanY > expected * 4.5) continue;
+      if (spanX < expected * 0.22 || spanY < expected * 0.22) continue;
+      const dist = Math.hypot(cx - cornerX, cy - cornerY) / Math.max(1, Math.min(width, height));
+      const score =
+        dark / total + (regionMean - mean) / 180 - dist * 8;
       if (score > bestScore) {
         bestScore = score;
-        bestCenter = { x: px + patchSize / 2, y: py + patchSize / 2 };
+        bestCenter = { x: cx, y: cy };
       }
     }
   }
   if (!bestCenter) return null;
-  if (bestScore < (topGlare ? 0.14 : 0.18)) return null;
+  if (bestScore < -0.15) return null;
   const bestI =
     (Math.round(bestCenter.y) * width + Math.round(bestCenter.x)) * 4;
   const bestLum =
     d[bestI]! * 0.299 + d[bestI + 1]! * 0.587 + d[bestI + 2]! * 0.114;
-  if (bestLum > regionMean - (topGlare ? 5 : 8) && bestScore < (topGlare ? 0.26 : 0.32)) {
+  if (bestLum > regionMean - (topGlare ? 4 : 8) && bestScore < (topGlare ? 0.04 : 0.12)) {
     return null;
   }
   return bestCenter;
@@ -2274,7 +2318,7 @@ function validateCornerMarkerQuad(
     ) * 0.5;
   const avgW = (topW + bottomW) * 0.5;
   const avgH = (leftH + rightH) * 0.5;
-  if (area < width * height * 0.08 || avgW < width * 0.28 || avgH < height * 0.28) return null;
+  if (area < width * height * 0.04 || avgW < width * 0.22 || avgH < height * 0.22) return null;
   return quad;
 }
 
@@ -2282,6 +2326,98 @@ function validateCornerMarkerQuad(
  * Localiza los cuatro cuadros negros de esquina (`.sheet-align-corner`) y devuelve el cuadrilátero
  * [TL, TR, BR, BL] para homografía — más fiable que heurísticas de papel/tinta en móvil.
  */
+function findDarkSquarePatch(
+  d: Uint8ClampedArray,
+  width: number,
+  height: number,
+  regionX: number,
+  regionY: number,
+  regionW: number,
+  regionH: number,
+  prefer: 'tl' | 'tr' | 'br' | 'bl'
+): Point | null {
+  const x0 = Math.max(0, Math.round(regionX));
+  const y0 = Math.max(0, Math.round(regionY));
+  const x1 = Math.min(width, Math.round(regionX + regionW));
+  const y1 = Math.min(height, Math.round(regionY + regionH));
+  const rw = x1 - x0;
+  const rh = y1 - y0;
+  if (rw < 8 || rh < 8) return null;
+  const patch = Math.max(5, Math.round(Math.min(width, height) * 0.015));
+  if (rw < patch || rh < patch) return null;
+  const step = Math.max(1, Math.floor(patch / 3));
+  const cornerX = prefer === 'tr' || prefer === 'br' ? x1 : x0;
+  const cornerY = prefer === 'bl' || prefer === 'br' ? y1 : y0;
+  let best: { x: number; y: number; score: number } | null = null;
+  for (let py = y0; py <= y1 - patch; py += step) {
+    for (let px = x0; px <= x1 - patch; px += step) {
+      let dark = 0;
+      let lumSum = 0;
+      const total = patch * patch;
+      for (let dy = 0; dy < patch; dy++) {
+        for (let dx = 0; dx < patch; dx++) {
+          const i = ((py + dy) * width + (px + dx)) * 4;
+          const lum = d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
+          lumSum += lum;
+          if (lum < 110) dark++;
+        }
+      }
+      const fill = dark / total;
+      if (fill < 0.18) continue;
+      const mean = lumSum / total;
+      if (mean > 155) continue;
+      const cx = px + patch / 2;
+      const cy = py + patch / 2;
+      const dist =
+        Math.hypot(cx - cornerX, cy - cornerY) / Math.max(1, Math.min(width, height));
+      const score = fill - dist * 6 + (90 - mean) / 220;
+      if (!best || score > best.score) best = { x: cx, y: cy, score };
+    }
+  }
+  return best ? { x: best.x, y: best.y } : null;
+}
+
+function findCalifacilFiducialNearExpected(
+  d: Uint8ClampedArray,
+  width: number,
+  height: number,
+  corner: 'tl' | 'tr' | 'br' | 'bl'
+): Point | null {
+  const letterish =
+    Math.abs(width / Math.max(1, height) - 8.5 / 11) < 0.03 && height >= 800;
+  const extraXs = letterish ? [0, 0.012] : [0, 0.02, 0.05, 0.09];
+  const extraYs = letterish ? [0, 0.012] : [0, 0.03, 0.07, 0.11, 0.15, 0.2];
+  const win = Math.max(16, Math.round(Math.min(width, height) * 0.038));
+  const base = CALIFACIL_FIDUCIAL_CENTERS_NORM[corner];
+  for (const extraY of extraYs) {
+    for (const extraX of extraXs) {
+      const nx =
+        corner === 'tl' || corner === 'bl' ? extraX + base.x : base.x - extraX;
+      const ny =
+        corner === 'tl' || corner === 'tr' ? extraY + base.y : base.y - extraY;
+      const cx = nx * width;
+      const cy = ny * height;
+      const hit =
+        findDarkSquarePatch(d, width, height, cx - win, cy - win, win * 2, win * 2, corner) ??
+        findCornerMarkerPoint(
+          d,
+          width,
+          height,
+          cx - win,
+          cy - win,
+          win * 2,
+          win * 2,
+          {
+            prefer: corner,
+            topCornerGlare: corner === 'tl' || corner === 'tr',
+          }
+        );
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 function detectCalifacilQuadFromCornerMarkers(
   canvas: HTMLCanvasElement
 ): [Point, Point, Point, Point] | null {
@@ -2292,32 +2428,83 @@ function detectCalifacilQuadFromCornerMarkers(
 
   const id = ctx.getImageData(0, 0, width, height);
   const d = id.data;
-  const regionW = Math.max(12, Math.round(width * 0.12));
-  const regionH = Math.max(12, Math.round(height * 0.12));
 
-  const tryPageCornerMarkers = (): [Point, Point, Point, Point] | null => {
-    const tl = findCornerMarkerPoint(d, width, height, 0, 0, regionW, regionH);
-    const tr = findCornerMarkerPoint(d, width, height, width - regionW, 0, regionW, regionH);
-    const br = findCornerMarkerPoint(
-      d,
-      width,
-      height,
-      width - regionW,
-      height - regionH,
-      regionW,
-      regionH
-    );
-    const bl = findCornerMarkerPoint(d, width, height, 0, height - regionH, regionW, regionH);
+  const tryCornerRegions = (
+    frac: number,
+    insetX: number,
+    insetY: number
+  ): [Point, Point, Point, Point] | null => {
+    const regionW = Math.max(12, Math.round(width * frac));
+    const regionH = Math.max(12, Math.round(height * frac));
+    const ox = Math.max(0, Math.round(insetX));
+    const oy = Math.max(0, Math.round(insetY));
+    const band = Math.max(16, Math.round(Math.min(width, height) * 0.055));
+
+    const find = (
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      prefer: 'tl' | 'tr' | 'br' | 'bl',
+      glare?: boolean
+    ) =>
+      findCornerMarkerPoint(d, width, height, x, y, w, h, {
+        prefer,
+        topCornerGlare: glare,
+      });
+
+    const pick = (
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      prefer: 'tl' | 'tr' | 'br' | 'bl',
+      glare?: boolean
+    ) => {
+      const innerW = Math.min(w, band);
+      const innerH = Math.min(h, band);
+      const innerX = prefer === 'tr' || prefer === 'br' ? x + w - innerW : x;
+      const innerY = prefer === 'bl' || prefer === 'br' ? y + h - innerH : y;
+      return (
+        find(innerX, innerY, innerW, innerH, prefer, glare) ??
+        find(x, y, w, h, prefer, glare)
+      );
+    };
+
+    const tl = pick(ox, oy, regionW, regionH, 'tl', true);
+    const tr = pick(width - regionW - ox, oy, regionW, regionH, 'tr', true);
+    const br = pick(width - regionW - ox, height - regionH - oy, regionW, regionH, 'br');
+    const bl = pick(ox, height - regionH - oy, regionW, regionH, 'bl');
     if (!tl || !tr || !br || !bl) return null;
     return validateCornerMarkerQuad([tl, tr, br, bl], width, height);
   };
 
-  const aspect = width / Math.max(1, height);
-  const letterWarped = height >= 800 && aspect > 0.74 && aspect < 0.82;
-  if (letterWarped) {
-    const pageQuad = tryPageCornerMarkers();
-    if (pageQuad) return pageQuad;
-  }
+  const tryExpectedMarkers = (): [Point, Point, Point, Point] | null => {
+    const tl = findCalifacilFiducialNearExpected(d, width, height, 'tl');
+    const tr = findCalifacilFiducialNearExpected(d, width, height, 'tr');
+    const br = findCalifacilFiducialNearExpected(d, width, height, 'br');
+    const bl = findCalifacilFiducialNearExpected(d, width, height, 'bl');
+    if (!tl || !tr || !br || !bl) return null;
+    return validateCornerMarkerQuad([tl, tr, br, bl], width, height);
+  };
+
+  const expectedQuad = tryExpectedMarkers();
+  if (expectedQuad) return expectedQuad;
+
+  const tryPageCornerMarkers = (): [Point, Point, Point, Point] | null => {
+    const fracs = [0.045, 0.07, 0.1, 0.14, 0.2, 0.28, 0.38];
+    const insets = [0, Math.round(Math.min(width, height) * 0.02), Math.round(Math.min(width, height) * 0.05)];
+    for (const inset of insets) {
+      for (const frac of fracs) {
+        const quad = tryCornerRegions(frac, inset, inset);
+        if (quad) return quad;
+      }
+    }
+    return null;
+  };
+
+  const pageQuad = tryPageCornerMarkers();
+  if (pageQuad) return pageQuad;
 
   const norm = califacilViewfinderNormRect(width, height);
   if (norm) {
@@ -2325,8 +2512,22 @@ function detectCalifacilQuadFromCornerMarkers(
     const gy = norm.y * height;
     const gw = norm.w * width;
     const gh = norm.h * height;
-    const tl = findCornerMarkerPoint(d, width, height, gx, gy, regionW, regionH);
-    const tr = findCornerMarkerPoint(d, width, height, gx + gw - regionW, gy, regionW, regionH);
+    const regionW = Math.max(12, Math.round(gw * 0.18));
+    const regionH = Math.max(12, Math.round(gh * 0.18));
+    const tl = findCornerMarkerPoint(d, width, height, gx, gy, regionW, regionH, {
+      topCornerGlare: true,
+      prefer: 'tl',
+    });
+    const tr = findCornerMarkerPoint(
+      d,
+      width,
+      height,
+      gx + gw - regionW,
+      gy,
+      regionW,
+      regionH,
+      { topCornerGlare: true, prefer: 'tr' }
+    );
     const br = findCornerMarkerPoint(
       d,
       width,
@@ -2334,16 +2535,19 @@ function detectCalifacilQuadFromCornerMarkers(
       gx + gw - regionW,
       gy + gh - regionH,
       regionW,
-      regionH
+      regionH,
+      { prefer: 'br' }
     );
-    const bl = findCornerMarkerPoint(d, width, height, gx, gy + gh - regionH, regionW, regionH);
+    const bl = findCornerMarkerPoint(d, width, height, gx, gy + gh - regionH, regionW, regionH, {
+      prefer: 'bl',
+    });
     if (tl && tr && br && bl) {
       const quad = validateCornerMarkerQuad([tl, tr, br, bl], width, height);
       if (quad) return quad;
     }
   }
 
-  return tryPageCornerMarkers();
+  return null;
 }
 
 function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
@@ -5489,16 +5693,50 @@ export function scaleQuadToCanvas(
 }
 
 /** Endereza la hoja con un cuadrilátero ya detectado (tras captura en alta resolución). */
+export function califacilWarpLetterPixelSize(sourceWidth: number, sourceHeight: number): {
+  width: number;
+  height: number;
+} {
+  const scale = Math.max(
+    1,
+    Math.max(sourceWidth, sourceHeight) / CALIFACIL_WARP_LETTER_HEIGHT
+  );
+  return {
+    width: Math.round(CALIFACIL_WARP_LETTER_WIDTH * scale),
+    height: Math.round(CALIFACIL_WARP_LETTER_HEIGHT * scale),
+  };
+}
+
+/** Endereza la hoja con un cuadrilátero ya detectado (tras captura en alta resolución). */
 export function warpCalifacilSheetFromQuad(
   canvas: HTMLCanvasElement,
   quad: [Point, Point, Point, Point]
 ): HTMLCanvasElement | null {
-  return warpPerspectiveToRect(
-    canvas,
-    quad,
-    CALIFACIL_WARP_LETTER_WIDTH,
-    CALIFACIL_WARP_LETTER_HEIGHT
-  );
+  const { width: W, height: H } = califacilWarpLetterPixelSize(canvas.width, canvas.height);
+  const dst: [Point, Point, Point, Point] = [
+    {
+      x: CALIFACIL_FIDUCIAL_CENTERS_NORM.tl.x * W,
+      y: CALIFACIL_FIDUCIAL_CENTERS_NORM.tl.y * H,
+    },
+    {
+      x: CALIFACIL_FIDUCIAL_CENTERS_NORM.tr.x * W,
+      y: CALIFACIL_FIDUCIAL_CENTERS_NORM.tr.y * H,
+    },
+    {
+      x: CALIFACIL_FIDUCIAL_CENTERS_NORM.br.x * W,
+      y: CALIFACIL_FIDUCIAL_CENTERS_NORM.br.y * H,
+    },
+    {
+      x: CALIFACIL_FIDUCIAL_CENTERS_NORM.bl.x * W,
+      y: CALIFACIL_FIDUCIAL_CENTERS_NORM.bl.y * H,
+    },
+  ];
+  const h = computeHomographySrcToDst(quad, dst);
+  if (h) {
+    const warped = warpCanvasWithHomography(canvas, h, W, H);
+    if (warped) return warped;
+  }
+  return warpPerspectiveToRect(canvas, quad, W, H);
 }
 
 /** Detecta centros de fiduciales en imagen ya enderezada (850×1100). */
@@ -5515,19 +5753,12 @@ export function detectWarpedFiducialCenters(
   if (width < 80 || height < 80) return empty;
   const id = ctx.getImageData(0, 0, width, height);
   const d = id.data;
-  const regionW = Math.max(12, Math.round(width * 0.12));
-  const regionH = Math.max(12, Math.round(height * 0.12));
-  const corners: Array<{ id: WarpAlignmentCornerId; x: number; y: number }> = [
-    { id: 'tl', x: 0, y: 0 },
-    { id: 'tr', x: width - regionW, y: 0 },
-    { id: 'br', x: width - regionW, y: height - regionH },
-    { id: 'bl', x: 0, y: height - regionH },
-  ];
-  const out = { ...empty };
-  for (const c of corners) {
-    out[c.id] = findCornerMarkerPoint(d, width, height, c.x, c.y, regionW, regionH);
-  }
-  return out;
+  return {
+    tl: findCalifacilFiducialNearExpected(d, width, height, 'tl'),
+    tr: findCalifacilFiducialNearExpected(d, width, height, 'tr'),
+    br: findCalifacilFiducialNearExpected(d, width, height, 'br'),
+    bl: findCalifacilFiducialNearExpected(d, width, height, 'bl'),
+  };
 }
 
 /** Mide error en px entre fiduciales detectados y la plantilla PDF/carta. */
@@ -5668,22 +5899,24 @@ export function refineWarpedCalifacilSheet(
 
 /** Tras deskew el canvas puede crecer; vuelve a carta 850×1100 con fiduciales. */
 function warpToExactLetterSize(canvas: HTMLCanvasElement): HTMLCanvasElement {
-  if (
-    canvas.width === CALIFACIL_WARP_LETTER_WIDTH &&
-    canvas.height === CALIFACIL_WARP_LETTER_HEIGHT
-  ) {
+  const { width: outW, height: outH } = califacilWarpLetterPixelSize(
+    canvas.width,
+    canvas.height
+  );
+  if (canvas.width === outW && canvas.height === outH) {
     return canvas;
   }
-  const quad = detectCalifacilQuadFromCornerMarkers(canvas);
-  if (!quad) return canvas;
-  return (
-    warpPerspectiveToRect(
-      canvas,
-      quad,
-      CALIFACIL_WARP_LETTER_WIDTH,
-      CALIFACIL_WARP_LETTER_HEIGHT
-    ) ?? canvas
-  );
+  const full: [Point, Point, Point, Point] = [
+    { x: 0, y: 0 },
+    { x: canvas.width, y: 0 },
+    { x: canvas.width, y: canvas.height },
+    { x: 0, y: canvas.height },
+  ];
+  const quad =
+    detectCalifacilQuadFromCornerMarkers(canvas) ??
+    detectAnswerSheetQuadViaAlignStrips(canvas) ??
+    full;
+  return warpPerspectiveToRect(canvas, quad, outW, outH) ?? canvas;
 }
 
 export type PrepareMobileCameraScanOptions = {
@@ -6959,14 +7192,18 @@ export function detectCalifacilSheetCornerQuadRobust(
   opts?: { skipPreprocess?: boolean }
 ): [Point, Point, Point, Point] | null {
   const sources: HTMLCanvasElement[] = [];
+  sources.push(canvas);
   if (!opts?.skipPreprocess) {
     const pre = preprocessForSheetDetection(canvas);
     if (pre) sources.push(pre);
   }
-  sources.push(canvas);
   for (const src of sources) {
     const quad = detectCalifacilQuadFromCornerMarkers(src);
     if (quad) return quad;
+  }
+  for (const src of sources) {
+    const strip = detectAnswerSheetQuadViaAlignStrips(src);
+    if (strip) return strip;
   }
   for (const src of sources) {
     const quad = detectCalifacilQuad(src);
@@ -6988,28 +7225,6 @@ export type AnswerSheetTemplateGuide = {
   /** Marco de hoja completa (fiduciales incluidos) en coords 0–1 de página carta. */
   pageFrameNorm: OmrNormRect;
 };
-
-/**
- * Rejilla impresa 30×4 (Luis). Fija: no se redetecta la tabla en cada foto.
- */
-const LOCKED_PRINTED_ROW_Y = [
-  0.115625, 0.14125, 0.1675, 0.19375, 0.219375, 0.245625, 0.27125, 0.2975, 0.323125,
-  0.349375, 0.375625, 0.40125, 0.4275, 0.453125, 0.479375, 0.505, 0.53125, 0.5575,
-  0.583125, 0.609375, 0.635, 0.66125, 0.686875, 0.713125, 0.739375, 0.765, 0.79125,
-  0.816875, 0.843125, 0.86875,
-] as const;
-const LOCKED_PRINTED_ROW_H = [
-  0.025625, 0.02625, 0.02625, 0.025625, 0.02625, 0.025625, 0.02625, 0.025625, 0.02625,
-  0.02625, 0.025625, 0.02625, 0.025625, 0.02625, 0.025625, 0.02625, 0.02625, 0.025625,
-  0.02625, 0.025625, 0.02625, 0.025625, 0.02625, 0.02625, 0.025625, 0.02625, 0.025625,
-  0.02625, 0.025625, 0.02625,
-] as const;
-const LOCKED_PRINTED_COL_X = [
-  0.19432120674356698, 0.36024844720496896, 0.5252883762200532, 0.6903283052351376,
-] as const;
-const LOCKED_PRINTED_COL_W = [
-  0.16592724046140195, 0.1650399290150843, 0.1650399290150843, 0.16592724046140195,
-] as const;
 
 /**
  * Cuadrícula OMR de hoja de respuestas alineada con el marco naranja (plantilla PDF base).
@@ -7067,27 +7282,7 @@ export function buildLockedAnswerSheetOmrGeometry(
   imageWidth: number,
   imageHeight: number
 ): CalifacilOmrScanGeometry {
-  const rows = clampCalifacilOmrRowCount(rowCount);
-  const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  const width = Math.max(1, imageWidth);
-  const height = Math.max(1, imageHeight);
-  const cells: OmrNormRect[][] = [];
-  for (let row = 0; row < rows; row++) {
-    const y = LOCKED_PRINTED_ROW_Y[row] ?? LOCKED_PRINTED_ROW_Y[LOCKED_PRINTED_ROW_Y.length - 1]!;
-    const h = LOCKED_PRINTED_ROW_H[row] ?? LOCKED_PRINTED_ROW_H[LOCKED_PRINTED_ROW_H.length - 1]!;
-    const rowRects: OmrNormRect[] = [];
-    for (let c = 0; c < cols; c++) {
-      const col = Math.min(c, LOCKED_PRINTED_COL_X.length - 1);
-      rowRects.push({
-        x: LOCKED_PRINTED_COL_X[col]!,
-        y,
-        w: LOCKED_PRINTED_COL_W[col]!,
-        h,
-      });
-    }
-    cells.push(rowRects);
-  }
-  return { imageWidth: width, imageHeight: height, cells };
+  return buildAnswerSheetOmrGeometry(rowCount, columns, imageWidth, imageHeight);
 }
 
 /** Franja negra derecha del recuadro impreso (no forma parte del área de burbujas). */
@@ -10874,6 +11069,8 @@ export function scaleCanvasToMaxSide(
   if (source.width < 40 || source.height < 40 || maxSide < 40) return source;
   const scale = maxSide / Math.max(source.width, source.height, 1);
   if (Math.abs(scale - 1) < 0.02) return source;
+  const srcMax = Math.max(source.width, source.height);
+  if (scale > 1 && srcMax >= 1400) return source;
   const w = Math.max(1, Math.round(source.width * scale));
   const h = Math.max(1, Math.round(source.height * scale));
   if (typeof document === 'undefined') return source;

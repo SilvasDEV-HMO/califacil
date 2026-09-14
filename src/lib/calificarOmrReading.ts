@@ -21,6 +21,7 @@ import {
   rereadOmrWithDisplayOverlayGeometry,
   isUsableOmrRecoveryMeta,
 } from '@/lib/omr/unified-grade-scan';
+import { gradeLetterCanvas } from '@/lib/omr/grade-letter-canvas';
 import { prepareCalifacilGradeScanCanvas } from '@/lib/omr/pipeline';
 import {
   canvasMatchesReferenceGrade,
@@ -247,23 +248,26 @@ export async function runCalifacilOmrReadingPipeline(
     });
   };
 
+  let scanCanvas = resolveScanCanvas(oriented);
   const skipReferencePrep =
+    preWarped ||
     uploadKind === 'pdf' ||
     uploadKind === 'flatScan' ||
     uploadKind === 'flatDocument' ||
-    Boolean(isMobile && skipReviewUi);
+    Boolean(isMobile && skipReviewUi) ||
+    Boolean(scanCanvas && isCalifacilWarpedLetterCanvas(scanCanvas));
 
-  let scanCanvas = resolveScanCanvas(oriented);
   if (scanCanvas && !skipReferencePrep) {
     scanCanvas = prepareGradeCanvas(scanCanvas);
   }
   let activeScanSource: HTMLImageElement | HTMLCanvasElement = scanCanvas ?? oriented;
   let meta: OmrScanMetaResult;
+  let usedLetterGrade = false;
 
   if (scanCanvas) {
-    meta = await scanDesktopGradeUnifiedOrLegacyAsync(scanCanvas, omrCols, omrRowCount, {
-      tableFrameOnly: skipReferencePrep,
-    });
+    const letter = gradeLetterCanvas(scanCanvas, omrCols, omrRowCount, { lockTemplate: true });
+    meta = letter.meta;
+    usedLetterGrade = true;
   } else {
     meta = scanLiveOmrUnifiedOrLegacy(activeScanSource, omrCols, {
       skipGuideCrop: true,
@@ -291,6 +295,7 @@ export async function runCalifacilOmrReadingPipeline(
   let mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
 
   const skipLetterOverlayRecovery =
+    usedLetterGrade ||
     uploadKind === 'pdf' ||
     uploadKind === 'flatScan' ||
     uploadKind === 'flatDocument' ||

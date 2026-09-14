@@ -4,7 +4,6 @@
  */
 import {
   buildAnswerSheetOmrGeometry,
-  buildLockedAnswerSheetOmrGeometry,
   geometryCellsForBubbleSampling,
   isAnswerSheetOmrMostlyBlank,
   isCalifacilWarpedLetterCanvas,
@@ -18,6 +17,7 @@ import {
   type OmrScanMetaResult,
   type WarpAlignmentReport,
 } from '@/lib/omrScan';
+import { scanDesktopGradeUnifiedOrLegacy } from '@/lib/omr/unified-grade-scan';
 
 export type LetterGradePrepareResult = {
   canvas: HTMLCanvasElement;
@@ -105,7 +105,7 @@ export function prepareLetterGradeCanvas(
     // Carta ya warpeada: usar tal cual (sin segundo refine/trim).
   }
   const geometry = syncCalifacilOmrGeometryImageSize(
-    buildLockedAnswerSheetOmrGeometry(rowCount, columns, canvas.width, canvas.height),
+    buildAnswerSheetOmrGeometry(rowCount, columns, canvas.width, canvas.height),
     canvas.width,
     canvas.height
   );
@@ -130,18 +130,40 @@ export function gradeLetterCanvas(
   const rows = Math.max(1, Math.min(LETTER_GRID_ROWS, rowCount));
   const lockTemplate = opts?.lockTemplate === true;
   const base = syncCalifacilOmrGeometryImageSize(
-    lockTemplate
-      ? buildLockedAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height)
-      : (opts?.geometry ??
-          buildAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height)),
+    opts?.geometry ?? buildAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height),
     canvas.width,
     canvas.height
   );
   let geometry = lockTemplate ? base : optimizeAnswerSheetGeometryBubbleFit(canvas, base, rows);
   let fit = measureLetterGeometryBubbleFit(canvas, geometry, rows);
   let meta = readWithCellGeometry(canvas, geometry, cols, rows, null, {
-    expandCells: !lockTemplate,
+    expandCells: true,
   });
+
+  if (lockTemplate) {
+    const table = scanDesktopGradeUnifiedOrLegacy(canvas, cols, rows, {
+      tableFrameOnly: true,
+    });
+    const tableGeom = table.geometry
+      ? syncCalifacilOmrGeometryImageSize(table.geometry, canvas.width, canvas.height)
+      : null;
+    const tableFit = tableGeom ? measureLetterGeometryBubbleFit(canvas, tableGeom, rows) : 0;
+    const tableResolved = table.picks.filter((p) => p != null).length;
+    const lockResolved = meta.picks.filter((p) => p != null).length;
+    if (
+      tableGeom &&
+      (tableResolved > lockResolved + 1 ||
+        (tableResolved >= Math.max(lockResolved, Math.ceil(rows * 0.8)) && tableFit >= fit))
+    ) {
+      geometry = tableGeom;
+      fit = tableFit;
+      meta = {
+        ...table,
+        geometry: tableGeom,
+        reviewSourceCanvas: canvas,
+      };
+    }
+  }
 
   if (
     !lockTemplate &&
