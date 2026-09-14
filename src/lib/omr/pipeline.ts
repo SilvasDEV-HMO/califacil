@@ -9,6 +9,7 @@ import {
   countCalifacilCornerMarkers,
   detectAnswerSheetQuadViaAlignStrips,
   detectCalifacilSheetCornerQuadRobust,
+  detectCalifacilQuadFromCornerMarkers,
   isCalifacilExamSheetLikely,
   isCalifacilWarpedLetterCanvas,
   hasCalifacilAlignStrips,
@@ -67,8 +68,8 @@ export type MobileWarpPipelineResult = {
 };
 
 /**
- * Cualquier origen (PNG, PDF, cámara) → 4 cuadros → canvas de referencia 1230×1600.
- * No degrada a leer la tabla en la foto cruda.
+ * Cualquier origen (PNG, JPG, cámara) → 4 cuadritos negros → canvas 1230×1600.
+ * No califica la foto cruda. Solo omite warp si los fiduciales ya están en sitio.
  */
 export function prepareCanonicalCalifacilLetterCanvas(
   source: HTMLCanvasElement,
@@ -85,64 +86,54 @@ export function prepareCanonicalCalifacilLetterCanvas(
     canvas: HTMLCanvasElement,
     alignment: WarpAlignmentReport
   ): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport } | null => {
-    const sized = isReferenceGradeLetterCanvas(canvas)
-      ? canvas
-      : canvas.width === expected.width && canvas.height === expected.height
+    const sized =
+      canvas.width === expected.width && canvas.height === expected.height
         ? canvas
-        : scaleCanvasToExactSize(canvas, expected.width, expected.height);
+        : isReferenceGradeLetterCanvas(canvas)
+          ? canvas
+          : scaleCanvasToExactSize(canvas, expected.width, expected.height);
     const aligned =
       sized === canvas ? alignment : measureWarpedFiducialAlignment(sized, maxErrorPx);
-    if (isReferenceGradeLetterCanvas(sized)) {
+    if (
+      isReferenceGradeLetterCanvas(sized) ||
+      (sized.width === expected.width && sized.height === expected.height)
+    ) {
       return { canvas: sized, alignment: aligned };
     }
     return null;
   };
 
-  if (isReferenceGradeLetterCanvas(source)) {
-    return finishCanonical(source, measureWarpedFiducialAlignment(source, maxErrorPx));
+  const base =
+    Math.max(source.width, source.height) < 1400
+      ? scaleCanvasToMaxSide(source, expected.height)
+      : source;
+
+  const parked = measureWarpedFiducialAlignment(base, maxErrorPx);
+  if (parked.ok) {
+    return finishCanonical(base, parked);
+  }
+  // PDF / PNG raster ya en tamaño de referencia: no warpear (homografía inventada = 15/30).
+  if (isReferenceGradeLetterCanvas(base)) {
+    return finishCanonical(base, parked);
   }
 
-  const working = scaleCanvasToMaxSide(source, expected.height);
-  if (isReferenceGradeLetterCanvas(working)) {
-    const scanAspect = working.width / Math.max(1, working.height);
-    // Escaneo tipo PDF Luis (~0.70), no foto 3:4 (~0.75).
-    if (scanAspect < 0.73) {
-      return finishCanonical(working, measureWarpedFiducialAlignment(working, maxErrorPx));
+  const warpSrc = opts?.frameQuad ? source : base;
+  let quad: RoiQuad | null = detectCalifacilQuadFromCornerMarkers(warpSrc);
+  if (!quad && opts?.frameQuad) {
+    quad = opts.frameQuad;
+  }
+  if (!quad) {
+    const strips = detectAnswerSheetQuadViaAlignStrips(warpSrc);
+    if (strips && countCalifacilCornerMarkers(warpSrc) >= 3) {
+      quad = strips;
     }
   }
-
-  const warpSrc = opts?.frameQuad
-    ? source
-    : working.width >= source.width
-      ? working
-      : source;
-  const quad = opts?.frameQuad ?? detectCalifacilSheetCornerQuadRobust(warpSrc);
   if (!quad) return null;
 
   const result = warpAndValidateCalifacilSheet(warpSrc, quad, maxErrorPx, { fast });
   if (!result.warped) return null;
-  const canvas =
-    result.warped.width === expected.width && result.warped.height === expected.height
-      ? result.warped
-      : warpCalifacilSheetFromQuad(
-          result.warped,
-          detectCalifacilSheetCornerQuadRobust(result.warped) ?? [
-            { x: 0, y: 0 },
-            { x: result.warped.width, y: 0 },
-            { x: result.warped.width, y: result.warped.height },
-            { x: 0, y: result.warped.height },
-          ]
-        ) ?? result.warped;
-  if (canvas.width !== expected.width || canvas.height !== expected.height) {
-    if (
-      Math.abs(canvas.width / canvas.height - 8.5 / 11) > 0.04 ||
-      canvas.height < CALIFACIL_WARP_LETTER_HEIGHT * 0.9
-    ) {
-      return null;
-    }
-  }
-  const alignment = result.alignment ?? measureWarpedFiducialAlignment(canvas, maxErrorPx);
-  return finishCanonical(canvas, alignment);
+  const alignment = result.alignment ?? measureWarpedFiducialAlignment(result.warped, maxErrorPx);
+  return finishCanonical(result.warped, alignment);
 }
 
 function alignmentScore(alignment: WarpAlignmentReport | null): number {

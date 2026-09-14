@@ -122,7 +122,6 @@ import {
   classifyDesktopUploadCanvas,
   normalizeCalifacilGradeDocumentCanvas,
   prepareCanonicalCalifacilLetterCanvas,
-  warpCalifacilMobileCaptureFast,
   isReferenceGradeLetterCanvas,
 } from '@/lib/omr/pipeline';
 import {
@@ -1376,13 +1375,15 @@ export default function CalificarPage() {
             !normalized.sheetDetected
           ) {
             notify.error(
-              'No se detectó la hoja. Encuadra franjas laterales y esquinas negras, con buena luz.'
+              'No se ven los 4 cuadritos negros de las esquinas. Sube la hoja completa, con buena luz.'
             );
-            setLiveStatus('No se detectó la hoja completa. Sube otra foto más centrada.');
+            setLiveStatus('No se detectó la hoja completa. Incluye los 4 cuadritos negros.');
             return { success: false };
           }
           if (!normalized.canvas) {
-            notify.error('No se pudo preparar la hoja para calificar.');
+            notify.error(
+              'No se ven los 4 cuadritos negros de las esquinas. Sube la hoja completa, con buena luz.'
+            );
             return { success: false };
           }
           gradeSource = normalized.canvas;
@@ -3506,6 +3507,40 @@ export default function CalificarPage() {
     await gradeDesktopFolderFiles(Array.from(list));
   };
 
+  const pickGradeFiles = async () => {
+    const picker = window as Window & {
+      showOpenFilePicker?: (opts: {
+        multiple?: boolean;
+        types?: { description: string; accept: Record<string, string[]> }[];
+      }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+    };
+    if (typeof picker.showOpenFilePicker === 'function') {
+      try {
+        const handles = await picker.showOpenFilePicker({
+          multiple: true,
+          types: [
+            {
+              description: 'Hojas CaliFacil',
+              accept: {
+                'image/png': ['.png'],
+                'image/jpeg': ['.jpg', '.jpeg'],
+                'image/webp': ['.webp'],
+                'application/pdf': ['.pdf'],
+              },
+            },
+          ],
+        });
+        const files = await Promise.all(handles.map((h) => h.getFile()));
+        if (files.length > 0) await gradeDesktopFolderFiles(files);
+        return;
+      } catch (err) {
+        const name = err instanceof DOMException ? err.name : '';
+        if (name === 'AbortError') return;
+      }
+    }
+    folderInputRef.current?.click();
+  };
+
   const presentInstantCaptureGrade = useCallback(
     async (fullDraft: Record<string, string>, studentIdOverride?: string) => {
       // Popup móvil: nota de la hoja actual (no del examen completo con vacías = error).
@@ -3744,9 +3779,8 @@ export default function CalificarPage() {
         return;
       }
 
-      // Galería / live: franjas o frameQuad del gate. Nunca el fotograma entero.
-      const stripQuad = detectAnswerSheetQuadViaAlignStrips(fullCanvas);
-      const frameQuad = opts?.frameQuad ?? stripQuad ?? null;
+      // Solo el quad del gate live (4 esquinas). No usar franjas como si fueran la hoja.
+      const frameQuad = opts?.frameQuad ?? null;
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
       let sheetKind: ZipGradeSheetKind =
@@ -3764,13 +3798,6 @@ export default function CalificarPage() {
         if (canonical) {
           warped = canonical.canvas;
           alignment = canonical.alignment;
-        } else {
-          const fastWarp = warpCalifacilMobileCaptureFast(fullCanvas, {
-            frameQuad: frameQuad ?? undefined,
-            maxErrorPx: MOBILE_WARP_FALLBACK_MAX_ERROR_PX,
-          });
-          warped = fastWarp.warped;
-          alignment = fastWarp.alignment;
         }
         if (!warped || !isReferenceGradeLetterCanvas(warped)) {
           warped = null;
@@ -3789,9 +3816,9 @@ export default function CalificarPage() {
       if (!warped) {
         clearPreview();
         toast.error(
-          'No se detectó la hoja. Centra 3 esquinas + franjas laterales (o las 4 esquinas), con buena luz.'
+          'No se ven los 4 cuadritos negros de las esquinas. Encuadra la hoja completa, con buena luz.'
         );
-        setLiveStatus('Centra la hoja: 3 esquinas negras + franjas laterales, o las 4.');
+        setLiveStatus('Centra la hoja: los 4 cuadritos negros deben verse.');
         return;
       }
 
@@ -4940,7 +4967,7 @@ export default function CalificarPage() {
             ref={folderInputRef}
             type="file"
             multiple
-            className="sr-only"
+            className="hidden"
             aria-hidden
             onChange={handleFolderFiles}
           />
@@ -5100,7 +5127,7 @@ export default function CalificarPage() {
                       variant="outline"
                       className="border-orange-300 text-orange-900 hover:bg-orange-50"
                       disabled={scanBusy || !canGradeStudents}
-                      onClick={() => folderInputRef.current?.click()}
+                      onClick={() => void pickGradeFiles()}
                     >
                       <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
                       {scanBusy ? 'Calificando archivos…' : 'Elegir archivos…'}
@@ -5403,7 +5430,7 @@ export default function CalificarPage() {
                         variant="outline"
                         className="border-orange-300 text-orange-900 hover:bg-orange-50"
                         disabled={scanBusy || !canGradeStudents}
-                        onClick={() => folderInputRef.current?.click()}
+                        onClick={() => void pickGradeFiles()}
                       >
                         <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
                         {scanBusy ? 'Calificando archivos…' : 'Elegir archivos…'}

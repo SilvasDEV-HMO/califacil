@@ -2422,7 +2422,7 @@ function findCalifacilFiducialNearExpected(
   return null;
 }
 
-function detectCalifacilQuadFromCornerMarkers(
+export function detectCalifacilQuadFromCornerMarkers(
   canvas: HTMLCanvasElement
 ): [Point, Point, Point, Point] | null {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
