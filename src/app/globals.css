@@ -73,6 +73,7 @@
     height: 100dvh;
     max-height: 100dvh;
     overflow: hidden;
+    touch-action: pan-x pan-y;
     /* Cursor lápiz en toda la app; hotspot en la punta del lápiz */
     cursor: url('/cursors/pencil.svg') 4 28, auto;
   }
@@ -96,6 +97,16 @@
   select,
   [contenteditable='true'] {
     cursor: text;
+  }
+  /* iOS zoom al enfocar si el input es < 16px; se queda pegado hasta pellizcar. */
+  @media (max-width: 767px) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not(
+        [type='color']
+      ):not([type='hidden']),
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
   }
   /* Controles que no son “escritura” */
   input[type='checkbox'],

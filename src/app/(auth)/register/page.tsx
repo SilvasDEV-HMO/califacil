@@ -173,7 +173,7 @@ export default function RegisterPage() {
                     placeholder="Clave de 8 caracteres"
                     value={verificationCode}
                     onChange={(e) => setVerificationCode(e.target.value)}
-                    className="h-10 text-sm sm:h-10"
+                    className="h-10 text-base sm:text-sm"
                     required
                   />
                 </div>
@@ -215,7 +215,7 @@ export default function RegisterPage() {
                       placeholder="Juan Pérez"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      className="h-9 pl-9 text-sm sm:h-10"
+                      className="h-9 pl-9 text-base sm:h-10 sm:text-sm"
                       required
                     />
                   </div>
@@ -232,7 +232,7 @@ export default function RegisterPage() {
                       placeholder="maestro@escuela.edu"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="h-9 pl-9 text-sm sm:h-10"
+                      className="h-9 pl-9 text-base sm:h-10 sm:text-sm"
                       required
                     />
                   </div>
@@ -249,7 +249,7 @@ export default function RegisterPage() {
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="h-9 pl-9 pr-10 text-sm sm:h-10"
+                      className="h-9 pl-9 pr-10 text-base sm:h-10 sm:text-sm"
                       required
                     />
                     <button
@@ -278,7 +278,7 @@ export default function RegisterPage() {
                       placeholder="••••••••"
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
-                      className="h-9 pl-9 pr-10 text-sm sm:h-10"
+                      className="h-9 pl-9 pr-10 text-base sm:h-10 sm:text-sm"
                       required
                     />
                     <button

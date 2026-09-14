@@ -115,7 +115,7 @@ export default function LoginPage() {
                     placeholder="maestro@escuela.edu"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="h-11 pl-9 text-sm sm:h-10"
+                    className="h-11 pl-9 text-base sm:h-10 sm:text-sm"
                     required
                   />
                 </div>
@@ -132,7 +132,7 @@ export default function LoginPage() {
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="h-11 pl-9 pr-10 text-sm sm:h-10"
+                    className="h-11 pl-9 pr-10 text-base sm:h-10 sm:text-sm"
                     required
                   />
                   <button
