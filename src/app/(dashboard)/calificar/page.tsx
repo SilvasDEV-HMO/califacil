@@ -5326,10 +5326,12 @@ export default function CalificarPage() {
                       disabled={scanBusy}
                       onClick={() => pdfInputRef.current?.click()}
                     >
-                      <FileUp className="mr-2 h-4 w-4" aria-hidden />
-                      {scanBusy && desktopScanKind === 'pdf'
-                        ? 'Calificando examen…'
-                        : 'Subir PDF…'}
+                      {scanBusy && desktopScanKind === 'pdf' ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                      ) : (
+                        <FileUp className="mr-2 h-4 w-4" aria-hidden />
+                      )}
+                      {scanBusy && desktopScanKind === 'pdf' ? 'Calificando examen…' : 'Subir PDF…'}
                     </Button>
                     <Button
                       type="button"
@@ -5337,7 +5339,11 @@ export default function CalificarPage() {
                       disabled={scanBusy || !canGradeStudents}
                       onClick={() => void pickGradeFiles()}
                     >
-                      <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                      {scanBusy && desktopScanKind === 'folder' ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                      ) : (
+                        <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                      )}
                       {scanBusy && desktopScanKind === 'folder'
                         ? 'Calificando carpeta…'
                         : 'Elegir carpeta…'}
@@ -5610,10 +5616,12 @@ export default function CalificarPage() {
                         disabled={scanBusy}
                         onClick={() => pdfInputRef.current?.click()}
                       >
-                        <FileUp className="mr-2 h-4 w-4" aria-hidden />
-                        {scanBusy && desktopScanKind === 'pdf'
-                          ? 'Calificando examen…'
-                          : 'Subir PDF…'}
+                        {scanBusy && desktopScanKind === 'pdf' ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                        ) : (
+                          <FileUp className="mr-2 h-4 w-4" aria-hidden />
+                        )}
+                        {scanBusy && desktopScanKind === 'pdf' ? 'Calificando examen…' : 'Subir PDF…'}
                       </Button>
                       <Button
                         type="button"
@@ -5621,7 +5629,11 @@ export default function CalificarPage() {
                         disabled={scanBusy || !canGradeStudents}
                         onClick={() => void pickGradeFiles()}
                       >
-                        <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                        {scanBusy && desktopScanKind === 'folder' ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                        ) : (
+                          <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                        )}
                         {scanBusy && desktopScanKind === 'folder'
                           ? 'Calificando carpeta…'
                           : 'Elegir carpeta…'}

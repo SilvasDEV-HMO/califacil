@@ -13,6 +13,7 @@ import { prepareCanonicalCalifacilLetterCanvas } from '../src/lib/omr/pipeline.t
 import {
   califacilWarpLetterPixelSize,
   detectCalifacilQuadFromCornerMarkers,
+  detectCalifacilPhotoFiducialQuad,
   warpCalifacilSheetFromQuad,
   type Point,
 } from '../src/lib/omrScan.ts';
@@ -121,7 +122,7 @@ for (const p of insetQuad) {
   ictx.fillRect(Math.round(p.x - 16), Math.round(p.y - 16), 32, 32);
 }
 
-const detectedInset = detectCalifacilQuadFromCornerMarkers(
+const detectedInset = detectCalifacilPhotoFiducialQuad(
   inset as unknown as HTMLCanvasElement
 );
 assert(detectedInset != null, 'no se detectaron cuadritos en la hoja inset (bisel+teclado)');

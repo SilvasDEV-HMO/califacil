@@ -2538,6 +2538,18 @@ function detectCalifacilQuadFromFiducialBlobs(
   return bestQuad;
 }
 
+/** Fotos (móvil / pantalla): 4 cuadritos en cualquier parte del fotograma, no burbujas de un PDF. */
+export function detectCalifacilPhotoFiducialQuad(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const { width, height } = canvas;
+  if (width < 80 || height < 80) return null;
+  const id = ctx.getImageData(0, 0, width, height);
+  return detectCalifacilQuadFromFiducialBlobs(id.data, width, height);
+}
+
 function orderFiducialBlobsAsQuad(
   blobs: FiducialBlob[]
 ): [Point, Point, Point, Point] | null {
@@ -2718,9 +2730,6 @@ export function detectCalifacilQuadFromCornerMarkers(
     if (!tl || !tr || !br || !bl) return null;
     return validateCornerMarkerQuad([tl, tr, br, bl], width, height);
   };
-
-  const blobQuad = detectCalifacilQuadFromFiducialBlobs(d, width, height);
-  if (blobQuad) return blobQuad;
 
   const expectedQuad = tryExpectedMarkers();
   if (expectedQuad) return expectedQuad;

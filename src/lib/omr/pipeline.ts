@@ -10,6 +10,7 @@ import {
   detectAnswerSheetQuadViaAlignStrips,
   detectCalifacilSheetCornerQuadRobust,
   detectCalifacilQuadFromCornerMarkers,
+  detectCalifacilPhotoFiducialQuad,
   isCalifacilExamSheetLikely,
   isCalifacilWarpedLetterCanvas,
   hasCalifacilAlignStrips,
@@ -183,6 +184,7 @@ export function prepareCanonicalCalifacilLetterCanvas(
 
   if (forceWarp) {
     const tryQuads: RoiQuad[] = [];
+    pushUniqueQuad(tryQuads, detectCalifacilPhotoFiducialQuad(warpSrc));
     pushUniqueQuad(tryQuads, markerQuad);
 
     let best: {
@@ -214,22 +216,33 @@ export function prepareCanonicalCalifacilLetterCanvas(
   }
 
   let quad: RoiQuad | null = quads[0] ?? null;
-  if (!quad) return null;
 
   // PDF/escáner plano (no fotos): la hoja YA es la página.
   if (!forceWarp) {
-    const fill = measureRoiSheetFillRatio(quad, warpSrc.width, warpSrc.height);
+    const pageQuad: RoiQuad = [
+      { x: 2, y: 2 },
+      { x: warpSrc.width - 3, y: 2 },
+      { x: warpSrc.width - 3, y: warpSrc.height - 3 },
+      { x: 2, y: warpSrc.height - 3 },
+    ];
+    const sheet = quad ?? pageQuad;
+    const fill = measureRoiSheetFillRatio(sheet, warpSrc.width, warpSrc.height);
     const skewPx = Math.max(
-      Math.abs(quad[0].y - quad[1].y),
-      Math.abs(quad[3].y - quad[2].y),
-      Math.abs(quad[0].x - quad[3].x),
-      Math.abs(quad[1].x - quad[2].x)
+      Math.abs(sheet[0].y - sheet[1].y),
+      Math.abs(sheet[3].y - sheet[2].y),
+      Math.abs(sheet[0].x - sheet[3].x),
+      Math.abs(sheet[1].x - sheet[2].x)
     );
     const skewOk = skewPx <= Math.max(14, Math.min(warpSrc.width, warpSrc.height) * 0.02);
-    if (fill >= 0.82 && skewOk && isReferenceGradeLetterCanvas(warpSrc)) {
-      return { canvas: warpSrc, alignment: parked };
+    const letterish =
+      isReferenceGradeLetterCanvas(warpSrc) || isCalifacilWarpedLetterCanvas(warpSrc);
+    if (fill >= 0.82 && skewOk && letterish) {
+      const parkedPage = finishCanonical(warpSrc, parked);
+      if (parkedPage) return parkedPage;
     }
   }
+
+  if (!quad) return null;
 
   const result = warpAndValidateCalifacilSheet(warpSrc, quad, maxErrorPx, { fast });
   if (!result.warped) return null;
