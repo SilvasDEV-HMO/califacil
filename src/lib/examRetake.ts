@@ -217,3 +217,63 @@ export async function grantExamRetake(
 
   return grantExamRetakeWithAdmin(admin, examId, studentId);
 }
+
+export async function deleteStudentExamResult(
+  userScopedSupabase: SupabaseClient,
+  examId: string,
+  studentId: string
+): Promise<GrantExamRetakeResult> {
+  const { data: ownedExam, error: ownedErr } = await userScopedSupabase
+    .from('exams')
+    .select('id')
+    .eq('id', examId)
+    .maybeSingle();
+
+  if (ownedErr) return { ok: false, error: ownedErr.message };
+  if (!ownedExam) return { ok: false, error: 'Examen no encontrado' };
+
+  const { data, error } = await userScopedSupabase.rpc('teacher_delete_student_exam_result', {
+    p_exam_id: examId,
+    p_student_id: studentId,
+  });
+
+  if (!error) {
+    const payload = data as { ok?: boolean; error?: string } | null;
+    if (payload?.ok) return { ok: true };
+    if (payload?.error === 'not_allowed') {
+      return { ok: false, error: 'No tienes permiso para borrar este resultado.' };
+    }
+  }
+
+  const admin = createServiceRoleClient();
+  if (!admin) {
+    if (error?.message && /function|does not exist/i.test(error.message)) {
+      return {
+        ok: false,
+        error: 'Falta la función para borrar resultados en Supabase.',
+        hint: 'Ejecuta la migración 20260914180000_teacher_delete_student_exam_result.sql en el SQL Editor.',
+      };
+    }
+    return {
+      ok: false,
+      error: error?.message || 'No se pudo borrar el resultado.',
+      hint: 'Configura SUPABASE_SERVICE_ROLE_KEY en Vercel con la clave service_role.',
+    };
+  }
+
+  const { error: answersErr } = await admin
+    .from('answers')
+    .delete()
+    .eq('exam_id', examId)
+    .eq('student_id', studentId);
+  if (answersErr) return { ok: false, error: answersErr.message };
+
+  const { error: attemptErr } = await admin
+    .from('exam_attempts')
+    .delete()
+    .eq('exam_id', examId)
+    .eq('student_id', studentId);
+  if (attemptErr) return { ok: false, error: attemptErr.message };
+
+  return { ok: true };
+}

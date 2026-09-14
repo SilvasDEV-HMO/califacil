@@ -26,6 +26,7 @@ import {
   CheckCircle,
   XCircle,
   AlertTriangle,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
@@ -249,6 +250,7 @@ export default function ExamResultsPage() {
   const [gradingAnswerId, setGradingAnswerId] = useState<string | null>(null);
   const [assignedGroups, setAssignedGroups] = useState<AssignedGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('all');
+  const [deletingStudentId, setDeletingStudentId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!examId) return;
@@ -626,6 +628,39 @@ export default function ExamResultsPage() {
     });
   };
 
+  const handleDeleteStudentResult = async (result: StudentResult) => {
+    if (
+      !window.confirm(
+        `¿Eliminar el intento de ${result.studentName}? Se borrarán sus respuestas de este examen.`
+      )
+    ) {
+      return;
+    }
+    setDeletingStudentId(result.studentId);
+    try {
+      const res = await fetch(`/api/exams/${examId}/students/${result.studentId}/result`, {
+        method: 'DELETE',
+        headers: await dashboardAuthJsonHeaders(),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string; hint?: string };
+      if (!res.ok) {
+        toast.error(payload.error || 'No se pudo eliminar el intento', {
+          description: payload.hint,
+        });
+        return;
+      }
+      toast.success(`Se eliminó el intento de ${result.studentName}`);
+      if (selectedStudentBreakdownId === result.studentId) {
+        setSelectedStudentBreakdownId('');
+      }
+      await refreshAnswers();
+    } catch {
+      toast.error('No se pudo eliminar el intento');
+    } finally {
+      setDeletingStudentId(null);
+    }
+  };
+
   if (examLoading || answersLoading) {
     return (
       <div className="flex justify-center py-12">
@@ -837,7 +872,7 @@ export default function ExamResultsPage() {
             <CardHeader>
               <CardTitle>Resultados por Estudiante</CardTitle>
               <CardDescription>
-                Lista de todos los estudiantes que han respondido el examen
+                Lista de estudiantes que respondieron. Puedes eliminar un intento si te equivocaste al calificar.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -864,6 +899,9 @@ export default function ExamResultsPage() {
                           Calificación
                         </th>
                         <th className="hidden text-left py-3 px-4 font-semibold md:table-cell md:w-auto">Fecha</th>
+                        <th className="w-[12%] py-2 pl-1 pr-0 text-right font-semibold sm:w-auto sm:py-3 sm:px-4">
+                          <span className="sr-only sm:not-sr-only">Acciones</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -891,6 +929,23 @@ export default function ExamResultsPage() {
                           </td>
                           <td className="hidden py-3 px-4 text-gray-500 md:table-cell">
                             {formatDate(result.submittedAt)}
+                          </td>
+                          <td className="py-2 pl-1 pr-0 text-right sm:py-3 sm:px-4">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                              disabled={deletingStudentId === result.studentId}
+                              aria-label={`Eliminar intento de ${result.studentName}`}
+                              onClick={() => void handleDeleteStudentResult(result)}
+                            >
+                              {deletingStudentId === result.studentId ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
                           </td>
                         </tr>
                       ))}

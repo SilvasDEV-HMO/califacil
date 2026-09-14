@@ -2366,8 +2366,189 @@ function validateCornerMarkerQuad(
     ) * 0.5;
   const avgW = (topW + bottomW) * 0.5;
   const avgH = (leftH + rightH) * 0.5;
+  const fill = area / Math.max(1, width * height);
+  if (fill > 0.85) return null;
   if (area < width * height * 0.04 || avgW < width * 0.22 || avgH < height * 0.22) return null;
   return quad;
+}
+
+function quadIsConvex(quad: [Point, Point, Point, Point]): boolean {
+  const pts = [quad[0], quad[1], quad[2], quad[3]];
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = pts[i]!;
+    const b = pts[(i + 1) % 4]!;
+    const c = pts[(i + 2) % 4]!;
+    const z = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (Math.abs(z) < 1e-6) continue;
+    const s = z > 0 ? 1 : -1;
+    if (sign === 0) sign = s;
+    else if (s !== sign) return false;
+  }
+  return true;
+}
+
+type FiducialBlob = {
+  cx: number;
+  cy: number;
+  bw: number;
+  bh: number;
+  area: number;
+};
+
+/** Cuadritos negros en cualquier parte del fotograma (hoja en papel o en pantalla). */
+function detectCalifacilQuadFromFiducialBlobs(
+  d: Uint8ClampedArray,
+  width: number,
+  height: number
+): [Point, Point, Point, Point] | null {
+  const targetW = Math.min(width, 420);
+  const scale = targetW / Math.max(1, width);
+  const sw = Math.max(32, Math.round(width * scale));
+  const sh = Math.max(32, Math.round(height * scale));
+  const n = sw * sh;
+  const dark = new Uint8Array(n);
+  let lumSum = 0;
+  const gray = new Float32Array(n);
+  for (let y = 0; y < sh; y++) {
+    const sy = Math.min(height - 1, Math.floor(y / scale));
+    for (let x = 0; x < sw; x++) {
+      const sx = Math.min(width - 1, Math.floor(x / scale));
+      const i = (sy * width + sx) * 4;
+      const lum = d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
+      lumSum += lum;
+      gray[y * sw + x] = lum;
+    }
+  }
+  const meanLum = lumSum / n;
+  const cut = Math.min(118, Math.max(72, meanLum * 0.62 + 6));
+  for (let i = 0; i < n; i++) {
+    dark[i] = gray[i]! < cut ? 1 : 0;
+  }
+
+  const parent = new Int32Array(n);
+  for (let i = 0; i < n; i++) parent[i] = i;
+  const find = (a: number): number => {
+    let x = a;
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]]!;
+      x = parent[x]!;
+    }
+    return x;
+  };
+  const unite = (a: number, b: number) => {
+    const pa = find(a);
+    const pb = find(b);
+    if (pa !== pb) parent[pa] = pb;
+  };
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const i = y * sw + x;
+      if (!dark[i]) continue;
+      if (x + 1 < sw && dark[i + 1]) unite(i, i + 1);
+      if (y + 1 < sh && dark[i + sw]) unite(i, i + sw);
+    }
+  }
+
+  type Acc = { minX: number; minY: number; maxX: number; maxY: number; area: number; sx: number; sy: number };
+  const acc = new Map<number, Acc>();
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const i = y * sw + x;
+      if (!dark[i]) continue;
+      const r = find(i);
+      let a = acc.get(r);
+      if (!a) {
+        a = { minX: x, minY: y, maxX: x, maxY: y, area: 0, sx: 0, sy: 0 };
+        acc.set(r, a);
+      }
+      a.minX = Math.min(a.minX, x);
+      a.minY = Math.min(a.minY, y);
+      a.maxX = Math.max(a.maxX, x);
+      a.maxY = Math.max(a.maxY, y);
+      a.area += 1;
+      a.sx += x;
+      a.sy += y;
+    }
+  }
+
+  const minArea = Math.max(6, Math.round(sw * sh * 0.00012));
+  const maxArea = Math.round(sw * sh * 0.012);
+  const blobs: FiducialBlob[] = [];
+  for (const a of acc.values()) {
+    if (a.area < minArea || a.area > maxArea) continue;
+    const bw = a.maxX - a.minX + 1;
+    const bh = a.maxY - a.minY + 1;
+    const aspect = bw / Math.max(1, bh);
+    if (aspect < 0.42 || aspect > 2.4) continue;
+    const fill = a.area / Math.max(1, bw * bh);
+    if (fill < 0.32) continue;
+    blobs.push({
+      cx: a.sx / a.area / scale,
+      cy: a.sy / a.area / scale,
+      bw: bw / scale,
+      bh: bh / scale,
+      area: a.area / (scale * scale),
+    });
+  }
+  if (blobs.length < 4) return null;
+  blobs.sort((p, q) => q.area - p.area);
+  const pool = blobs.slice(0, Math.min(14, blobs.length));
+
+  const areas = pool.map((b) => b.area).sort((a, b) => a - b);
+  const medianArea = areas[Math.floor(areas.length / 2)] ?? 1;
+  const similar = pool.filter(
+    (b) => b.area >= medianArea * 0.28 && b.area <= medianArea * 4.2
+  );
+  const pick = similar.length >= 4 ? similar : pool;
+  if (pick.length < 4) return null;
+
+  let bestQuad: [Point, Point, Point, Point] | null = null;
+  let bestArea = 0;
+  const m = pick.length;
+  for (let i = 0; i < m; i++) {
+    for (let j = i + 1; j < m; j++) {
+      for (let k = j + 1; k < m; k++) {
+        for (let l = k + 1; l < m; l++) {
+          const four = [pick[i]!, pick[j]!, pick[k]!, pick[l]!];
+          const ordered = orderFiducialBlobsAsQuad(four);
+          if (!ordered) continue;
+          if (!quadIsConvex(ordered)) continue;
+          const fill = measureRoiSheetFillRatio(ordered, width, height);
+          if (fill < 0.05 || fill > 0.85) continue;
+          const [tl, tr, br, bl] = ordered;
+          const avgW =
+            (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(br.x - bl.x, br.y - bl.y)) * 0.5;
+          const avgH =
+            (Math.hypot(bl.x - tl.x, bl.y - tl.y) + Math.hypot(br.x - tr.x, br.y - tr.y)) * 0.5;
+          if (avgW < width * 0.08 || avgH < height * 0.08) continue;
+          const ratio = avgH / Math.max(1, avgW);
+          if (ratio < 0.85 || ratio > 2.15) continue;
+          const area = quadShoelaceArea(ordered);
+          if (area > bestArea) {
+            bestArea = area;
+            bestQuad = ordered;
+          }
+        }
+      }
+    }
+  }
+  return bestQuad;
+}
+
+function orderFiducialBlobsAsQuad(
+  blobs: FiducialBlob[]
+): [Point, Point, Point, Point] | null {
+  if (blobs.length !== 4) return null;
+  const byY = [...blobs].sort((a, b) => a.cy - b.cy);
+  const top = [byY[0]!, byY[1]!].sort((a, b) => a.cx - b.cx);
+  const bottom = [byY[2]!, byY[3]!].sort((a, b) => a.cx - b.cx);
+  return [
+    { x: top[0]!.cx, y: top[0]!.cy },
+    { x: top[1]!.cx, y: top[1]!.cy },
+    { x: bottom[1]!.cx, y: bottom[1]!.cy },
+    { x: bottom[0]!.cx, y: bottom[0]!.cy },
+  ];
 }
 
 /**
@@ -2536,6 +2717,9 @@ export function detectCalifacilQuadFromCornerMarkers(
     return validateCornerMarkerQuad([tl, tr, br, bl], width, height);
   };
 
+  const blobQuad = detectCalifacilQuadFromFiducialBlobs(d, width, height);
+  if (blobQuad) return blobQuad;
+
   const expectedQuad = tryExpectedMarkers();
   if (expectedQuad) return expectedQuad;
 
@@ -2547,7 +2731,6 @@ export function detectCalifacilQuadFromCornerMarkers(
       Math.round(minDim * 0.1),
       Math.round(minDim * 0.06),
       Math.round(minDim * 0.03),
-      0,
     ];
     for (const inset of insets) {
       for (const frac of fracs) {

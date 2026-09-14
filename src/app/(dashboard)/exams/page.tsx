@@ -348,7 +348,11 @@ export default function ExamsPage() {
             <FolderCard
               key={folder.id}
               folder={folder}
-              examCount={exams.filter((e) => e.folder_id === folder.id).length}
+              examCount={exams.filter(
+                (e) =>
+                  e.folder_id === folder.id &&
+                  (filterStatus === 'all' || e.status === filterStatus)
+              ).length}
               subfolderCount={folders.filter((f) => f.parent_id === folder.id).length}
               onOpen={() => navigateToFolder(folder.id)}
               onRename={() => openRenameFolder(folder)}
@@ -448,10 +452,10 @@ function FolderCard({
             <div className="min-w-0">
               <CardTitle className="line-clamp-2 text-lg font-semibold">{folder.name}</CardTitle>
               <CardDescription className="mt-1">
-                {subfolderCount > 0 && `${subfolderCount} subcarpeta${subfolderCount === 1 ? '' : 's'}`}
-                {subfolderCount > 0 && examCount > 0 && ' · '}
-                {examCount > 0 && `${examCount} examen${examCount === 1 ? '' : 'es'}`}
-                {subfolderCount === 0 && examCount === 0 && 'Vacía'}
+                {subfolderCount > 0
+                  ? `${subfolderCount} subcarpeta${subfolderCount === 1 ? '' : 's'} · `
+                  : ''}
+                {examCount} examen{examCount === 1 ? '' : 'es'}
               </CardDescription>
             </div>
           </div>

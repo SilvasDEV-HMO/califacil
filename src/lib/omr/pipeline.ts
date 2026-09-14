@@ -102,11 +102,12 @@ export function isForcedWarpGradeCanvas(
   canvas: HTMLCanvasElement,
   alignment?: WarpAlignmentReport | null
 ): boolean {
-  if (!isPrintedCalifacilLetterAfterWarp(canvas)) return false;
-  if (alignment?.ok) return true;
-  const corners = countCalifacilCornerMarkers(canvas);
-  if (corners >= 4 && alignment && !alignment.ok) return false;
-  return corners >= 3 && countCalifacilAlignStrips(canvas) >= 2;
+  if (!alignment?.ok) return false;
+  const expected = califacilWarpLetterPixelSize();
+  return (
+    Math.abs(canvas.width - expected.width) <= 4 &&
+    Math.abs(canvas.height - expected.height) <= 4
+  );
 }
 
 /**
@@ -146,7 +147,8 @@ export function prepareCanonicalCalifacilLetterCanvas(
     const letterSized = exactRef || (!forceWarp && isReferenceGradeLetterCanvas(sized));
     if (!letterSized) return null;
     if (forceWarp && !exactRef) return null;
-    if (!isCanonicalGradeCanvasReady(sized, aligned)) return null;
+    if (forceWarp && !aligned.ok) return null;
+    if (!forceWarp && !isCanonicalGradeCanvasReady(sized, aligned)) return null;
     return { canvas: sized, alignment: aligned };
   };
 
@@ -182,12 +184,6 @@ export function prepareCanonicalCalifacilLetterCanvas(
   if (forceWarp) {
     const tryQuads: RoiQuad[] = [];
     pushUniqueQuad(tryQuads, markerQuad);
-    if (!markerQuad) {
-      if (opts?.frameQuad) pushUniqueQuad(tryQuads, opts.frameQuad);
-      if (countCalifacilCornerMarkers(warpSrc) >= 3) {
-        pushUniqueQuad(tryQuads, detectAnswerSheetQuadViaAlignStrips(warpSrc));
-      }
-    }
 
     let best: {
       canvas: HTMLCanvasElement;
@@ -195,20 +191,16 @@ export function prepareCanonicalCalifacilLetterCanvas(
       score: number;
     } | null = null;
     for (const q of tryQuads) {
+      const fill = measureRoiSheetFillRatio(q, warpSrc.width, warpSrc.height);
+      if (fill > 0.85) continue;
       const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast });
       if (!result.warped) continue;
       const alignment =
         result.alignment ?? measureWarpedFiducialAlignment(result.warped, maxErrorPx);
       const finished = finishCanonical(result.warped, alignment);
-      if (!finished) continue;
+      if (!finished || !finished.alignment.ok) continue;
       const a = finished.alignment;
-      const corners = countCalifacilCornerMarkers(finished.canvas);
-      const strips = countCalifacilAlignStrips(finished.canvas);
-      const score =
-        (a.ok ? 200 : 0) +
-        corners * 12 +
-        strips * 25 -
-        (Number.isFinite(a.maxErrorPx) ? Math.min(80, a.maxErrorPx) : 80);
+      const score = 400 - Math.min(80, a.maxErrorPx);
       if (!best || score > best.score) {
         best = { canvas: finished.canvas, alignment: a, score };
       }

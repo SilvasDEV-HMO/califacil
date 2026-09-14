@@ -117,14 +117,14 @@ export default function GroupsPage() {
             }`}
           >
             <h2 className="text-lg font-semibold text-gray-900">Mis Grupos</h2>
-            <div className="space-y-3">
+            <div className="space-y-3 overflow-visible p-0.5">
               {groups.map((group) => (
                 <Card 
                   key={group.id} 
-                  className={`min-w-0 cursor-pointer transition-all ${
+                  className={`min-w-0 cursor-pointer border-2 transition-all ${
                     selectedGroup === group.id 
-                      ? 'ring-2 ring-orange-500 shadow-md' 
-                      : 'hover:shadow-md'
+                      ? 'border-orange-500 shadow-md' 
+                      : 'border-transparent hover:shadow-md'
                   }`}
                   onClick={() => setSelectedGroup(group.id)}
                 >

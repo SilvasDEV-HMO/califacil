@@ -240,6 +240,7 @@ type BatchGradeItem = {
   mergedDraft?: Record<string, string>;
   /** Recorte del nombre manuscrito en la hoja. */
   nameCropUrl?: string | null;
+  selectedStudentId?: string;
 };
 
 const FOLDER_BATCH_MAX_FILES = 80;
@@ -581,6 +582,7 @@ export default function CalificarPage() {
   const [reviewOmrGeometry, setReviewOmrGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
   const [reviewOmrPicks, setReviewOmrPicks] = useState<(number | null)[]>([]);
   const [scanBusy, setScanBusy] = useState(false);
+  const [desktopScanKind, setDesktopScanKind] = useState<'pdf' | 'folder' | null>(null);
 
   const [cameraOpen, setCameraOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState('Sube una imagen escaneada para leer respuestas.');
@@ -2054,6 +2056,7 @@ export default function CalificarPage() {
 
   useEffect(() => {
     scanBusyRef.current = scanBusy;
+    if (!scanBusy) setDesktopScanKind(null);
   }, [scanBusy]);
 
   useEffect(() => {
@@ -2383,6 +2386,7 @@ export default function CalificarPage() {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    setDesktopScanKind('pdf');
     await ingestDesktopPdfFile(file);
   };
 
@@ -3440,6 +3444,7 @@ export default function CalificarPage() {
     gradeReadAbortRef.current = null;
     const gen = ++gradeReadGenRef.current;
     const savedSheet = sheetIndexRef.current;
+    setDesktopScanKind('folder');
     setScanBusy(true);
     setBatchSummary(null);
     const results: BatchGradeItem[] = [];
@@ -3641,30 +3646,61 @@ export default function CalificarPage() {
     if (!row?.pendingStudent || !row.mergedDraft) return;
     const student = sortedStudents.find((s) => s.id === studentId);
     if (!student) return;
+    const stats = await persistStudentAnswers(row.mergedDraft, student.id);
+    setBatchSummary((prev) => {
+      if (!prev) return prev;
+      const next = [...prev];
+      next[rowIndex] = {
+        fileName: row.fileName,
+        ok: true,
+        studentName: student.name,
+        pct: stats.pct,
+        nameCropUrl: row.nameCropUrl,
+      };
+      return next;
+    });
+  };
+
+  const assignPendingBatchStudent = (rowIndex: number, studentId: string) => {
+    setBatchSummary((prev) => {
+      if (!prev) return prev;
+      const next = [...prev];
+      const row = next[rowIndex];
+      if (!row?.pendingStudent) return prev;
+      next[rowIndex] = { ...row, selectedStudentId: studentId };
+      return next;
+    });
+  };
+
+  const savePendingBatchStudents = async () => {
+    const rows = batchSummary ?? [];
+    const pending = rows
+      .map((row, idx) => ({ row, idx }))
+      .filter(({ row }) => row.pendingStudent && row.mergedDraft);
+    if (pending.length === 0) {
+      setBatchSummary(null);
+      return;
+    }
+    const missing = pending.filter(({ row }) => !row.selectedStudentId);
+    if (missing.length > 0) {
+      toast.error('Elige un alumno en cada hoja pendiente antes de guardar.');
+      return;
+    }
     try {
       setScanBusy(true);
-      const stats = await persistStudentAnswers(row.mergedDraft, student.id);
-      setBatchSummary((prev) => {
-        if (!prev) return prev;
-        const next = [...prev];
-        next[rowIndex] = {
-          fileName: row.fileName,
-          ok: true,
-          studentName: student.name,
-          pct: stats.pct,
-          nameCropUrl: row.nameCropUrl,
-        };
-        return next;
-      });
-      toast.success(`Guardado: ${student.name}`);
+      for (const { row, idx } of pending) {
+        await persistPendingBatchStudent(idx, row.selectedStudentId!);
+      }
+      toast.success('Resultados guardados.');
     } catch {
-      toast.error('No se pudo guardar esta hoja.');
+      toast.error('No se pudieron guardar todas las hojas.');
     } finally {
       setScanBusy(false);
     }
   };
 
   const pickGradeFiles = async () => {
+    setDesktopScanKind('folder');
     const picker = window as Window & {
       showDirectoryPicker?: (opts?: { mode?: 'read' }) => Promise<DirectoryHandleLike>;
     };
@@ -3945,7 +3981,7 @@ export default function CalificarPage() {
           warped = canonical.canvas;
           alignment = canonical.alignment;
         }
-        if (!warped || !isForcedWarpGradeCanvas(warped, alignment)) {
+        if (!warped || !alignment?.ok || !isForcedWarpGradeCanvas(warped, alignment)) {
           warped = null;
           alignment = null;
         }
@@ -5004,8 +5040,8 @@ export default function CalificarPage() {
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
-              Identifica al alumno por el nombre escrito en la hoja y, si hace falta, elige en el
-              selector.
+              Identifica al alumno por el nombre escrito en la hoja. Elige en el selector y pulsa
+              Guardar; no se guarda al elegir.
             </DialogDescription>
           </DialogHeader>
           {batchSummary && batchSummary.length > 0 ? (
@@ -5042,8 +5078,9 @@ export default function CalificarPage() {
                         ) : row.pendingStudent ? (
                           <Select
                             disabled={scanBusy}
+                            value={row.selectedStudentId || undefined}
                             onValueChange={(id) => {
-                              if (id) void persistPendingBatchStudent(idx, id);
+                              if (id) assignPendingBatchStudent(idx, id);
                             }}
                           >
                             <SelectTrigger className="h-8 min-w-[10rem] text-xs">
@@ -5072,10 +5109,21 @@ export default function CalificarPage() {
           ) : (
             <p className="text-sm text-gray-600">No hubo archivos para calificar.</p>
           )}
-          <DialogFooter>
-            <Button type="button" onClick={() => setBatchSummary(null)}>
+          <DialogFooter className="gap-2 sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setBatchSummary(null)}>
               Cerrar
             </Button>
+            {(batchSummary?.some((r) => r.pendingStudent) ?? false) ? (
+              <Button
+                type="button"
+                className="bg-orange-600 hover:bg-orange-700"
+                disabled={scanBusy}
+                onClick={() => void savePendingBatchStudents()}
+              >
+                {scanBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Guardar
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -5279,7 +5327,9 @@ export default function CalificarPage() {
                       onClick={() => pdfInputRef.current?.click()}
                     >
                       <FileUp className="mr-2 h-4 w-4" aria-hidden />
-                      Subir PDF…
+                      {scanBusy && desktopScanKind === 'pdf'
+                        ? 'Calificando examen…'
+                        : 'Subir PDF…'}
                     </Button>
                     <Button
                       type="button"
@@ -5288,7 +5338,9 @@ export default function CalificarPage() {
                       onClick={() => void pickGradeFiles()}
                     >
                       <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
-                      {scanBusy ? 'Calificando carpeta…' : 'Elegir carpeta…'}
+                      {scanBusy && desktopScanKind === 'folder'
+                        ? 'Calificando carpeta…'
+                        : 'Elegir carpeta…'}
                     </Button>
                   </div>
                   <p className="text-[11px] text-gray-500">
@@ -5559,7 +5611,9 @@ export default function CalificarPage() {
                         onClick={() => pdfInputRef.current?.click()}
                       >
                         <FileUp className="mr-2 h-4 w-4" aria-hidden />
-                        Subir PDF…
+                        {scanBusy && desktopScanKind === 'pdf'
+                          ? 'Calificando examen…'
+                          : 'Subir PDF…'}
                       </Button>
                       <Button
                         type="button"
@@ -5568,7 +5622,9 @@ export default function CalificarPage() {
                         onClick={() => void pickGradeFiles()}
                       >
                         <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
-                        {scanBusy ? 'Calificando carpeta…' : 'Elegir carpeta…'}
+                        {scanBusy && desktopScanKind === 'folder'
+                          ? 'Calificando carpeta…'
+                          : 'Elegir carpeta…'}
                       </Button>
                     </div>
                     <p className="text-[11px] text-gray-500">
@@ -5655,6 +5711,39 @@ export default function CalificarPage() {
                     <AlertDescription className="text-sm">{reviewQualityHint}</AlertDescription>
                   </Alert>
                 ) : null}
+
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => {
+                      if (isMobile) {
+                        retakeMobileSheetPhoto(sheetIndex);
+                        return;
+                      }
+                      setPhase('capturar');
+                      clearPendingPdfGrading();
+                      setReviewOmrGeometry(null);
+                      setReviewOmrPicks([]);
+                      setPreviewUrl((u) => {
+                        if (u) URL.revokeObjectURL(u);
+                        return null;
+                      });
+                      setDraftSelections({});
+                      resetLiveReadings();
+                    }}
+                  >
+                    {useLiveCameraUi ? 'Tomar otra foto' : 'Importar otra imagen'}
+                  </Button>
+                  <Button
+                    className="flex-1 bg-orange-600 hover:bg-orange-700"
+                    disabled={scanBusy}
+                    onClick={() => void confirmCurrentSheet()}
+                  >
+                    Guardar calificación
+                  </Button>
+                </div>
+
                 {currentChunk.map((q, idx) => {
                   const globalNum = idx + 1;
                   const opts = q.options ?? [];
@@ -5686,38 +5775,6 @@ export default function CalificarPage() {
                     </div>
                   );
                 })}
-
-                <div className="flex flex-col gap-2 pt-2 sm:flex-row">
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => {
-                      if (isMobile) {
-                        retakeMobileSheetPhoto(sheetIndex);
-                        return;
-                      }
-                      setPhase('capturar');
-                      clearPendingPdfGrading();
-                      setReviewOmrGeometry(null);
-                      setReviewOmrPicks([]);
-                      setPreviewUrl((u) => {
-                        if (u) URL.revokeObjectURL(u);
-                        return null;
-                      });
-                      setDraftSelections({});
-                      resetLiveReadings();
-                    }}
-                  >
-                    {useLiveCameraUi ? 'Tomar otra foto' : 'Importar otra imagen'}
-                  </Button>
-                  <Button
-                    className="flex-1 bg-orange-600 hover:bg-orange-700"
-                    disabled={scanBusy}
-                    onClick={() => void confirmCurrentSheet()}
-                  >
-                    Guardar calificación
-                  </Button>
-                </div>
               </div>
             )}
           </CardContent>
