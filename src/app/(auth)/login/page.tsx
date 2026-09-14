@@ -61,6 +61,8 @@ export default function LoginPage() {
     void refreshLock();
   }, [refreshLock]);
 
+  const locked = lockSeconds > 0;
+
   useEffect(() => {
     if (!locked) return;
     const id = window.setInterval(() => {
@@ -68,8 +70,6 @@ export default function LoginPage() {
     }, 1000);
     return () => window.clearInterval(id);
   }, [locked]);
-
-  const locked = lockSeconds > 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
