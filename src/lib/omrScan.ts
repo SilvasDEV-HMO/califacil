@@ -2475,7 +2475,9 @@ function detectCalifacilQuadFromFiducialBlobs(
   const minArea = Math.max(6, Math.round(sw * sh * 0.00012));
   const maxArea = Math.round(sw * sh * 0.012);
   const blobs: FiducialBlob[] = [];
-  for (const a of acc.values()) {
+  const accList = Array.from(acc.values());
+  for (let ai = 0; ai < accList.length; ai++) {
+    const a = accList[ai]!;
     if (a.area < minArea || a.area > maxArea) continue;
     const bw = a.maxX - a.minX + 1;
     const bh = a.maxY - a.minY + 1;
