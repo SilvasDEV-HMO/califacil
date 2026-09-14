@@ -10,9 +10,12 @@ import {
   detectAnswerSheetQuadViaAlignStrips,
   detectCalifacilSheetCornerQuadRobust,
   detectCalifacilQuadFromCornerMarkers,
+  detectCalifacilQuad,
   isCalifacilExamSheetLikely,
   isCalifacilWarpedLetterCanvas,
   hasCalifacilAlignStrips,
+  countCalifacilAlignStrips,
+  estimateCanvasCenterLuminance,
   isMobileWarpedAnswerSheetAcceptable,
   isMobileWarpedAnswerSheetReady,
   mapRoiQuadToFrame,
@@ -81,15 +84,26 @@ export function isCanonicalGradeCanvasReady(
   );
 }
 
-/** Tras forceWarp: canvas de referencia 1230×1600 (o fiduciales ok). No un recorte 4:3 de la mesa. */
+/** Tras forceWarp: canvas de referencia 1230×1600 que parece la hoja impresa, no la mesa. */
+export function isPrintedCalifacilLetterAfterWarp(canvas: HTMLCanvasElement): boolean {
+  const expected = califacilWarpLetterPixelSize();
+  if (
+    Math.abs(canvas.width - expected.width) > 4 ||
+    Math.abs(canvas.height - expected.height) > 4
+  ) {
+    return false;
+  }
+  if (countCalifacilCornerMarkers(canvas) < 3) return false;
+  if (countCalifacilAlignStrips(canvas) < 2) return false;
+  if (estimateCanvasCenterLuminance(canvas) < 0.42) return false;
+  return true;
+}
+
 export function isForcedWarpGradeCanvas(
   canvas: HTMLCanvasElement,
-  alignment: WarpAlignmentReport | null
+  _alignment?: WarpAlignmentReport | null
 ): boolean {
-  const expected = califacilWarpLetterPixelSize();
-  const exact = canvas.width === expected.width && canvas.height === expected.height;
-  if (!exact && !alignment?.ok) return false;
-  return isCanonicalGradeCanvasReady(canvas, alignment);
+  return isPrintedCalifacilLetterAfterWarp(canvas);
 }
 
 /**
@@ -148,16 +162,56 @@ export function prepareCanonicalCalifacilLetterCanvas(
   }
 
   const warpSrc = opts?.frameQuad ? source : base;
-  let quad: RoiQuad | null = detectCalifacilQuadFromCornerMarkers(warpSrc);
-  if (!quad && opts?.frameQuad && countCalifacilCornerMarkers(warpSrc) >= 3) {
-    quad = opts.frameQuad;
-  }
-  if (!quad) {
-    const strips = detectAnswerSheetQuadViaAlignStrips(warpSrc);
-    if (strips && countCalifacilCornerMarkers(warpSrc) >= 3) {
-      quad = strips;
+
+  const pushUniqueQuad = (list: RoiQuad[], quad: RoiQuad | null) => {
+    if (!quad) return;
+    const key = quad.map((p) => `${Math.round(p.x / 4)}_${Math.round(p.y / 4)}`).join('|');
+    if (list.some((q) => q.map((p) => `${Math.round(p.x / 4)}_${Math.round(p.y / 4)}`).join('|') === key)) {
+      return;
     }
+    list.push(quad);
+  };
+
+  const quads: RoiQuad[] = [];
+  pushUniqueQuad(quads, detectCalifacilQuadFromCornerMarkers(warpSrc));
+  if (opts?.frameQuad) pushUniqueQuad(quads, opts.frameQuad);
+  if (forceWarp) {
+    pushUniqueQuad(quads, detectCalifacilQuad(warpSrc));
+    pushUniqueQuad(quads, detectCalifacilSheetCornerQuadRobust(warpSrc, { skipPreprocess: true }));
   }
+  if (countCalifacilCornerMarkers(warpSrc) >= 3) {
+    pushUniqueQuad(quads, detectAnswerSheetQuadViaAlignStrips(warpSrc));
+  }
+
+  if (forceWarp) {
+    let best: {
+      canvas: HTMLCanvasElement;
+      alignment: WarpAlignmentReport;
+      score: number;
+    } | null = null;
+    for (const q of quads) {
+      const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast });
+      if (!result.warped) continue;
+      if (!isPrintedCalifacilLetterAfterWarp(result.warped)) continue;
+      const alignment =
+        result.alignment ?? measureWarpedFiducialAlignment(result.warped, maxErrorPx);
+      const corners = countCalifacilCornerMarkers(result.warped);
+      const strips = countCalifacilAlignStrips(result.warped);
+      const paper = estimateCanvasCenterLuminance(result.warped);
+      const score =
+        (alignment.ok ? 80 : 0) +
+        corners * 12 +
+        strips * 25 +
+        paper * 40 -
+        (Number.isFinite(alignment.maxErrorPx) ? Math.min(40, alignment.maxErrorPx) : 40);
+      if (!best || score > best.score) {
+        best = { canvas: result.warped, alignment, score };
+      }
+    }
+    return best ? { canvas: best.canvas, alignment: best.alignment } : null;
+  }
+
+  let quad: RoiQuad | null = quads[0] ?? null;
   if (!quad) return null;
 
   // PDF/escáner plano (no fotos): la hoja YA es la página.

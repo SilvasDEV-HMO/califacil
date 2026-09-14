@@ -735,6 +735,50 @@ export function hasCalifacilAlignStrips(canvas: HTMLCanvasElement): boolean {
   return found >= 1;
 }
 
+/** Cuántas franjas laterales impresas se ven (0–2). Umbral más estricto que `hasCalifacilAlignStrips`. */
+export function countCalifacilAlignStrips(
+  canvas: HTMLCanvasElement,
+  minDarkFrac = 0.16
+): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return 0;
+  let found = 0;
+  for (const strip of CALIFACIL_ALIGN_STRIPS_NORM) {
+    const x0 = strip.left * W;
+    const sw = Math.max(3, strip.width * W);
+    const sh = Math.max(12, strip.height * H);
+    const yStarts = [strip.top * H, strip.top * H + sh * 0.35, strip.top * H + sh * 0.7];
+    const dark =
+      yStarts.some((y0) => meanPatchDarkFraction(ctx, x0, y0, sw, sh * 0.45) >= minDarkFrac) ||
+      meanPatchDarkFraction(ctx, x0, strip.top * H, sw, sh) >= minDarkFrac * 0.85;
+    if (dark) found++;
+  }
+  return found;
+}
+
+/** Luminancia media del centro de página (papel claro vs mesa/impresora). */
+export function estimateCanvasCenterLuminance(canvas: HTMLCanvasElement): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const W = canvas.width;
+  const H = canvas.height;
+  const x = Math.floor(W * 0.28);
+  const y = Math.floor(H * 0.28);
+  const w = Math.max(8, Math.floor(W * 0.44));
+  const h = Math.max(8, Math.floor(H * 0.44));
+  const id = ctx.getImageData(x, y, w, h);
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i < id.data.length; i += 4) {
+    sum += (id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114) / 255;
+    n++;
+  }
+  return n > 0 ? sum / n : 0;
+}
+
 function viewfinderGuideCornerPatches(
   W: number,
   H: number
@@ -2554,7 +2598,7 @@ export function detectCalifacilQuadFromCornerMarkers(
   return null;
 }
 
-function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
+export function detectCalifacilQuad(canvas: HTMLCanvasElement): [Point, Point, Point, Point] | null {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   const { width, height } = canvas;

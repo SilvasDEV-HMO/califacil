@@ -93,6 +93,7 @@ import {
   downscaleCanvasForOmrScan,
   syncCalifacilOmrGeometryImageSize,
   buildAnswerSheetOmrGeometry,
+  califacilWarpLetterPixelSize,
   smoothMobileRoiQuad,
   type WarpAlignmentReport,
   type CalifacilOmrScanGeometry,
@@ -124,6 +125,7 @@ import {
   prepareCanonicalCalifacilLetterCanvas,
   isCanonicalGradeCanvasReady,
   isForcedWarpGradeCanvas,
+  isPrintedCalifacilLetterAfterWarp,
   isPhotoSheetWarpAcceptable,
 } from '@/lib/omr/pipeline';
 import {
@@ -891,12 +893,18 @@ export default function CalificarPage() {
         warpAlignment,
       });
       const displayCanvas = prepared.canvas;
-
-      const acceptable =
-        isCanonicalGradeCanvasReady(displayCanvas, warpAlignment ?? null) ||
-        isCanonicalGradeCanvasReady(warped, warpAlignment ?? null) ||
-        isPhotoSheetWarpAcceptable(displayCanvas) ||
-        isPhotoSheetWarpAcceptable(warped);
+      const expected = califacilWarpLetterPixelSize();
+      const isExactWarpSize = (c: HTMLCanvasElement) =>
+        Math.abs(c.width - expected.width) <= 4 && Math.abs(c.height - expected.height) <= 4;
+      const printed =
+        isPrintedCalifacilLetterAfterWarp(displayCanvas) ||
+        isPrintedCalifacilLetterAfterWarp(warped);
+      const acceptable = isExactWarpSize(displayCanvas) || isExactWarpSize(warped)
+        ? printed
+        : isCanonicalGradeCanvasReady(displayCanvas, warpAlignment ?? null) ||
+          isCanonicalGradeCanvasReady(warped, warpAlignment ?? null) ||
+          isPhotoSheetWarpAcceptable(displayCanvas) ||
+          isPhotoSheetWarpAcceptable(warped);
       if (!acceptable) {
         return {
           meta: null as OmrScanMetaResult | null,
@@ -1681,16 +1689,28 @@ export default function CalificarPage() {
 
       if (isMobile && skipReviewUi) {
         const fullChunkDraft = buildMcDraftFromChunk(chunk, mergedDraft);
+        const letterCandidates = [
+          gradeDisplaySource,
+          opts?.displaySource instanceof HTMLCanvasElement ? opts.displaySource : null,
+          meta.reviewSourceCanvas instanceof HTMLCanvasElement ? meta.reviewSourceCanvas : null,
+          activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null,
+        ];
         const reviewCanvas =
-          gradeDisplaySource ??
-          (opts?.displaySource instanceof HTMLCanvasElement ? opts.displaySource : null) ??
-          meta.reviewSourceCanvas ??
-          (activeScanSource instanceof HTMLCanvasElement ? activeScanSource : null);
+          letterCandidates.find(
+            (c): c is HTMLCanvasElement =>
+              c instanceof HTMLCanvasElement && isPrintedCalifacilLetterAfterWarp(c)
+          ) ?? null;
+        if (!reviewCanvas) {
+          notify.error(
+            'No se pudo enderezar la hoja. Encuadra los 4 cuadritos negros de las esquinas.'
+          );
+          setLiveStatus('Centra la hoja: los 4 cuadritos negros deben verse.');
+          return { success: false };
+        }
         let snapUrl: string | null = null;
         let snapW = 0;
         let snapH = 0;
         let nameCropUrl: string | null = null;
-        let geom = meta.geometry;
         if (reviewCanvas instanceof HTMLCanvasElement) {
           const preview = canvasPreviewJpeg(reviewCanvas, 900, 0.78);
           if (preview) {
@@ -1706,28 +1726,13 @@ export default function CalificarPage() {
         }
         const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
         const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
-        // Overlay = mismas cells de plantilla impresa que la lectura.
-        let geomClone: CalifacilOmrScanGeometry;
-        if (reviewCanvas instanceof HTMLCanvasElement) {
-          const overlayGeom =
-            geom && geom.cells.length >= omrRowCount
-              ? geom
-              : buildDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount, {
-                  skipSnap: true,
-                });
-          geomClone = overlayGeom
-            ? syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH)
-            : emptyOverlayGeometry(previewW, previewH);
-        } else if (geom && geom.cells.length >= omrRowCount) {
-          try {
-            geomClone = structuredClone(geom);
-          } catch {
-            geomClone = JSON.parse(JSON.stringify(geom)) as CalifacilOmrScanGeometry;
-          }
-          geomClone = syncCalifacilOmrGeometryImageSize(geomClone, previewW, previewH);
-        } else {
-          geomClone = emptyOverlayGeometry(previewW, previewH);
-        }
+        // Overlay = plantilla impresa (lockTemplate), misma que el PDF.
+        const overlayGeom = buildDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount, {
+          skipSnap: true,
+        });
+        const geomClone = overlayGeom
+          ? syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH)
+          : emptyOverlayGeometry(previewW, previewH);
         setMobileSheetSnapshots((prev) => {
           const next = [
             ...prev,

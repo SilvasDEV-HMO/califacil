@@ -14,6 +14,7 @@ export {
   isPhotoSheetWarpAcceptable,
   isCanonicalGradeCanvasReady,
   isForcedWarpGradeCanvas,
+  isPrintedCalifacilLetterAfterWarp,
   isReferenceGradeLetterCanvas,
   type CalifacilGradeScanCanvases,
   type MobileWarpPipelineResult,
