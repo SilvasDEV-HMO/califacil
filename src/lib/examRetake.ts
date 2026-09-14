@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { VoidedAttemptRow } from '@/lib/examRetake.types';
+import { isUsableSupabaseServiceRoleKey } from '@/lib/supabaseServiceRole';
 
 export type { VoidedAttemptRow } from '@/lib/examRetake.types';
 
@@ -13,25 +14,10 @@ export type ListVoidedAttemptsResult =
   | { ok: true; attempts: VoidedAttemptRow[] }
   | { ok: false; error: string; hint?: string };
 
-/** Evita usar la anon key por error como service_role (provoca "permission denied"). */
-function isServiceRoleKey(key: string): boolean {
-  try {
-    const segment = key.split('.')[1];
-    if (!segment) return false;
-    const normalized = segment.replace(/-/g, '+').replace(/_/g, '/');
-    const payload = JSON.parse(Buffer.from(normalized, 'base64').toString('utf8')) as {
-      role?: string;
-    };
-    return payload.role === 'service_role';
-  } catch {
-    return false;
-  }
-}
-
 export function createServiceRoleClient(): SupabaseClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!url || !key || !isServiceRoleKey(key)) return null;
+  if (!url || !isUsableSupabaseServiceRoleKey(key)) return null;
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });

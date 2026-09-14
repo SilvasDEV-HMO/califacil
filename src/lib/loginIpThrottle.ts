@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash } from 'crypto';
 import { createServiceRoleClient } from '@/lib/examRetake';
+import { supabaseServiceRoleConfigError } from '@/lib/supabaseServiceRole';
 
 export const LOGIN_FAILS_BEFORE_LOCK = 3;
 export const LOGIN_LOCK_STEP_MINUTES = 10;
@@ -66,11 +67,16 @@ function statusFromRow(row: ThrottleRow, now: Date): LoginThrottleStatus {
   };
 }
 
-async function loadRow(ipHash: string): Promise<ThrottleRow | null> {
+function requireAdmin() {
   const admin = createServiceRoleClient();
   if (!admin) {
-    throw new Error('Falta SUPABASE_SERVICE_ROLE_KEY para el límite de login.');
+    throw new Error(supabaseServiceRoleConfigError() ?? 'Falta SUPABASE_SERVICE_ROLE_KEY.');
   }
+  return admin;
+}
+
+async function loadRow(ipHash: string): Promise<ThrottleRow | null> {
+  const admin = requireAdmin();
   const { data, error } = await admin
     .from('login_ip_throttle')
     .select('ip_hash,fail_count,lock_round,locked_until,updated_at')
@@ -81,10 +87,7 @@ async function loadRow(ipHash: string): Promise<ThrottleRow | null> {
 }
 
 async function saveRow(row: Omit<ThrottleRow, 'updated_at'>): Promise<ThrottleRow> {
-  const admin = createServiceRoleClient();
-  if (!admin) {
-    throw new Error('Falta SUPABASE_SERVICE_ROLE_KEY para el límite de login.');
-  }
+  const admin = requireAdmin();
   const payload = { ...row, updated_at: new Date().toISOString() };
   const { data, error } = await admin
     .from('login_ip_throttle')
