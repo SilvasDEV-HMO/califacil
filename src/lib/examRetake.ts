@@ -1,14 +1,9 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import 'server-only';
 
-export type VoidedAttemptRow = {
-  student_id: string;
-  student_name: string;
-  group_id: string | null;
-  void_reason: string | null;
-  started_at: string;
-  closed_at: string;
-  duration_seconds: number;
-};
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { VoidedAttemptRow } from '@/lib/examRetake.types';
+
+export type { VoidedAttemptRow } from '@/lib/examRetake.types';
 
 export type GrantExamRetakeResult =
   | { ok: true }

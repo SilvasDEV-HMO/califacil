@@ -14,7 +14,7 @@ import {
 import { Clock, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
-import { type VoidedAttemptRow } from '@/lib/examRetake';
+import { type VoidedAttemptRow } from '@/lib/examRetake.types';
 import {
   examAttemptEventLabels,
   formatAttemptDuration,

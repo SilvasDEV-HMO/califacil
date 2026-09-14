@@ -1,3 +1,5 @@
+import 'server-only';
+
 import { createServiceRoleClient } from '@/lib/examRetake';
 import { isCalifacilIthEmail, normalizeAuthEmail } from '@/lib/ithAuth';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
