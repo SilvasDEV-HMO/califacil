@@ -230,7 +230,7 @@ export default function ExamsPage() {
   const isEmpty = !loading && childFolders.length === 0 && visibleExams.length === 0;
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-7xl space-y-4 pb-2 sm:space-y-6">
+    <div className="mx-auto min-h-full min-w-0 w-full max-w-7xl space-y-4 overflow-x-hidden pb-2 sm:space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Exámenes</h1>
@@ -291,7 +291,7 @@ export default function ExamsPage() {
             className="pl-10"
           />
         </div>
-        <div className="-mx-1 flex gap-1.5 overflow-x-auto pb-1 pt-0.5 sm:mx-0 sm:flex-wrap sm:gap-2 sm:overflow-visible sm:pb-0">
+        <div className="flex flex-wrap gap-1.5 pb-1 pt-0.5 sm:gap-2 sm:pb-0">
           {(['all', 'draft', 'published', 'closed'] as const).map((status) => (
             <Button
               key={status}

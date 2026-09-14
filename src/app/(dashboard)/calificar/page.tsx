@@ -731,6 +731,9 @@ export default function CalificarPage() {
   const prefetchedPdfCanvasRef = useRef<{ page: number; canvas: HTMLCanvasElement } | null>(null);
   const prefetchPdfPageTaskRef = useRef(0);
   const confirmedAnswersRef = useRef<Record<string, string>>({});
+  /** Borrador de la última calificación (para asignar alumno y guardar después). */
+  const pendingGradeDraftRef = useRef<Record<string, string>>({});
+  const [gradeAssignPickerOpen, setGradeAssignPickerOpen] = useState(false);
   const sheetIndexRef = useRef(0);
   const prevPhaseRef = useRef<Phase>('elegir');
 
@@ -890,6 +893,11 @@ export default function CalificarPage() {
     [students]
   );
   const studentAutoDetect = isCalificarAutoStudentMode(selectedStudentId);
+  const needsAssignedStudent = !resolveCalificarStudentId(
+    selectedStudentId,
+    undefined,
+    sortedStudents
+  );
 
   const applyControlNumberFromRead = useCallback(
     (
@@ -3409,6 +3417,32 @@ export default function CalificarPage() {
     return { pct, correct: correctCount, wrong, total: mcTotal };
   };
 
+  const persistGradeToAssignedStudent = async (studentId: string) => {
+    if (isCalificarAutoStudentMode(studentId)) return;
+    const draft = {
+      ...pendingGradeDraftRef.current,
+      ...mobileResultsDraft,
+      ...confirmedByQuestionId,
+      ...draftSelections,
+    };
+    pendingGradeDraftRef.current = draft;
+    try {
+      setScanBusy(true);
+      await persistStudentAnswers(draft, studentId);
+      setAutoGradePersisted(true);
+      toast.success('Calificación asignada al alumno.');
+    } catch (err: unknown) {
+      const code = err instanceof Error ? err.message : '';
+      if (code === 'incomplete_key') {
+        toast.error('Clave automática incompleta. No se pudo guardar.');
+      } else {
+        toast.error('No se pudo guardar la calificación.');
+      }
+    } finally {
+      setScanBusy(false);
+    }
+  };
+
   const gradeDesktopFolderFiles = async (picked: File[]) => {
     if (!examId || !exam || !supportsCalifacil) {
       toast.error('Selecciona primero un examen válido.');
@@ -3736,6 +3770,7 @@ export default function CalificarPage() {
           : gradeMcDraftAgainstVirtualKey(fullDraft, questions, virtualKeyMaps);
       setAutoGradeStats(stats);
       setMobileResultsDraft({ ...fullDraft });
+      pendingGradeDraftRef.current = { ...fullDraft };
 
       const studentId = resolveCalificarStudentId(selectedStudentId, studentIdOverride, sortedStudents);
       const canPersist = Boolean(studentId) && canGradeStudents;
@@ -3786,7 +3821,7 @@ export default function CalificarPage() {
         toast.message(
           studentId
             ? 'Resultado calculado (no se guardó: sin permiso de clave o alumno).'
-            : 'Resultado calculado. Elige al alumno manualmente si no se identificó en la hoja.'
+            : 'Resultado listo. Pulsa «Asignar alumno» para guardarlo.'
         );
       }
 
@@ -3842,10 +3877,14 @@ export default function CalificarPage() {
   const submitAll = async (merged: Record<string, string>) => {
     if (!exam || !examId) return;
 
-    // Vacío = incorrecto (hoja en blanco → 0%). No exigir marcas para guardar.
+    pendingGradeDraftRef.current = { ...merged };
 
     if (!resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents)) {
-      toast.error('Identifica al alumno en la hoja o elígelo manualmente antes de guardar.');
+      const stats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
+      setAutoGradeStats(stats);
+      setAutoGradePersisted(false);
+      setAutoGradeDialogOpen(true);
+      toast.message('Pulsa «Asignar alumno» para guardar la calificación.');
       return;
     }
     if (!canGradeStudents) {
@@ -3906,7 +3945,8 @@ export default function CalificarPage() {
       }
     }
     if (!resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents)) {
-      toast.error('Identifica al alumno en la hoja o elígelo manualmente antes de guardar.');
+      setGradeAssignPickerOpen(true);
+      toast.message('Elige un alumno para guardar.');
       return;
     }
     if (!canGradeStudents) {
@@ -4698,7 +4738,8 @@ export default function CalificarPage() {
   const captureMobilePhotoManually = useCallback(async () => {
     const gate = mobileCaptureGateRef.current;
     const corners = gate.fiducialCorners?.filter(Boolean).length ?? gate.fiducialCount;
-    if (corners < MOBILE_MIN_FIDUCIAL_CORNERS) {
+    const allFour = gate.fiducialCorners?.every(Boolean) ?? corners >= MOBILE_MIN_FIDUCIAL_CORNERS;
+    if (!allFour || corners < MOBILE_MIN_FIDUCIAL_CORNERS) {
       toast.error('Alinea los 4 cuadros negros con las esquinas naranjas.');
       return;
     }
@@ -4926,6 +4967,15 @@ export default function CalificarPage() {
                 </div>
               </div>
               <p className="text-center text-xs text-gray-500">Total de preguntas: {autoGradeStats.total}</p>
+              {needsAssignedStudent ? (
+                <Button
+                  type="button"
+                  className="w-full bg-orange-600 hover:bg-orange-700"
+                  onClick={() => setGradeAssignPickerOpen(true)}
+                >
+                  Asignar alumno
+                </Button>
+              ) : null}
             </div>
           )}
           <DialogFooter className="flex-col gap-2 sm:flex-col">
@@ -5529,7 +5579,7 @@ export default function CalificarPage() {
               flashOn={flashOn}
               flashSupported={flashSupported}
               onVideoMount={bindVideoElement}
-              captureReady={mobileAlignedForCapture}
+              captureReady={mobileExamReadyForCapture}
               fiducialCount={mobileFiducialCount}
               fiducialCorners={mobileFiducialCorners}
               stripAligned={mobileStripAligned}
@@ -5725,6 +5775,15 @@ export default function CalificarPage() {
                 ) : null}
 
                 <div className="flex flex-col gap-2 sm:flex-row">
+                  {needsAssignedStudent ? (
+                    <Button
+                      type="button"
+                      className="flex-1 bg-orange-600 hover:bg-orange-700"
+                      onClick={() => setGradeAssignPickerOpen(true)}
+                    >
+                      Asignar alumno
+                    </Button>
+                  ) : null}
                   <Button
                     variant="outline"
                     className="flex-1"
@@ -5749,7 +5808,7 @@ export default function CalificarPage() {
                   </Button>
                   <Button
                     className="flex-1 bg-orange-600 hover:bg-orange-700"
-                    disabled={scanBusy}
+                    disabled={scanBusy || needsAssignedStudent}
                     onClick={() => void confirmCurrentSheet()}
                   >
                     Guardar calificación
@@ -5827,6 +5886,8 @@ export default function CalificarPage() {
               switchToAnotherStudentScan();
             }}
             onBackToCalificar={exitMobileResultsView}
+            needsAssignStudent={needsAssignedStudent}
+            onAssignStudent={() => setGradeAssignPickerOpen(true)}
           />
           <MobileZipGradeReviewScreen
             open={zipGradeReviewOpen}
@@ -5852,7 +5913,7 @@ export default function CalificarPage() {
             }}
             onSave={() => void saveMobileResultsEdits()}
             onExport={exportCurrentZipGradeCsv}
-            onPickStudent={() => setZipGradeStudentPickerOpen(true)}
+            onPickStudent={() => setGradeAssignPickerOpen(true)}
             questionsContent={
               (() => {
                 const snap = mobileSheetSnapshots[resultsSheetIdx];
@@ -5892,17 +5953,27 @@ export default function CalificarPage() {
               })()
             }
           />
-          <MobileZipGradeStudentPicker
-            open={zipGradeStudentPickerOpen}
-            students={sortedStudents}
-            selectedId={selectedStudentId}
-            autoOptionId={CALIFICAR_AUTO_STUDENT_ID}
-            autoOptionLabel="Automático (detectar en la hoja)"
-            onSelect={handleStudentChange}
-            onClose={() => setZipGradeStudentPickerOpen(false)}
-          />
         </>
       )}
+
+      <MobileZipGradeStudentPicker
+        open={gradeAssignPickerOpen || zipGradeStudentPickerOpen}
+        students={sortedStudents}
+        selectedId={selectedStudentId}
+        onSelect={(id) => {
+          handleStudentChange(id);
+          const hasDraft = Object.keys(pendingGradeDraftRef.current).length > 0;
+          if (hasDraft && !isCalificarAutoStudentMode(id)) {
+            void persistGradeToAssignedStudent(id);
+          }
+          setGradeAssignPickerOpen(false);
+          setZipGradeStudentPickerOpen(false);
+        }}
+        onClose={() => {
+          setGradeAssignPickerOpen(false);
+          setZipGradeStudentPickerOpen(false);
+        }}
+      />
 
       {phase === 'guardando' && (
         <div className="flex flex-col items-center justify-center gap-3 py-12">

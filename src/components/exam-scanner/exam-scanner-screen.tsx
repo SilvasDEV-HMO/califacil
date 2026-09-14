@@ -6,14 +6,12 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { CameraView } from '@/components/exam-scanner/camera-view';
 import { OverlayRenderer } from '@/components/exam-scanner/overlay-renderer';
-import { StatusCard } from '@/components/exam-scanner/status-card';
 import { ScanHud } from '@/components/exam-scanner/scan-hud';
 import { CaptureFlash } from '@/components/exam-scanner/capture-flash';
 import { CameraPermissionGate } from '@/components/exam-scanner/camera-permission-gate';
 import { CalifacilReviewImageStack } from '@/components/califacil-review-image-stack';
 import {
   deriveDetectionPhase,
-  deriveStatusLabel,
 } from '@/components/exam-scanner/document-detector';
 import type { ViewfinderGuideRectPx, ViewportPoint } from '@/components/exam-scanner/types';
 import {
@@ -83,10 +81,8 @@ export function ExamScannerScreen({
   onRetryCamera,
   onVideoMount,
   captureReady = false,
-  fiducialCount = 0,
   fiducialCorners = [false, false, false, false],
   stripAligned = false,
-  autoShutterEnabled = true,
   scanPreviewUrl = null,
   scanPreviewOverlay = null,
   scanPreviewGeometry = null,
@@ -107,11 +103,6 @@ export function ExamScannerScreen({
         lowLight,
       }),
     [documentVisible, aligned, stableProgress, scanBusy, lowLight]
-  );
-
-  const statusLabel = useMemo(
-    () => deriveStatusLabel(phase, stableProgress),
-    [phase, stableProgress]
   );
 
   const progress = scanBusy ? 1 : stableProgress;
@@ -247,22 +238,8 @@ export function ExamScannerScreen({
               <X className="h-5 w-5" strokeWidth={2.5} />
             </button>
             {!showingScan ? (
-              <div className="min-w-0 flex-1">
-                <StatusCard
-                  examTitle={examTitle}
-                  statusLabel={statusLabel}
-                  stableProgress={progress}
-                  phase={phase}
-                  fiducialCount={fiducialCount}
-                  stripAligned={stripAligned}
-                  captureReady={captureReady}
-                  autoShutterEnabled={autoShutterEnabled}
-                  onTapCapture={
-                    captureReady && !scanBusy
-                      ? () => runScannerAction(actionsRef.current, 'capture')
-                      : undefined
-                  }
-                />
+              <div className="min-w-0 flex-1 rounded-full bg-black/55 px-3.5 py-2.5 backdrop-blur-md">
+                <p className="truncate text-sm font-medium text-white">{examTitle}</p>
               </div>
             ) : (
               <div className="min-w-0 flex-1 rounded-2xl bg-white/95 px-3 py-2.5 shadow-sm backdrop-blur-md">

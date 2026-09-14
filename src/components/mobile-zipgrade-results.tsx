@@ -35,6 +35,8 @@ type ScanCompleteModalProps = {
   onReview: () => void;
   onAnotherStudent: () => void;
   onBackToCalificar: () => void;
+  onAssignStudent?: () => void;
+  needsAssignStudent?: boolean;
 };
 
 function SheetPreviewBox({
@@ -80,6 +82,8 @@ export function MobileZipGradeScanCompleteModal({
   onReview: _onReview,
   onAnotherStudent: _onAnotherStudent,
   onBackToCalificar,
+  onAssignStudent,
+  needsAssignStudent,
 }: ScanCompleteModalProps) {
   const showOverlayPreview = Boolean(sheet?.geometry && (sheet.previewUrl || previewUrl));
   const previewSrc = sheet?.previewUrl || previewUrl;
@@ -163,9 +167,23 @@ export function MobileZipGradeScanCompleteModal({
           </div>
 
           <div className="shrink-0 space-y-2 border-t border-gray-100 px-5 py-4">
+            {needsAssignStudent && onAssignStudent ? (
+              <Button
+                type="button"
+                className="h-11 w-full bg-orange-600 hover:bg-orange-700"
+                onClick={onAssignStudent}
+              >
+                Asignar alumno
+              </Button>
+            ) : null}
             <Button
               type="button"
-              className="h-11 w-full bg-orange-600 hover:bg-orange-700"
+              className={cn(
+                'h-11 w-full',
+                needsAssignStudent ? 'bg-white' : 'bg-orange-600 hover:bg-orange-700',
+                needsAssignStudent && 'border border-orange-200 text-orange-900 hover:bg-orange-50'
+              )}
+              variant={needsAssignStudent ? 'outline' : 'default'}
               onClick={onRetake}
             >
               Calificar de nuevo
@@ -398,7 +416,12 @@ export function MobileZipGradeReviewScreen({
           </button>
         </div>
 
-        <div className="flex gap-2 border-t border-gray-200 px-4 py-3">
+        <div className="flex flex-col gap-2 border-t border-gray-200 px-4 py-3 sm:flex-row">
+          {onPickStudent && !studentName ? (
+            <Button type="button" className="h-11 flex-1 bg-orange-600 hover:bg-orange-700" onClick={onPickStudent}>
+              Asignar alumno
+            </Button>
+          ) : null}
           <Button type="button" variant="outline" className="h-11 flex-1" onClick={onRetake}>
             Otra foto
           </Button>
@@ -406,6 +429,7 @@ export function MobileZipGradeReviewScreen({
             type="button"
             className="h-11 flex-1 bg-orange-600 hover:bg-orange-700"
             onClick={onSave}
+            disabled={Boolean(onPickStudent && !studentName)}
           >
             Guardar
           </Button>

@@ -9,7 +9,6 @@ import {
   readScannerViewportPx,
 } from '@/components/exam-scanner/document-detector';
 import { useSmoothedPolygon } from '@/components/exam-scanner/use-smoothed-polygon';
-import { MOBILE_LIVE_MIN_FIDUCIAL_CORNERS } from '@/lib/omrScan';
 import type {
   DocumentDetectionPhase,
   ViewfinderGuideRectPx,
@@ -77,8 +76,7 @@ function OverlayRendererInner({
   const guidePoints = guideQuad?.map((p) => `${p.x},${p.y}`).join(' ') ?? '';
 
   const fiducialCount = fiducialCorners.filter(Boolean).length;
-  const minCorners = stripAligned ? MOBILE_LIVE_MIN_FIDUCIAL_CORNERS : 4;
-  const sheetAligned = stripAligned && fiducialCount >= minCorners;
+  const sheetAligned = fiducialCount >= 4;
 
   const alignGuideRect = useMemo(() => {
     if (!staticGuide || staticGuide.width <= 40) return null;

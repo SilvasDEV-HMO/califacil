@@ -470,14 +470,14 @@ export default function ExamDetailPage() {
   };
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-7xl space-y-4 pb-2 sm:space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-4">
+    <div className="mx-auto min-h-full min-w-0 w-full max-w-7xl space-y-4 overflow-x-hidden pb-2 sm:space-y-6">
+      <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
           <Button variant="ghost" size="icon" onClick={() => router.push('/exams')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <div>
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
               {editingTitle ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <Input
@@ -503,7 +503,7 @@ export default function ExamDetailPage() {
                 </div>
               ) : (
                 <>
-                  <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">{exam.title}</h1>
+                  <h1 className="min-w-0 break-words text-xl font-bold text-gray-900 sm:text-2xl">{exam.title}</h1>
                   <Button
                     type="button"
                     variant="ghost"
@@ -575,7 +575,7 @@ export default function ExamDetailPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="questions" className="space-y-6">
+      <Tabs defaultValue="questions" className="min-w-0 space-y-6">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Grupos asignados</CardTitle>
@@ -607,7 +607,7 @@ export default function ExamDetailPage() {
                 </PopoverTrigger>
                 <PopoverContent
                   align="start"
-                  className="max-h-72 w-[calc(100vw-2rem)] max-w-md overflow-hidden p-0 sm:w-auto"
+                  className="max-h-72 w-[min(100vw-2rem,28rem)] max-w-[calc(100vw-2rem)] overflow-hidden p-0 sm:w-auto"
                   onOpenAutoFocus={(e) => e.preventDefault()}
                 >
                   <p className="border-b px-3 py-2 text-xs text-muted-foreground">Marca uno o varios grupos</p>
@@ -652,20 +652,30 @@ export default function ExamDetailPage() {
           </CardContent>
         </Card>
 
-        <TabsList>
-          <TabsTrigger value="questions">
-            <FileText className="mr-2 h-4 w-4" />
+        <TabsList className="grid h-auto w-full min-w-0 grid-cols-2 gap-1 sm:inline-flex sm:w-fit">
+          <TabsTrigger
+            value="questions"
+            className="h-auto min-w-0 whitespace-normal px-1.5 py-1.5 text-xs leading-tight sm:px-3 sm:text-sm"
+          >
+            <FileText className="mr-1 h-4 w-4 shrink-0 sm:mr-2" />
             Preguntas ({exam.questions.length})
           </TabsTrigger>
           {(exam.status === 'published' || exam.status === 'closed') && (
-            <TabsTrigger value="voided">
-              <AlertTriangle className="mr-2 h-4 w-4" />
-              Exámenes anulados
+            <TabsTrigger
+              value="voided"
+              className="h-auto min-w-0 whitespace-normal px-1.5 py-1.5 text-xs leading-tight sm:px-3 sm:text-sm"
+            >
+              <AlertTriangle className="mr-1 h-4 w-4 shrink-0 sm:mr-2" />
+              <span className="sm:hidden">Anulados</span>
+              <span className="hidden sm:inline">Exámenes anulados</span>
             </TabsTrigger>
           )}
           {(exam.status === 'published' || exam.status === 'closed') && (
-            <TabsTrigger value="qr">
-              <QrCode className="mr-2 h-4 w-4" />
+            <TabsTrigger
+              value="qr"
+              className="h-auto min-w-0 whitespace-normal px-1.5 py-1.5 text-xs leading-tight sm:col-span-2 sm:px-3 sm:text-sm lg:col-span-1"
+            >
+              <QrCode className="mr-1 h-4 w-4 shrink-0 sm:mr-2" />
               Código QR
             </TabsTrigger>
           )}
@@ -942,8 +952,8 @@ function QuestionCard({
   return (
     <Card className="border-l-4 border-l-orange-500">
       <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
+        <div className="flex min-w-0 items-start justify-between gap-2 sm:gap-4">
+          <div className="min-w-0 flex-1">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-gray-500">Pregunta {index + 1}</span>
               <Badge className={question.type === 'multiple_choice' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}>

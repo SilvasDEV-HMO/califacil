@@ -1,7 +1,7 @@
 'use client';
 
 import { type ReactNode, useRef } from 'react';
-import { Camera, FileStack, ImageIcon, Zap } from 'lucide-react';
+import { Camera, FileStack, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { runScannerAction, type ScannerActions } from '@/components/exam-scanner/scanner-actions';
 
@@ -101,14 +101,6 @@ export function ScanHud({
           disabled={disabled}
         >
           <FileStack className="h-5 w-5" strokeWidth={2} />
-        </HudButton>
-        <HudButton
-          label="Galería"
-          action="gallery"
-          actionsRef={actionsRef}
-          disabled={disabled}
-        >
-          <ImageIcon className="h-5 w-5" strokeWidth={2} />
         </HudButton>
         <HudButton
           label="Capturar"
