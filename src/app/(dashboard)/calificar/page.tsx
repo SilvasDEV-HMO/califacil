@@ -4942,7 +4942,6 @@ export default function CalificarPage() {
             ref={folderInputRef}
             type="file"
             multiple
-            accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
             className="sr-only"
             aria-hidden
             onChange={handleFolderFiles}

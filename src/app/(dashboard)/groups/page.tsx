@@ -28,6 +28,7 @@ import {
   GraduationCap,
   Search,
   Download,
+  ArrowLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { parseStudentImportFile, type StudentImportResult } from '@/lib/studentImport';
@@ -74,7 +75,7 @@ export default function GroupsPage() {
   };
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-7xl space-y-4 pb-2 sm:space-y-6">
+    <div className="mx-auto min-h-full w-full min-w-0 max-w-7xl space-y-4 overflow-x-hidden pb-2 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
@@ -108,15 +109,19 @@ export default function GroupsPage() {
           </Button>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
+        <div className="grid min-w-0 grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
           {/* Groups List */}
-          <div className={`space-y-3 sm:space-y-4 ${selectedGroup ? 'lg:col-span-1' : 'lg:col-span-3'}`}>
+          <div
+            className={`min-w-0 space-y-3 sm:space-y-4 ${
+              selectedGroup ? 'hidden lg:col-span-1 lg:block' : 'lg:col-span-3'
+            }`}
+          >
             <h2 className="text-lg font-semibold text-gray-900">Mis Grupos</h2>
             <div className="space-y-3">
               {groups.map((group) => (
                 <Card 
                   key={group.id} 
-                  className={`cursor-pointer transition-all ${
+                  className={`min-w-0 cursor-pointer transition-all ${
                     selectedGroup === group.id 
                       ? 'ring-2 ring-orange-500 shadow-md' 
                       : 'hover:shadow-md'
@@ -124,14 +129,14 @@ export default function GroupsPage() {
                   onClick={() => setSelectedGroup(group.id)}
                 >
                   <CardContent className="p-3 sm:p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
-                          <GraduationCap className="w-5 h-5 text-orange-600" />
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-100">
+                          <GraduationCap className="h-5 w-5 text-orange-600" />
                         </div>
-                        <div>
-                          <h3 className="font-semibold text-gray-900">{group.name}</h3>
-                          <p className="text-sm text-gray-500">
+                        <div className="min-w-0">
+                          <h3 className="truncate font-semibold text-gray-900">{group.name}</h3>
+                          <p className="truncate text-sm text-gray-500">
                             Creado el {new Date(group.created_at).toLocaleDateString('es-ES')}
                           </p>
                         </div>
@@ -161,7 +166,16 @@ export default function GroupsPage() {
 
           {/* Students Management */}
           {selectedGroup && (
-            <div className="lg:col-span-2">
+            <div className="min-w-0 lg:col-span-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="mb-3 w-full sm:w-auto lg:hidden"
+                onClick={() => setSelectedGroup(null)}
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Volver
+              </Button>
               <StudentsManager 
                 groupId={selectedGroup} 
                 groupName={groups.find(g => g.id === selectedGroup)?.name || ''}
@@ -333,9 +347,9 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
 
   return (
     <>
-      <Card>
-      <CardHeader>
-        <CardTitle>Estudiantes - {groupName}</CardTitle>
+      <Card className="min-w-0">
+      <CardHeader className="min-w-0">
+        <CardTitle className="min-w-0 break-words">Estudiantes - {groupName}</CardTitle>
         <CardDescription>
           {students.length} estudiantes en este grupo
         </CardDescription>

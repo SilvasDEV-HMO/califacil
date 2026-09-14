@@ -80,9 +80,9 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid shrink-0 grid-cols-2 gap-2 sm:gap-2 lg:grid-cols-4 lg:gap-3">
-        <Link href="/exams?status=all" className="block">
-        <Card className="shadow-sm transition hover:shadow-md">
+      <div className="grid shrink-0 grid-cols-2 items-stretch gap-2 sm:gap-2 lg:grid-cols-4 lg:gap-3">
+        <Link href="/exams?status=all" className="block h-full min-w-0">
+        <Card className="h-full min-w-0 gap-2 py-0 shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
               Total Exámenes
@@ -93,13 +93,15 @@ export default function DashboardPage() {
             <div className="text-xl font-bold sm:text-2xl">
               {examsLoading ? <Loader2 className="h-5 w-5 animate-spin sm:h-6 sm:w-6" /> : stats.totalExams}
             </div>
-            <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">Creados hasta la fecha</p>
+            <p className="mt-0.5 line-clamp-2 min-h-[2.25rem] text-[10px] text-gray-500 sm:text-xs">
+              Creados hasta la fecha
+            </p>
           </CardContent>
         </Card>
         </Link>
 
-        <Link href="/exams?status=published" className="block">
-        <Card className="shadow-sm transition hover:shadow-md">
+        <Link href="/exams?status=published" className="block h-full min-w-0">
+        <Card className="h-full min-w-0 gap-2 py-0 shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
               Activos
@@ -110,13 +112,15 @@ export default function DashboardPage() {
             <div className="text-xl font-bold sm:text-2xl">
               {examsLoading ? <Loader2 className="h-5 w-5 animate-spin sm:h-6 sm:w-6" /> : stats.publishedExams}
             </div>
-            <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">Publicados</p>
+            <p className="mt-0.5 line-clamp-2 min-h-[2.25rem] text-[10px] text-gray-500 sm:text-xs">
+              Publicados
+            </p>
           </CardContent>
         </Card>
         </Link>
 
-        <Link href="/groups" className="block">
-        <Card className="shadow-sm transition hover:shadow-md">
+        <Link href="/groups" className="block h-full min-w-0">
+        <Card className="h-full min-w-0 gap-2 py-0 shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
               Grupos
@@ -127,13 +131,15 @@ export default function DashboardPage() {
             <div className="text-xl font-bold sm:text-2xl">
               {groupsLoading ? <Loader2 className="h-5 w-5 animate-spin sm:h-6 sm:w-6" /> : stats.totalGroups}
             </div>
-            <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">Registrados</p>
+            <p className="mt-0.5 line-clamp-2 min-h-[2.25rem] text-[10px] text-gray-500 sm:text-xs">
+              Registrados
+            </p>
           </CardContent>
         </Card>
         </Link>
 
-        <Link href="/promedios" className="block">
-        <Card className="shadow-sm transition hover:shadow-md">
+        <Link href="/promedios" className="block h-full min-w-0">
+        <Card className="h-full min-w-0 gap-2 py-0 shadow-sm transition hover:shadow-md">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 pt-3">
             <CardTitle className="text-xs font-medium text-gray-600 sm:text-sm">
               Promedio
@@ -150,7 +156,9 @@ export default function DashboardPage() {
                 '—'
               )}
             </div>
-            <p className="mt-0.5 text-[10px] text-gray-500 sm:text-xs">General (todos los exámenes)</p>
+            <p className="mt-0.5 line-clamp-2 min-h-[2.25rem] text-[10px] text-gray-500 sm:text-xs">
+              Todos los exámenes
+            </p>
           </CardContent>
         </Card>
         </Link>

@@ -24,6 +24,9 @@ export const metadata: Metadata = {
     statusBarStyle: 'black-translucent',
     title: 'CaliFácil',
   },
+  other: {
+    'mobile-web-app-capable': 'yes',
+  },
 };
 
 export const viewport: Viewport = {
