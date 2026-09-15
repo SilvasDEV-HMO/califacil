@@ -43,7 +43,7 @@ import {
   autoOrientCalifacilSheet,
   califacilImageToJpegDataUrl,
   califacilMobileAnswerSheetGuideInViewportPx,
-  captureVideoFullFrame,
+  captureFrozenVideoStill,
   cropCanvasToViewportGuideRect,
   cropMobileGuideRoiCaptureToViewportGuide,
   captureImageFullFrame,
@@ -2573,6 +2573,10 @@ export default function CalificarPage() {
             return;
           }
           if (isMobile && video.paused) {
+            if (mobileCaptureBusyRef.current) {
+              nextDelay = 200;
+              return;
+            }
             void attachStreamToVideo();
             nextDelay = 150;
             return;
@@ -2793,13 +2797,18 @@ export default function CalificarPage() {
               if (readyToSnap) {
                 cornerStableTicksRef.current = 0;
                 setMobileStableTicks(0);
+                try {
+                  video.pause();
+                } catch {
+                  /* ignore */
+                }
                 setShutterFlash(true);
                 window.setTimeout(() => setShutterFlash(false), 160);
+                setLiveStatus('Congelado — tomando la foto…');
                 triggerMobileSheetCaptureRef.current(video, {
                   roiQuad: autoQuad,
                   roiCapture,
                 });
-                setLiveStatus('Capturando…');
               } else if (!autoShutterEnabledRef.current) {
                 setLiveStatus(
                   `Cuadros ${fiducialCount}/4 — toca Capturar.`
@@ -4318,24 +4327,17 @@ export default function CalificarPage() {
       opts?: { roiQuad?: RoiQuad | null; roiCapture?: MobileGuideRoiCapture | null }
     ) => {
       playAutoCaptureClickSound();
-      // Frame fresco del sensor (sin sleep largo).
-      await new Promise<void>((resolve) => {
-        const v = video as HTMLVideoElement & {
-          requestVideoFrameCallback?: (cb: () => void) => number;
-        };
-        if (typeof v.requestVideoFrameCallback === 'function') {
-          v.requestVideoFrameCallback(() => resolve());
-          return;
-        }
-        window.requestAnimationFrame(() => resolve());
-      });
-
-      // Sincronizar guía + layout (clientWidth) justo antes de recortar.
+      try {
+        if (!video.paused) video.pause();
+      } catch {
+        /* already frozen */
+      }
       updateLiveVideoLayout();
 
-      const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
+      const fullCanvas = await captureFrozenVideoStill(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
         clearMobileScanPreview(video, mobileScanPreviewSetters);
+        resumeLiveVideoAfterScan(video);
         toast.error('No se pudo escanear. Intenta de nuevo.');
         setLiveStatus('Error de escaneo. Pulsa Capturar de nuevo.');
         return;
@@ -4345,7 +4347,7 @@ export default function CalificarPage() {
         setMobileScanPreviewGeometry(null);
         setMobileScanPreviewPicks([]);
         setMobileScanPreviewOrangeFrame(null);
-        setLiveStatus('Calificando…');
+        setLiveStatus('Congelado — limpiando la hoja…');
       });
       await yieldForSpinnerPaint();
 
@@ -4579,7 +4581,7 @@ export default function CalificarPage() {
       mobileCaptureBusySinceRef.current = now;
       flushSync(() => {
         setScanBusy(true);
-        setLiveStatus('Calificando…');
+        setLiveStatus('Congelado — tomando la foto…');
       });
       setLiveFilterMenuOpen(false);
       void (async () => {
@@ -4680,6 +4682,11 @@ export default function CalificarPage() {
     autoCaptureTriggeredRef.current = false;
     mobileCaptureBusyRef.current = false;
     mobileCaptureBusySinceRef.current = 0;
+    try {
+      video.pause();
+    } catch {
+      /* ignore */
+    }
     setShutterFlash(true);
     window.setTimeout(() => setShutterFlash(false), 220);
     try {
@@ -4687,6 +4694,7 @@ export default function CalificarPage() {
     } catch {
       /* audio opcional */
     }
+    setLiveStatus('Congelado — tomando la foto…');
     triggerMobileSheetCapture(video, {
       roiQuad: fiducialQuad,
       roiCapture: lastRoiCaptureMetaRef.current,

@@ -3179,6 +3179,65 @@ export function captureVideoFullFrame(
   return drawSourceToCanvas(fullCanvas, 1400);
 }
 
+type ImageCaptureLike = {
+  takePhoto?: () => Promise<Blob>;
+  grabFrame?: () => Promise<ImageBitmap>;
+};
+
+/**
+ * Foto del visor ya congelado (video.pause). ImageCapture si existe; si no, drawImage del freeze.
+ */
+export async function captureFrozenVideoStill(
+  video: HTMLVideoElement,
+  opts?: CaptureCalifacilGuideFrameOptions
+): Promise<HTMLCanvasElement | null> {
+  const maxSide = opts?.maxSide && opts.maxSide > 0 ? opts.maxSide : 1400;
+  try {
+    const stream = video.srcObject;
+    if (stream instanceof MediaStream) {
+      const track = stream.getVideoTracks()[0];
+      const ImageCaptureCtor = (
+        globalThis as unknown as {
+          ImageCapture?: new (t: MediaStreamTrack) => ImageCaptureLike;
+        }
+      ).ImageCapture;
+      if (track && typeof ImageCaptureCtor === 'function') {
+        const cap = new ImageCaptureCtor(track);
+        if (typeof cap.takePhoto === 'function') {
+          const blob = await cap.takePhoto();
+          const bmp = await createImageBitmap(blob);
+          const tmp = document.createElement('canvas');
+          tmp.width = bmp.width;
+          tmp.height = bmp.height;
+          const ctx = tmp.getContext('2d', { willReadFrequently: true });
+          if (ctx) {
+            ctx.drawImage(bmp, 0, 0);
+            bmp.close();
+            return drawSourceToCanvas(tmp, maxSide);
+          }
+          bmp.close();
+        }
+        if (typeof cap.grabFrame === 'function') {
+          const bmp = await cap.grabFrame();
+          const tmp = document.createElement('canvas');
+          tmp.width = bmp.width;
+          tmp.height = bmp.height;
+          const ctx = tmp.getContext('2d', { willReadFrequently: true });
+          if (ctx) {
+            ctx.drawImage(bmp, 0, 0);
+            bmp.close();
+            return drawSourceToCanvas(tmp, maxSide);
+          }
+          bmp.close();
+        }
+      }
+    }
+  } catch {
+    /* Safari iOS: sin ImageCapture */
+  }
+  return captureVideoFullFrame(video, opts);
+}
+
 /**
  * Captura el fotograma del video recortado al marco guía CaliFacil.
  * Con object-contain el fotograma completo coincide con el área visible; el recorte guía
