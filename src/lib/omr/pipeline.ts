@@ -102,9 +102,8 @@ export function isPrintedCalifacilLetterAfterWarp(canvas: HTMLCanvasElement): bo
 
 export function isForcedWarpGradeCanvas(
   canvas: HTMLCanvasElement,
-  alignment?: WarpAlignmentReport | null
+  _alignment?: WarpAlignmentReport | null
 ): boolean {
-  if (!alignment?.ok) return false;
   const expected = califacilWarpLetterPixelSize();
   return (
     Math.abs(canvas.width - expected.width) <= 4 &&
@@ -149,18 +148,17 @@ export function prepareCanonicalCalifacilLetterCanvas(
     const letterSized = exactRef || (!forceWarp && isReferenceGradeLetterCanvas(sized));
     if (!letterSized) return null;
     if (forceWarp && !exactRef) return null;
-    if (forceWarp && !aligned.ok) return null;
-    if (!forceWarp) {
-      if (isCanonicalGradeCanvasReady(sized, aligned)) {
-        return { canvas: sized, alignment: aligned };
-      }
-      /* PDF/escáner: la página ya es la hoja; no exigir 4 fiduciales a 8 px. */
-      if (exactRef || isReferenceGradeLetterCanvas(sized) || isCalifacilWarpedLetterCanvas(sized)) {
-        return { canvas: sized, alignment: aligned };
-      }
-      return null;
+    if (forceWarp) {
+      return { canvas: sized, alignment: aligned };
     }
-    return { canvas: sized, alignment: aligned };
+    if (isCanonicalGradeCanvasReady(sized, aligned)) {
+      return { canvas: sized, alignment: aligned };
+    }
+    /* PDF/escáner: la página ya es la hoja; no exigir 4 fiduciales a 8 px. */
+    if (exactRef || isReferenceGradeLetterCanvas(sized) || isCalifacilWarpedLetterCanvas(sized)) {
+      return { canvas: sized, alignment: aligned };
+    }
+    return null;
   };
 
   const base =
@@ -211,9 +209,10 @@ export function prepareCanonicalCalifacilLetterCanvas(
       const registered = registerWarpedSheetToPrintTemplate(result.warped, maxErrorPx);
       if (!registered.ok) continue;
       const finished = finishCanonical(registered.canvas, registered.alignment);
-      if (!finished || !finished.alignment.ok) continue;
+      if (!finished) continue;
       const a = finished.alignment;
-      const score = 400 - Math.min(80, a.maxErrorPx);
+      const strips = countCalifacilAlignStrips(finished.canvas);
+      const score = (a.ok ? 80 : 0) + strips * 20 - Math.min(80, a.maxErrorPx);
       if (!best || score > best.score) {
         best = { canvas: finished.canvas, alignment: a, score };
       }

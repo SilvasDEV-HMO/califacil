@@ -948,9 +948,12 @@ export default function CalificarPage() {
       const printed =
         isPrintedCalifacilLetterAfterWarp(displayCanvas) ||
         isPrintedCalifacilLetterAfterWarp(warped);
-      const acceptable = isExactWarpSize(displayCanvas) || isExactWarpSize(warped)
-        ? printed
-        : isCanonicalGradeCanvasReady(displayCanvas, warpAlignment ?? null) ||
+      const letterSized =
+        isExactWarpSize(displayCanvas) || isExactWarpSize(warped);
+      const acceptable = letterSized
+        ? true
+        : printed ||
+          isCanonicalGradeCanvasReady(displayCanvas, warpAlignment ?? null) ||
           isCanonicalGradeCanvasReady(warped, warpAlignment ?? null) ||
           isPhotoSheetWarpAcceptable(displayCanvas) ||
           isPhotoSheetWarpAcceptable(warped);
@@ -4029,7 +4032,7 @@ export default function CalificarPage() {
           warped = canonical.canvas;
           alignment = canonical.alignment;
         }
-        if (!warped || !alignment?.ok || !isForcedWarpGradeCanvas(warped, alignment)) {
+        if (!warped || !isForcedWarpGradeCanvas(warped, alignment)) {
           warped = null;
           alignment = null;
         }
@@ -4164,10 +4167,10 @@ export default function CalificarPage() {
       const blankFast =
         Boolean(califacilFastScan?.meta) &&
         isAnswerSheetOmrMostlyBlank(califacilFastScan!.meta!, chunkRows);
-      // Picks resueltos o blank real — geometry sola NO basta (evita 0% falso naranja).
+      const partialFast = Boolean(califacilFastScan?.meta) && resolvedFast >= 1 && !blankFast;
       const hasOmr =
         sheetKind === 'califacil'
-          ? usableFast || blankFast
+          ? usableFast || blankFast || partialFast
           : Boolean(zipPreviewMeta?.geometry || zipPreviewMeta?.picks.some((p) => p != null));
 
       // Con lectura OMR válida: ir directo al popup (sin review manual).
@@ -4227,7 +4230,11 @@ export default function CalificarPage() {
 
         const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
         const blankSheet = isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows);
+        const collapsed =
+          resolvedCount >= 8 &&
+          warpMeta.maxSameColumnCount >= Math.max(8, Math.ceil(resolvedCount * 0.8));
         let trusted = resolvedCount >= Math.ceil(chunkRows * 0.7) && !blankSheet;
+        const partialOk = resolvedCount >= 1 && !blankSheet && !collapsed;
 
         if (blankSheet) {
           warpMeta = {
@@ -4244,7 +4251,7 @@ export default function CalificarPage() {
             geometry: displayGeom,
           };
           trusted = false;
-        } else if (trusted) {
+        } else if (trusted || partialOk) {
           warpMeta = {
             ...warpMeta,
             picks: warpMeta.picks.slice(0, chunkRows),
@@ -4272,7 +4279,7 @@ export default function CalificarPage() {
           letterCanvas,
           liveLockedAnswersRef.current,
           alignment,
-          { trustedMobileRead: trusted || blankSheet }
+          { trustedMobileRead: trusted || blankSheet || partialOk }
         );
       }
 
@@ -5204,8 +5211,6 @@ export default function CalificarPage() {
           supportsCalifacil={supportsCalifacil}
           virtualKeyReady={virtualKeyReadyCount}
           virtualKeyTotal={virtualKeyMcTotal}
-          sheetIndex={sheetIndex}
-          totalSheets={totalSheets}
           scanBusy={scanBusy}
           onSelectExam={(id) => {
             setExamId(id);

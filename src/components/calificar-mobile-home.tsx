@@ -24,8 +24,6 @@ type Props = {
   supportsCalifacil: boolean;
   virtualKeyReady: number;
   virtualKeyTotal: number;
-  sheetIndex: number;
-  totalSheets: number;
   scanBusy: boolean;
   busyLabel?: string;
   onSelectExam: (id: string) => void;
@@ -86,8 +84,6 @@ export function CalificarMobileHome({
   supportsCalifacil,
   virtualKeyReady,
   virtualKeyTotal,
-  sheetIndex,
-  totalSheets,
   scanBusy,
   busyLabel,
   onSelectExam,
@@ -167,21 +163,6 @@ export function CalificarMobileHome({
             <CardContent className="flex items-center justify-center gap-2 py-8 text-sm text-gray-500">
               <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
               Preparando clave automática…
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {exam && supportsCalifacil && canGradeStudents ? (
-          <Card className="border-orange-200 bg-orange-50/80 shadow-sm">
-            <CardContent className="flex items-start gap-3 py-4">
-              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-orange-600" />
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Listo para calificar</p>
-                <p className="mt-0.5 text-xs leading-snug text-gray-600">
-                  Hoja {sheetIndex + 1} de {totalSheets}. Alinea los 4 recuadros naranjas con las
-                  esquinas negras de la hoja impresa, con buena luz.
-                </p>
-              </div>
             </CardContent>
           </Card>
         ) : null}

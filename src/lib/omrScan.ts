@@ -6193,27 +6193,24 @@ export function registerWarpedSheetToPrintTemplate(
     { x: 1, y: H - 2 },
   ];
 
+  const centers = detectWarpedFiducialCenters(current);
+  const fiducialQuad: [Point, Point, Point, Point] | null =
+    centers.tl && centers.tr && centers.br && centers.bl
+      ? [centers.tl, centers.tr, centers.br, centers.bl]
+      : detectCalifacilQuadFromCornerMarkers(current);
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(current);
-  if (stripQuad) {
-    const fill = measureRoiSheetFillRatio(stripQuad, W, H);
-    let maxShift = 0;
-    for (let i = 0; i < 4; i++) {
-      const dx = stripQuad[i]!.x - dst[i]!.x;
-      const dy = stripQuad[i]!.y - dst[i]!.y;
-      maxShift = Math.max(maxShift, Math.hypot(dx, dy));
-    }
-    if (fill >= 0.7 && fill <= 0.995 && maxShift > 3.5 && maxShift < Math.min(W, H) * 0.14) {
-      const h = computeHomographySrcToDst(stripQuad, dst);
-      if (h) {
-        const aligned = warpCanvasWithHomography(current, h, W, H);
-        if (aligned) {
-          const again = refineWarpedCalifacilSheet(aligned, {
-            fast: false,
-            maxAllowedPx: maxErrorPx,
-            maxIterations: 2,
-          });
-          current = again.canvas;
-        }
+  const cropQuad = fiducialQuad ?? stripQuad;
+  if (cropQuad) {
+    const h = computeHomographySrcToDst(cropQuad, dst);
+    if (h) {
+      const aligned = warpCanvasWithHomography(current, h, W, H);
+      if (aligned) {
+        const again = refineWarpedCalifacilSheet(aligned, {
+          fast: false,
+          maxAllowedPx: maxErrorPx,
+          maxIterations: 2,
+        });
+        current = again.canvas;
       }
     }
   }
@@ -6226,11 +6223,9 @@ export function registerWarpedSheetToPrintTemplate(
   const strips = countCalifacilAlignStrips(letter);
   const corners = countCalifacilCornerMarkers(letter);
   const ok =
-    alignment.ok &&
-    strips >= 2 &&
-    corners >= 3 &&
     Math.abs(letter.width - expected.width) <= 4 &&
-    Math.abs(letter.height - expected.height) <= 4;
+    Math.abs(letter.height - expected.height) <= 4 &&
+    (strips >= 2 || corners >= 3);
   return { canvas: letter, alignment, ok };
 }
 
@@ -9741,11 +9736,21 @@ export function isAnswerSheetOmrMostlyBlank(
   // Cierra 2/30 inventados en foto de pantalla; no tumba exámenes ≥40% contestados.
   const strongSparseCap = Math.max(2, Math.floor(rows * 0.07));
   if (resolved > 0 && resolved <= strongSparseCap) {
-    return true;
+    if (marked < resolved) return true;
+    let inkSum = 0;
+    let n = 0;
+    for (let i = 0; i < rows; i++) {
+      if (meta.picks[i] == null) continue;
+      const row = meta.rows[i];
+      inkSum += row ? rowMaxInkFraction(row) : 0;
+      n++;
+    }
+    const avgInk = n > 0 ? inkSum / n : 0;
+    if (avgInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 2.2) return true;
+    return false;
   }
 
   // Pocas lecturas con tinta débil (foto de pantalla / moiré / anillos): tratar como blank.
-  // Evita 5/30 en hoja vacía cuando marked supera ligeramente el umbral.
   const sparseCap = Math.max(2, Math.ceil(rows * 0.2));
   if (resolved > 0 && resolved <= sparseCap) {
     let inkSum = 0;
@@ -9762,10 +9767,20 @@ export function isAnswerSheetOmrMostlyBlank(
     }
   }
 
-  // Invento medio (p. ej. 8–12/30): ruido de anillos desalineados, no un examen a medias.
   const weakResolvedCap = Math.ceil(rows * 0.4);
   if (resolved > 0 && resolved < weakResolvedCap) {
-    return true;
+    let inkSum = 0;
+    let n = 0;
+    for (let i = 0; i < rows; i++) {
+      if (meta.picks[i] == null) continue;
+      const row = meta.rows[i];
+      inkSum += row ? rowMaxInkFraction(row) : 0;
+      n++;
+    }
+    const avgInk = n > 0 ? inkSum / n : 0;
+    if (avgInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 2.2) {
+      return true;
+    }
   }
 
   if (marked > markedCap) return false;
