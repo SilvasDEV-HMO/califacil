@@ -2603,11 +2603,54 @@ function fiducialQuadFromExpectedCorners(
 export function locateAnswerSheetFiducialQuad(
   canvas: HTMLCanvasElement
 ): [Point, Point, Point, Point] | null {
-  return (
+  const raw =
     detectCalifacilPhotoFiducialQuad(canvas) ??
     detectCalifacilQuadFromCornerMarkers(canvas) ??
-    fiducialQuadFromExpectedCorners(canvas)
-  );
+    fiducialQuadFromExpectedCorners(canvas);
+  if (!raw) return null;
+  return verifyFiducialQuadOnCanvas(canvas, raw) ? raw : null;
+}
+
+/** True si los 4 puntos son cuadritos negros impresos (no líneas de cuaderno ni sombras). */
+export function verifyFiducialQuadOnCanvas(
+  canvas: HTMLCanvasElement,
+  quad: [Point, Point, Point, Point]
+): boolean {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 80 || H < 80) return false;
+  if (!quadIsConvex(quad)) return false;
+  const [tl, tr, br, bl] = quad;
+  const avgW =
+    (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(br.x - bl.x, br.y - bl.y)) * 0.5;
+  const avgH =
+    (Math.hypot(bl.x - tl.x, bl.y - tl.y) + Math.hypot(br.x - tr.x, br.y - tr.y)) * 0.5;
+  if (avgW < W * 0.28 || avgH < H * 0.32) return false;
+  const ratio = avgH / Math.max(1, avgW);
+  if (ratio < 1.05 || ratio > 1.62) return false;
+  const fill = measureRoiSheetFillRatio(quad, W, H);
+  if (fill < 0.14 || fill > 0.96) return false;
+
+  const patch = Math.max(12, Math.round(Math.min(W, H) * 0.055));
+  const prefs: Array<'tl' | 'tr' | 'br' | 'bl'> = ['tl', 'tr', 'br', 'bl'];
+  for (let i = 0; i < 4; i++) {
+    const p = quad[i]!;
+    const x0 = Math.max(0, Math.round(p.x - patch / 2));
+    const y0 = Math.max(0, Math.round(p.y - patch / 2));
+    const pw = Math.min(patch, W - x0);
+    const ph = Math.min(patch, H - y0);
+    if (pw < 8 || ph < 8) return false;
+    let id: ImageData;
+    try {
+      id = ctx.getImageData(x0, y0, pw, ph);
+    } catch {
+      return false;
+    }
+    if (!isPrintedCornerFiducialPatch(id, pw, ph, false, i < 2, i >= 2)) return false;
+  }
+  return true;
 }
 
 function orderFiducialBlobsAsQuad(
@@ -2666,9 +2709,9 @@ function findDarkSquarePatch(
         }
       }
       const fill = dark / total;
-      if (fill < 0.18) continue;
+      if (fill < 0.42) continue;
       const mean = lumSum / total;
-      if (mean > 155) continue;
+      if (mean > 108) continue;
       const cx = px + patch / 2;
       const cy = py + patch / 2;
       const dist =
@@ -3757,7 +3800,7 @@ export function isMobileExamSheetReadyForCapture(opts: {
 
   const fill =
     opts.fillRatio ?? measureRoiSheetFillRatio(opts.quad, opts.roiW, opts.roiH);
-  if (fill < 0.12) return false;
+  if (fill < 0.18) return false;
 
   return true;
 }
@@ -5444,7 +5487,8 @@ export function attachAnswerSheetReviewBubbleOverlay(
 }
 
 /**
- * Rejilla de overlay = 30 renglones impresos. Si el motor trajo N celdas estiradas, se sustituye.
+ * Overlay: conservar la rejilla OMR (30×N) si existe.
+ * Solo usar plantilla impresa cuando no hay grid de lectura.
  */
 export function ensureCalifacilPrintedRowGeometry(
   canvas: HTMLCanvasElement,
@@ -5460,19 +5504,51 @@ export function ensureCalifacilPrintedRowGeometry(
   );
   if (!geometry?.cells?.length) return printed;
   const synced = syncCalifacilOmrGeometryImageSize(geometry, canvas.width, canvas.height);
-  if (synced.cells.length >= rows) {
+  const rowCols = synced.cells[0]?.length ?? 0;
+  if (synced.cells.length >= rows && rowCols >= cols) {
     return {
       ...synced,
-      cells: synced.cells.slice(0, rows),
-      bubbles: synced.bubbles?.length ? synced.bubbles.slice(0, rows) : synced.bubbles,
+      cells: synced.cells.slice(0, rows).map((row) => row.slice(0, cols)),
+      bubbles: synced.bubbles?.length
+        ? synced.bubbles.slice(0, rows).map((row) => (row ?? []).slice(0, cols))
+        : synced.bubbles,
     };
   }
   return printed;
 }
 
+function overlayBubblesFromCells(
+  geometry: CalifacilOmrScanGeometry,
+  canvasW: number,
+  canvasH: number,
+  rows: number,
+  cols: number
+): CalifacilOmrBubbleSample[][] {
+  const W = Math.max(1, canvasW);
+  const H = Math.max(1, canvasH);
+  return geometry.cells.slice(0, rows).map((rowCells) =>
+    (rowCells ?? []).slice(0, cols).map((cell) => {
+      const cellW = Math.max(1, cell.w * W);
+      const cellH = Math.max(1, cell.h * H);
+      const rPx = Math.max(3, Math.min(cellW, cellH) * 0.38);
+      return {
+        cx: cell.x + cell.w * 0.5,
+        cy: cell.y + cell.h * 0.5,
+        r: rPx / Math.min(W, H),
+        bounds: cell,
+        inkFrac: 0,
+        fillDark: 0,
+        ringDark: 0,
+        score: 0,
+        confidence: 0,
+      };
+    })
+  );
+}
+
 /**
- * Overlay-only: ancla bolitas a anillos impresos (paso fino + sesgo mediano).
- * No relée ni sustituye picks. La rejilla es siempre 30 renglones impresos.
+ * Overlay-only: afina bolitas sobre la geometría de lectura.
+ * No relée ni sustituye picks. Si el snap deja de reproducir los picks, se revierte.
  */
 export function snapReviewOverlayToPrintedRings(
   canvas: HTMLCanvasElement,
@@ -5483,12 +5559,13 @@ export function snapReviewOverlayToPrintedRings(
 ): OmrScanMetaResult {
   const rows = CALIFACIL_OMR_DEFAULT_ROWS;
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  const maxShiftRatio = opts?.maxShiftRatio ?? 0.45;
-  const maxShiftRatioY = opts?.maxShiftRatioY ?? 0.32;
-  const printedGeom = ensureCalifacilPrintedRowGeometry(canvas, meta.geometry, cols);
+  const maxShiftRatio = opts?.maxShiftRatio ?? 0.18;
+  const maxShiftRatioY = opts?.maxShiftRatioY ?? 0.16;
+  const gridGeom = ensureCalifacilPrintedRowGeometry(canvas, meta.geometry, cols);
+
   const first = attachAnswerSheetReviewBubbleOverlay(
     canvas,
-    { ...meta, geometry: printedGeom },
+    { ...meta, geometry: gridGeom },
     columns,
     rows,
     {
@@ -5497,8 +5574,12 @@ export function snapReviewOverlayToPrintedRings(
       fineSearch: true,
     }
   );
+
   const geom = first.geometry;
-  if (!geom?.cells?.length || !geom.bubbles?.length) return first;
+  if (!geom?.cells?.length) return first;
+  if ((geom.bubbles?.length ?? 0) < rows) {
+    geom.bubbles = overlayBubblesFromCells(geom, canvas.width, canvas.height, rows, cols);
+  }
 
   const W = Math.max(1, canvas.width);
   const H = Math.max(1, canvas.height);
@@ -5571,10 +5652,23 @@ export function snapReviewOverlayToPrintedRings(
     bubbles.push(rowBubbles);
   }
 
+  const snappedCells = geom.cells.slice(0, rows).map((rowCells, r) =>
+    (rowCells ?? []).slice(0, cols).map((cell, c) => {
+      const b = bubbles[r]?.[c];
+      if (!cell || !b || !Number.isFinite(b.cx) || !Number.isFinite(b.cy)) return cell;
+      return {
+        ...cell,
+        x: b.cx - cell.w * 0.5,
+        y: b.cy - cell.h * 0.5,
+      };
+    })
+  );
+
   return {
     ...first,
     geometry: {
       ...geom,
+      cells: snappedCells,
       bubbles,
     },
   };

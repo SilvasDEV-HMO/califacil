@@ -50,6 +50,7 @@ import {
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
   locateAnswerSheetFiducialQuad,
+  verifyFiducialQuadOnCanvas,
   detectMobileLiveSheetQuad,
   estimateCanvasShadowAsymmetry,
   detectAnswerSheetQuadViaAlignStrips,
@@ -1812,7 +1813,7 @@ export default function CalificarPage() {
             { ...meta, geometry: overlayGeom, picks: raw },
             omrCols,
             omrRowCount,
-            { maxShiftRatio: 0.28, maxShiftRatioY: 0.22, biasRows: omrRowCount }
+            { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
           );
           overlayGeom = attached.geometry ?? overlayGeom;
         }
@@ -1898,7 +1899,7 @@ export default function CalificarPage() {
             { ...meta, geometry: reviewGeom, picks: raw },
             omrCols,
             omrRowCount,
-            { maxShiftRatio: 0.28, maxShiftRatioY: 0.22, biasRows: omrRowCount }
+            { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
           );
           reviewGeom = attached.geometry ?? reviewGeom;
         } else if (previewCanvas) {
@@ -1915,7 +1916,7 @@ export default function CalificarPage() {
               { ...meta, geometry: reviewGeom, picks: raw },
               omrCols,
               omrRowCount,
-              { maxShiftRatio: 0.28, maxShiftRatioY: 0.22, biasRows: omrRowCount }
+              { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
             );
             reviewGeom = attached.geometry ?? reviewGeom;
           }
@@ -2637,13 +2638,11 @@ export default function CalificarPage() {
               roiCanvas,
               locatedFiducials ?? roiQuadRaw ?? stripQuad
             );
-            if (locatedFiducials) {
-              fiducialCorners = [true, true, true, true];
-            }
             let fiducialCount = fiducialCorners.filter(Boolean).length;
             if (locatedFiducials) {
               roiQuadRaw = locatedFiducials;
               fiducialCount = MOBILE_MIN_FIDUCIAL_CORNERS;
+              fiducialCorners = [true, true, true, true];
             } else if (!roiQuadRaw && stripQuad) {
               roiQuadRaw = stripQuad;
             }
@@ -4121,8 +4120,16 @@ export default function CalificarPage() {
         return;
       }
 
-      // Solo el quad del gate live (4 esquinas). No usar franjas como si fueran la hoja.
       const frameQuad = opts?.frameQuad ?? null;
+      if (video && !opts?.fromGallery) {
+        if (!frameQuad || !verifyFiducialQuadOnCanvas(fullCanvas, frameQuad)) {
+          clearPreview();
+          toast.error('No se ven los 4 cuadritos negros. Encuadra la hoja de respuestas.');
+          setLiveStatus('Acerca los 4 cuadritos negros a las esquinas naranjas.');
+          if (video) resumeLiveVideoAfterScan(video);
+          return;
+        }
+      }
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
       let sheetKind: ZipGradeSheetKind =
@@ -4621,7 +4628,7 @@ export default function CalificarPage() {
       setScanBusy(false);
       setLiveStatus('');
       toast.error('La lectura tardó demasiado. Prueba con un PDF o una foto más nítida.');
-    }, useLiveCameraUi ? 30000 : 60000);
+    }, useLiveCameraUi ? 12000 : 60000);
     return () => window.clearTimeout(timeout);
   }, [scanBusy, useLiveCameraUi]);
 
