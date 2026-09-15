@@ -779,6 +779,31 @@ export function estimateCanvasCenterLuminance(canvas: HTMLCanvasElement): number
   return n > 0 ? sum / n : 0;
 }
 
+/** Luminancia media del borde (mesa vs papel blanco tipo escáner). */
+export function estimateCanvasEdgeLuminance(canvas: HTMLCanvasElement): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const W = canvas.width;
+  const H = canvas.height;
+  const bw = Math.max(4, Math.floor(W * 0.04));
+  const bh = Math.max(4, Math.floor(H * 0.04));
+  const bands = [
+    ctx.getImageData(0, 0, W, bh),
+    ctx.getImageData(0, H - bh, W, bh),
+    ctx.getImageData(0, 0, bw, H),
+    ctx.getImageData(W - bw, 0, bw, H),
+  ];
+  let sum = 0;
+  let n = 0;
+  for (const id of bands) {
+    for (let i = 0; i < id.data.length; i += 4) {
+      sum += (id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114) / 255;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 0;
+}
+
 function viewfinderGuideCornerPatches(
   W: number,
   H: number
@@ -2367,7 +2392,8 @@ function validateCornerMarkerQuad(
   const avgW = (topW + bottomW) * 0.5;
   const avgH = (leftH + rightH) * 0.5;
   const fill = area / Math.max(1, width * height);
-  if (fill > 0.85) return null;
+  // Hoja bien encuadrada (solo un poco de mesa) llena ~90–99% del recorte.
+  if (fill > 0.997) return null;
   if (area < width * height * 0.04 || avgW < width * 0.22 || avgH < height * 0.22) return null;
   return quad;
 }
@@ -2517,7 +2543,7 @@ function detectCalifacilQuadFromFiducialBlobs(
           if (!ordered) continue;
           if (!quadIsConvex(ordered)) continue;
           const fill = measureRoiSheetFillRatio(ordered, width, height);
-          if (fill < 0.05 || fill > 0.85) continue;
+          if (fill < 0.05 || fill > 0.997) continue;
           const [tl, tr, br, bl] = ordered;
           const avgW =
             (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(br.x - bl.x, br.y - bl.y)) * 0.5;
@@ -2526,9 +2552,11 @@ function detectCalifacilQuadFromFiducialBlobs(
           if (avgW < width * 0.08 || avgH < height * 0.08) continue;
           const ratio = avgH / Math.max(1, avgW);
           if (ratio < 0.85 || ratio > 2.15) continue;
+          const letterRatio = CALIFACIL_WARP_PAGE.heightPx / CALIFACIL_WARP_PAGE.widthPx;
           const area = quadShoelaceArea(ordered);
-          if (area > bestArea) {
-            bestArea = area;
+          const score = area * (1 - Math.min(0.45, Math.abs(ratio - letterRatio)));
+          if (score > bestArea) {
+            bestArea = score;
             bestQuad = ordered;
           }
         }
@@ -6011,6 +6039,15 @@ export function warpCalifacilSheetFromQuad(
   return warpPerspectiveToRect(canvas, quad, W, H);
 }
 
+/** Recorte tipo escáner: bordes del papel → carta completa (no centros de fiducial). */
+export function warpCalifacilPaperPageToLetter(
+  canvas: HTMLCanvasElement,
+  pageQuad: [Point, Point, Point, Point]
+): HTMLCanvasElement | null {
+  const { width: W, height: H } = califacilWarpLetterPixelSize(canvas.width, canvas.height);
+  return warpPerspectiveToRect(canvas, pageQuad, W, H);
+}
+
 /** Detecta centros de fiduciales en imagen ya enderezada (850×1100). */
 export function detectWarpedFiducialCenters(
   warpedCanvas: HTMLCanvasElement
@@ -6186,11 +6223,29 @@ export function registerWarpedSheetToPrintTemplate(
   let current = fiducialPass.canvas;
   const W = current.width;
   const H = current.height;
-  const dst: [Point, Point, Point, Point] = [
-    { x: 1, y: 1 },
-    { x: W - 2, y: 1 },
-    { x: W - 2, y: H - 2 },
-    { x: 1, y: H - 2 },
+  const fiducialDst: [Point, Point, Point, Point] = [
+    {
+      x: CALIFACIL_FIDUCIAL_CENTERS_NORM.tl.x * W,
+      y: CALIFACIL_FIDUCIAL_CENTERS_NORM.tl.y * H,
+    },
+    {
+      x: CALIFACIL_FIDUCIAL_CENTERS_NORM.tr.x * W,
+      y: CALIFACIL_FIDUCIAL_CENTERS_NORM.tr.y * H,
+    },
+    {
+      x: CALIFACIL_FIDUCIAL_CENTERS_NORM.br.x * W,
+      y: CALIFACIL_FIDUCIAL_CENTERS_NORM.br.y * H,
+    },
+    {
+      x: CALIFACIL_FIDUCIAL_CENTERS_NORM.bl.x * W,
+      y: CALIFACIL_FIDUCIAL_CENTERS_NORM.bl.y * H,
+    },
+  ];
+  const pageDst: [Point, Point, Point, Point] = [
+    { x: 0, y: 0 },
+    { x: W, y: 0 },
+    { x: W, y: H },
+    { x: 0, y: H },
   ];
 
   const centers = detectWarpedFiducialCenters(current);
@@ -6200,6 +6255,7 @@ export function registerWarpedSheetToPrintTemplate(
       : detectCalifacilQuadFromCornerMarkers(current);
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(current);
   const cropQuad = fiducialQuad ?? stripQuad;
+  const dst = fiducialQuad ? fiducialDst : pageDst;
   if (cropQuad) {
     const h = computeHomographySrcToDst(cropQuad, dst);
     if (h) {

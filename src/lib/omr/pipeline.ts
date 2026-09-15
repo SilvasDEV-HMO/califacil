@@ -16,6 +16,8 @@ import {
   hasCalifacilAlignStrips,
   countCalifacilAlignStrips,
   estimateCanvasCenterLuminance,
+  estimateCanvasEdgeLuminance,
+  warpCalifacilPaperPageToLetter,
   isMobileWarpedAnswerSheetAcceptable,
   isMobileWarpedAnswerSheetReady,
   mapRoiQuadToFrame,
@@ -191,32 +193,55 @@ export function prepareCanonicalCalifacilLetterCanvas(
   pushUniqueQuad(quads, markerQuad);
 
   if (forceWarp) {
-    const tryQuads: RoiQuad[] = [];
-    pushUniqueQuad(tryQuads, detectCalifacilPhotoFiducialQuad(warpSrc));
-    pushUniqueQuad(tryQuads, markerQuad);
+    type WarpTry = { quad: RoiQuad; kind: 'fiducial' | 'page' };
+    const tries: WarpTry[] = [];
+    const pushTry = (quad: RoiQuad | null, kind: 'fiducial' | 'page') => {
+      if (!quad) return;
+      const key = quad.map((p) => `${Math.round(p.x / 4)}_${Math.round(p.y / 4)}`).join('|');
+      if (tries.some((t) => t.quad.map((p) => `${Math.round(p.x / 4)}_${Math.round(p.y / 4)}`).join('|') === key && t.kind === kind)) {
+        return;
+      }
+      tries.push({ quad, kind });
+    };
+    pushTry(detectCalifacilPhotoFiducialQuad(warpSrc), 'fiducial');
+    pushTry(markerQuad, 'fiducial');
+    pushTry(detectAnswerSheetQuadViaAlignStrips(warpSrc), 'page');
 
     let best: {
       canvas: HTMLCanvasElement;
       alignment: WarpAlignmentReport;
       score: number;
     } | null = null;
-    for (const q of tryQuads) {
-      const fill = measureRoiSheetFillRatio(q, warpSrc.width, warpSrc.height);
-      // Solo ignorar un quad que es toda la foto (no los 4 negros de una hoja a recorte completo).
-      if (fill > 0.995) continue;
-      const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast: false });
-      if (!result.warped) continue;
-      const registered = registerWarpedSheetToPrintTemplate(result.warped, maxErrorPx);
-      const candidate = registered.ok ? registered : {
-        canvas: result.warped,
-        alignment: result.alignment ?? measureWarpedFiducialAlignment(result.warped, maxErrorPx),
-      };
+    for (const attempt of tries) {
+      const fill = measureRoiSheetFillRatio(attempt.quad, warpSrc.width, warpSrc.height);
+      if (fill > 0.998) continue;
+      const warped =
+        attempt.kind === 'page'
+          ? warpCalifacilPaperPageToLetter(warpSrc, attempt.quad)
+          : warpAndValidateCalifacilSheet(warpSrc, attempt.quad, maxErrorPx, { fast: false }).warped;
+      if (!warped) continue;
+      const registered = registerWarpedSheetToPrintTemplate(warped, maxErrorPx);
+      const candidate = registered.ok
+        ? registered
+        : {
+            canvas: warped,
+            alignment: measureWarpedFiducialAlignment(warped, maxErrorPx),
+          };
       const finished = finishCanonical(candidate.canvas, candidate.alignment);
       if (!finished) continue;
       const a = finished.alignment;
       const strips = countCalifacilAlignStrips(finished.canvas);
+      const center = estimateCanvasCenterLuminance(finished.canvas);
+      const edge = estimateCanvasEdgeLuminance(finished.canvas);
+      const tableHalo = Math.max(0, center - edge);
       const score =
-        (registered.ok ? 40 : 0) + (a.ok ? 80 : 0) + strips * 20 - Math.min(80, a.maxErrorPx);
+        (registered.ok ? 40 : 0) +
+        (a.ok ? 80 : 0) +
+        strips * 24 +
+        Math.round(edge * 50) +
+        Math.round(center * 20) -
+        Math.min(80, a.maxErrorPx) -
+        Math.round(tableHalo * 140);
       if (!best || score > best.score) {
         best = { canvas: finished.canvas, alignment: a, score };
       }
