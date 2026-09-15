@@ -1615,12 +1615,11 @@ export default function CalificarPage() {
       if (isMobileCamera && skipReviewUi && !reading.meta.geometry) {
         const hasPicks = reading.meta.picks.some((p) => p != null);
         if (!hasPicks) {
-          notify.error('No se pudo leer la hoja. Encuadra de nuevo e intenta otra vez.');
-          setLiveStatus('No se leyó la tabla. Vuelve a capturar.');
-          return { success: false };
+          // Carta warpeada sin geometría: plantilla PDF; 0% si no hay marcas.
+          notify.message('Hoja sin respuestas marcadas — calificación 0%.');
+        } else {
+          notify.message('Lectura parcial: se muestra el resultado con la plantilla de la hoja.');
         }
-        // Sin geometría del motor: se usará plantilla impresa (printExam) para el overlay.
-        notify.message('Lectura parcial: se muestra el resultado con la plantilla de la hoja.');
       }
 
       const {
@@ -1678,12 +1677,10 @@ export default function CalificarPage() {
           );
           // Móvil auto-grade: NUNCA calificar lecturas parciales/inventadas.
           if (skipReviewUi && isMobileCamera) {
-            notify.error(
-              `No se pudo leer bien las respuestas (${mergedResolved}/${chunk.length}). Encuadra de nuevo con buena luz.`
+            notify.message(
+              `Lectura parcial (${mergedResolved}/${chunk.length}). Las casillas vacías se calificarán como incorrectas.`
             );
-            return { success: false };
-          }
-          if (!skipReviewUi) {
+          } else if (!skipReviewUi) {
             notify.error(
               isMobile
                 ? `Lectura insuficiente (${mergedResolved}/${chunk.length}). Vuelve a capturar con mejor encuadre.`
@@ -1756,8 +1753,14 @@ export default function CalificarPage() {
         const reviewCanvas =
           letterCandidates.find(
             (c): c is HTMLCanvasElement =>
+              c instanceof HTMLCanvasElement && isForcedWarpGradeCanvas(c)
+          ) ??
+          letterCandidates.find(
+            (c): c is HTMLCanvasElement =>
               c instanceof HTMLCanvasElement && isPrintedCalifacilLetterAfterWarp(c)
-          ) ?? null;
+          ) ??
+          letterCandidates.find((c): c is HTMLCanvasElement => c instanceof HTMLCanvasElement) ??
+          null;
         if (!reviewCanvas) {
           notify.error(
             'No se pudo enderezar la hoja. Encuadra los 4 cuadritos negros de las esquinas.'
@@ -2702,8 +2705,8 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            // 4/4 reales: acumular ticks; no disparar en el primer frame.
-            if (fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
+            // 4/4 + franjas: hoja CaliFácil, no un teclado u otra escena.
+            if (examReadyForCapture && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS && stripAligned) {
               const pageQuadRaw: RoiQuad = [
                 { x: 2, y: 2 },
                 { x: roiW - 3, y: 2 },
@@ -2762,6 +2765,11 @@ export default function CalificarPage() {
               nextDelay = MOBILE_CORNER_LOOP_MS;
               return;
             }
+
+            cornerStableTicksRef.current = 0;
+            setMobileStableTicks(0);
+            setMobileExamReadyForCapture(examReadyForCapture);
+            setCornersAlignedView(false);
 
             if (!quadValid || !roiQuad) {
               fiducialStableTicksRef.current = 0;
@@ -4035,6 +4043,12 @@ export default function CalificarPage() {
         if (!warped || !isForcedWarpGradeCanvas(warped, alignment)) {
           warped = null;
           alignment = null;
+        } else if (
+          !hasCalifacilAlignStrips(warped) ||
+          countCalifacilCornerMarkers(warped) < 3
+        ) {
+          warped = null;
+          alignment = null;
         }
       }
 
@@ -4049,9 +4063,9 @@ export default function CalificarPage() {
       if (!warped) {
         clearPreview();
         toast.error(
-          'No se pudo alinear la foto con la hoja CaliFácil. Encuadra los 4 cuadritos negros, con buena luz, y vuelve a tomar.'
+          'Eso no es una hoja CaliFácil. Encuadra el examen impreso (cuadros negros y franjas).'
         );
-        setLiveStatus('Alinea los 4 cuadritos negros y toma de nuevo.');
+        setLiveStatus('Apunta a la hoja de respuestas, no al escritorio.');
         return;
       }
 
@@ -4121,7 +4135,7 @@ export default function CalificarPage() {
           displayCanvas = califacilFastScan.docCanvas;
           scanCanvas = displayCanvas;
         }
-        if (califacilFastScan.rejectedCorners) {
+        if (califacilFastScan.rejectedCorners && !isForcedWarpGradeCanvas(displayCanvas)) {
           clearPreview();
           const corners = countCalifacilCornerMarkers(warped);
           const glareLikely = corners >= 2 && corners < 4;
@@ -4159,18 +4173,9 @@ export default function CalificarPage() {
         displayCanvas = warped;
       }
 
-      const minResolvedForGrade = Math.ceil(chunkRows * 0.7);
-      const resolvedFast = califacilFastScan?.meta
-        ? countResolvedOmrPicks(califacilFastScan.meta.picks.slice(0, chunkRows))
-        : 0;
-      const usableFast = Boolean(califacilFastScan?.meta) && resolvedFast >= minResolvedForGrade;
-      const blankFast =
-        Boolean(califacilFastScan?.meta) &&
-        isAnswerSheetOmrMostlyBlank(califacilFastScan!.meta!, chunkRows);
-      const partialFast = Boolean(califacilFastScan?.meta) && resolvedFast >= 1 && !blankFast;
       const hasOmr =
         sheetKind === 'califacil'
-          ? usableFast || blankFast || partialFast
+          ? Boolean(califacilFastScan?.meta) || isForcedWarpGradeCanvas(displayCanvas)
           : Boolean(zipPreviewMeta?.geometry || zipPreviewMeta?.picks.some((p) => p != null));
 
       // Con lectura OMR válida: ir directo al popup (sin review manual).
@@ -4260,13 +4265,19 @@ export default function CalificarPage() {
             geometry: displayGeom,
           };
         } else {
-          clearPreview();
-          toast.error(
-            'No se pudo alinear la tabla. Alinea los 4 cuadritos negros con las esquinas naranjas.'
-          );
-          setLiveStatus('Lectura poco fiable — vuelve a capturar.');
-          if (video) resumeLiveVideoAfterScan(video);
-          return;
+          warpMeta = {
+            ...warpMeta,
+            picks: Array(chunkRows).fill(null) as (number | null)[],
+            rows: warpMeta.rows.slice(0, chunkRows).map((r) => ({
+              ...r,
+              pick: null,
+              ambiguous: false,
+            })),
+            maxSameColumnCount: 0,
+            needsVisionAssist: false,
+            reviewSourceCanvas: letterCanvas,
+            geometry: displayGeom,
+          };
         }
 
         readingOverride = buildCalifacilOmrReadingOverride(
@@ -4756,8 +4767,8 @@ export default function CalificarPage() {
     const gate = mobileCaptureGateRef.current;
     const corners = gate.fiducialCorners?.filter(Boolean).length ?? gate.fiducialCount;
     const allFour = gate.fiducialCorners?.every(Boolean) ?? corners >= MOBILE_MIN_FIDUCIAL_CORNERS;
-    if (!allFour || corners < MOBILE_MIN_FIDUCIAL_CORNERS) {
-      toast.error('Alinea los 4 cuadros negros con las esquinas naranjas.');
+    if (!allFour || corners < MOBILE_MIN_FIDUCIAL_CORNERS || !gate.stripAligned) {
+      toast.error('Encuadra la hoja impresa: 4 cuadros negros y las franjas laterales.');
       return;
     }
 

@@ -203,16 +203,20 @@ export function prepareCanonicalCalifacilLetterCanvas(
     for (const q of tryQuads) {
       const fill = measureRoiSheetFillRatio(q, warpSrc.width, warpSrc.height);
       // Solo ignorar un quad que es toda la foto (no los 4 negros de una hoja a recorte completo).
-      if (fill > 0.985) continue;
+      if (fill > 0.995) continue;
       const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast: false });
       if (!result.warped) continue;
       const registered = registerWarpedSheetToPrintTemplate(result.warped, maxErrorPx);
-      if (!registered.ok) continue;
-      const finished = finishCanonical(registered.canvas, registered.alignment);
+      const candidate = registered.ok ? registered : {
+        canvas: result.warped,
+        alignment: result.alignment ?? measureWarpedFiducialAlignment(result.warped, maxErrorPx),
+      };
+      const finished = finishCanonical(candidate.canvas, candidate.alignment);
       if (!finished) continue;
       const a = finished.alignment;
       const strips = countCalifacilAlignStrips(finished.canvas);
-      const score = (a.ok ? 80 : 0) + strips * 20 - Math.min(80, a.maxErrorPx);
+      const score =
+        (registered.ok ? 40 : 0) + (a.ok ? 80 : 0) + strips * 20 - Math.min(80, a.maxErrorPx);
       if (!best || score > best.score) {
         best = { canvas: finished.canvas, alignment: a, score };
       }

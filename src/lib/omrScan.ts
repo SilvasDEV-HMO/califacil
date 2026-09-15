@@ -3692,6 +3692,7 @@ export function isMobileExamSheetReadyForCapture(opts: {
   const corners = opts.fiducialCorners;
   const count = corners ? corners.filter(Boolean).length : opts.fiducialCount;
   if (count < MOBILE_MIN_FIDUCIAL_CORNERS) return false;
+  if (!opts.stripAligned) return false;
   if (!opts.quad || !opts.roiW || !opts.roiH) return false;
   if (!isValidMobileRoiQuad(opts.quad, opts.roiW, opts.roiH)) return false;
 
