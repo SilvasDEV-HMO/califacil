@@ -49,6 +49,7 @@ import {
   captureImageFullFrame,
   captureVideoFrameForDocumentDetect,
   detectAnswerSheetFiducialsInRoi,
+  locateAnswerSheetFiducialQuad,
   detectMobileLiveSheetQuad,
   estimateCanvasShadowAsymmetry,
   detectAnswerSheetQuadViaAlignStrips,
@@ -641,6 +642,7 @@ export default function CalificarPage() {
     fiducialCorners: [boolean, boolean, boolean, boolean];
     stripAligned: boolean;
     quad: RoiQuad | null;
+    fiducialQuad: RoiQuad | null;
     roiW: number;
     roiH: number;
     fillRatio: number;
@@ -650,6 +652,7 @@ export default function CalificarPage() {
     fiducialCorners: [false, false, false, false],
     stripAligned: false,
     quad: null,
+    fiducialQuad: null,
     roiW: 0,
     roiH: 0,
     fillRatio: 0,
@@ -1753,7 +1756,8 @@ export default function CalificarPage() {
         const reviewCanvas =
           letterCandidates.find(
             (c): c is HTMLCanvasElement =>
-              c instanceof HTMLCanvasElement && isForcedWarpGradeCanvas(c)
+              c instanceof HTMLCanvasElement &&
+              isForcedWarpGradeCanvas(c, opts?.warpAlignment)
           ) ??
           letterCandidates.find(
             (c): c is HTMLCanvasElement =>
@@ -2606,24 +2610,22 @@ export default function CalificarPage() {
             setMobileScannerLowLight(false);
 
             const stripQuad = detectAnswerSheetQuadViaAlignStrips(roiCanvas);
-            let roiQuadRaw: RoiQuad | null = detectMobileLiveSheetQuad(roiCanvas);
+            const locatedFiducials = locateAnswerSheetFiducialQuad(roiCanvas);
+            let roiQuadRaw: RoiQuad | null = locatedFiducials ?? detectMobileLiveSheetQuad(roiCanvas);
             const roiW = roiCanvas.width;
             const roiH = roiCanvas.height;
 
-            // Siempre sondear con sheetQuad si hay; detectAnswerSheetFiducialsInRoi
-            // también prueba página-como-ROI (4 negros en guías naranjas sin contorno).
-            const fiducialQuad = roiQuadRaw ?? stripQuad;
-            let fiducialCorners = detectAnswerSheetFiducialsInRoi(roiCanvas, fiducialQuad);
+            let fiducialCorners = detectAnswerSheetFiducialsInRoi(
+              roiCanvas,
+              locatedFiducials ?? roiQuadRaw ?? stripQuad
+            );
+            if (locatedFiducials) {
+              fiducialCorners = [true, true, true, true];
+            }
             let fiducialCount = fiducialCorners.filter(Boolean).length;
-
-            // 4/4 en guías naranjas = hoja ≈ marco: siempre page-as-ROI (ignora contorno/franjas malos).
-            if (fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
-              roiQuadRaw = [
-                { x: 2, y: 2 },
-                { x: roiW - 3, y: 2 },
-                { x: roiW - 3, y: roiH - 3 },
-                { x: 2, y: roiH - 3 },
-              ];
+            if (locatedFiducials) {
+              roiQuadRaw = locatedFiducials;
+              fiducialCount = MOBILE_MIN_FIDUCIAL_CORNERS;
             } else if (!roiQuadRaw && stripQuad) {
               roiQuadRaw = stripQuad;
             }
@@ -2653,6 +2655,7 @@ export default function CalificarPage() {
               fiducialCorners,
               stripAligned,
               quad: roiQuad,
+              fiducialQuad: locatedFiducials,
               roiW,
               roiH,
               fillRatio,
@@ -2705,19 +2708,15 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            // 4/4 en esquinas naranjas: captura automática (el warp descarta teclado/mesa).
-            if (fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
-              const pageQuadRaw: RoiQuad = [
-                { x: 2, y: 2 },
-                { x: roiW - 3, y: 2 },
-                { x: roiW - 3, y: roiH - 3 },
-                { x: 2, y: roiH - 3 },
-              ];
-              const snapQuad =
-                roiQuad ??
-                smoothMobileRoiQuad(smoothedRoiQuadRef.current, pageQuadRaw, 0.38);
+            // 4/4: warp con los centros de los cuadros negros, no con el marco naranja.
+            if (fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS && locatedFiducials) {
+              const snapQuad = smoothMobileRoiQuad(
+                smoothedRoiQuadRef.current,
+                locatedFiducials,
+                0.38
+              );
               smoothedRoiQuadRef.current = snapQuad;
-              lastRawRoiQuadRef.current = pageQuadRaw;
+              lastRawRoiQuadRef.current = locatedFiducials;
               lastRoiQuadRef.current = snapQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
               cornerStableTicksRef.current += 1;
@@ -2730,6 +2729,7 @@ export default function CalificarPage() {
                 fiducialCorners,
                 stripAligned,
                 quad: snapQuad,
+                fiducialQuad: locatedFiducials,
                 roiW,
                 roiH,
                 fillRatio: measureRoiSheetFillRatio(snapQuad, roiW, roiH),
@@ -2748,7 +2748,7 @@ export default function CalificarPage() {
                 setShutterFlash(true);
                 window.setTimeout(() => setShutterFlash(false), 160);
                 triggerMobileSheetCaptureRef.current(video, {
-                  roiQuad: snapQuad,
+                  roiQuad: locatedFiducials,
                   roiCapture,
                 });
                 setLiveStatus('Capturando…');
@@ -4040,7 +4040,7 @@ export default function CalificarPage() {
           warped = canonical.canvas;
           alignment = canonical.alignment;
         }
-        if (!warped || !isForcedWarpGradeCanvas(warped, alignment)) {
+        if (!warped || !alignment?.ok || !isForcedWarpGradeCanvas(warped, alignment)) {
           warped = null;
           alignment = null;
         } else if (
@@ -4135,7 +4135,7 @@ export default function CalificarPage() {
           displayCanvas = califacilFastScan.docCanvas;
           scanCanvas = displayCanvas;
         }
-        if (califacilFastScan.rejectedCorners && !isForcedWarpGradeCanvas(displayCanvas)) {
+        if (califacilFastScan.rejectedCorners && !isForcedWarpGradeCanvas(displayCanvas, alignment)) {
           clearPreview();
           const corners = countCalifacilCornerMarkers(warped);
           const glareLikely = corners >= 2 && corners < 4;
@@ -4175,7 +4175,7 @@ export default function CalificarPage() {
 
       const hasOmr =
         sheetKind === 'califacil'
-          ? Boolean(califacilFastScan?.meta) || isForcedWarpGradeCanvas(displayCanvas)
+          ? Boolean(califacilFastScan?.meta) && isForcedWarpGradeCanvas(displayCanvas, alignment)
           : Boolean(zipPreviewMeta?.geometry || zipPreviewMeta?.picks.some((p) => p != null));
 
       // Con lectura OMR válida: ir directo al popup (sin review manual).
@@ -4392,10 +4392,8 @@ export default function CalificarPage() {
       const gradeCanvas = guideCrop ?? fullCanvas;
       const usedGuideCrop = Boolean(guideCrop);
 
-      // Freeze: hoja recortada al marco naranja (no foto cruda de toda la cámara).
-      const freezeUrl = canvasPreviewDataUrl(gradeCanvas, 900, 0.62);
+      // No mostrar el recorte naranja (mesa). El preview será la carta warpeada.
       flushSync(() => {
-        if (freezeUrl) setMobileScanPreviewUrl(freezeUrl);
         setMobileScanPreviewGeometry(null);
         setMobileScanPreviewPicks([]);
         setMobileScanPreviewOrangeFrame(null);
@@ -4766,8 +4764,9 @@ export default function CalificarPage() {
   const captureMobilePhotoManually = useCallback(async () => {
     const gate = mobileCaptureGateRef.current;
     const corners = gate.fiducialCorners?.filter(Boolean).length ?? gate.fiducialCount;
-    const allFour = gate.fiducialCorners?.every(Boolean) ?? corners >= MOBILE_MIN_FIDUCIAL_CORNERS;
-    if (!allFour || corners < MOBILE_MIN_FIDUCIAL_CORNERS) {
+    const fiducialQuad = gate.fiducialQuad ?? lastRawRoiQuadRef.current;
+    const allFour = Boolean(fiducialQuad) && corners >= MOBILE_MIN_FIDUCIAL_CORNERS;
+    if (!allFour || !fiducialQuad) {
       toast.error('Alinea los 4 cuadros negros con las esquinas naranjas.');
       return;
     }
@@ -4803,7 +4802,7 @@ export default function CalificarPage() {
       /* audio opcional */
     }
     triggerMobileSheetCapture(video, {
-      roiQuad: gate.quad ?? smoothedRoiQuadRef.current ?? lastRoiQuadRef.current,
+      roiQuad: fiducialQuad,
       roiCapture: lastRoiCaptureMetaRef.current,
     });
   }, [attachStreamToVideo, triggerMobileSheetCapture]);

@@ -2578,6 +2578,38 @@ export function detectCalifacilPhotoFiducialQuad(
   return detectCalifacilQuadFromFiducialBlobs(id.data, width, height);
 }
 
+function fiducialQuadFromExpectedCorners(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const { width, height } = canvas;
+  if (width < 80 || height < 80) return null;
+  const d = ctx.getImageData(0, 0, width, height).data;
+  const tl = findCalifacilFiducialNearExpected(d, width, height, 'tl');
+  const tr = findCalifacilFiducialNearExpected(d, width, height, 'tr');
+  const br = findCalifacilFiducialNearExpected(d, width, height, 'br');
+  const bl = findCalifacilFiducialNearExpected(d, width, height, 'bl');
+  if (!tl || !tr || !br || !bl) return null;
+  const ordered: [Point, Point, Point, Point] = [tl, tr, br, bl];
+  if (!quadIsConvex(ordered)) return null;
+  return ordered;
+}
+
+/**
+ * Centros reales de los 4 cuadros negros (TL, TR, BR, BL) en el canvas.
+ * Nunca usa el rectángulo del visor naranja como si fuera la hoja.
+ */
+export function locateAnswerSheetFiducialQuad(
+  canvas: HTMLCanvasElement
+): [Point, Point, Point, Point] | null {
+  return (
+    detectCalifacilPhotoFiducialQuad(canvas) ??
+    detectCalifacilQuadFromCornerMarkers(canvas) ??
+    fiducialQuadFromExpectedCorners(canvas)
+  );
+}
+
 function orderFiducialBlobsAsQuad(
   blobs: FiducialBlob[]
 ): [Point, Point, Point, Point] | null {
@@ -4194,16 +4226,21 @@ export function detectAnswerSheetFiducialsInRoi(
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return [false, false, false, false];
 
+  const located = locateAnswerSheetFiducialQuad(canvas);
+  if (located) return [true, true, true, true];
+
   const stripQuad = detectAnswerSheetQuadViaAlignStrips(canvas);
   const pageAsRoi = fullRoiPageQuad(W, H);
 
-  // 4/4 solo con fiduciales impresos (centros de plantilla / página), no parches de canvas ni esquina inferida.
+  // HUD 1–3: sondear parches; el warp de captura usa locateAnswerSheetFiducialQuad, no este marco.
   let merged: [boolean, boolean, boolean, boolean] = detectAnswerSheetFiducialsAtQuad(
     canvas,
     pageAsRoi,
     false
   );
-  if (merged.filter(Boolean).length >= 4) return merged;
+  if (merged.filter(Boolean).length >= 4) {
+    merged[3] = false;
+  }
 
   const centered = printedFiducialCornerPatches(W, H);
   merged = mergeFiducialCornerStates(
@@ -4216,7 +4253,9 @@ export function detectAnswerSheetFiducialsInRoi(
       [false, false, false, false]
     )
   );
-  if (merged.filter(Boolean).length >= 4) return merged;
+  if (merged.filter(Boolean).length >= 4) {
+    merged[3] = false;
+  }
 
   if (sheetQuad) {
     merged = mergeFiducialCornerStates(
@@ -4224,7 +4263,9 @@ export function detectAnswerSheetFiducialsInRoi(
       detectAnswerSheetFiducialsAtQuad(canvas, sheetQuad, false)
     );
   }
-  if (merged.filter(Boolean).length >= 4) return merged;
+  if (merged.filter(Boolean).length >= 4) {
+    merged[3] = false;
+  }
 
   if (stripQuad) {
     merged = mergeFiducialCornerStates(
@@ -4232,7 +4273,9 @@ export function detectAnswerSheetFiducialsInRoi(
       detectAnswerSheetFiducialsAtQuad(canvas, stripQuad, true)
     );
   }
-  if (merged.filter(Boolean).length >= 4) return merged;
+  if (merged.filter(Boolean).length >= 4) {
+    merged[3] = false;
+  }
 
   // Fallback: parches en esquinas del quad de franjas (página estimada).
   const patchW = Math.max(8, Math.round(Math.min(W, H) * ((19 / 850) * 2.5)));
@@ -4279,6 +4322,9 @@ export function detectAnswerSheetFiducialsInRoi(
         )
       );
     }
+  }
+  if (merged.filter(Boolean).length >= 4) {
+    merged[3] = false;
   }
   return merged;
 }
