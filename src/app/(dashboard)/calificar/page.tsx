@@ -970,23 +970,20 @@ export default function CalificarPage() {
         geometry: prepared.geometry,
         lockTemplate: true,
       });
-      const overlayMeta = snapReviewOverlayToPrintedRings(
-        displayCanvas,
-        letterRead.meta,
-        omrCols,
-        omrRowCount,
-        { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
+      const overlayGeom = syncCalifacilOmrGeometryImageSize(
+        letterRead.geometry,
+        displayCanvas.width,
+        displayCanvas.height
       );
-      const overlayGeom = overlayMeta.geometry ?? letterRead.geometry;
       const reread = overlayGeom
         ? rereadOmrPicksOnGeometry(
             displayCanvas,
             overlayGeom,
             omrCols,
             omrRowCount,
-            overlayMeta
+            letterRead.meta
           )
-        : overlayMeta;
+        : letterRead.meta;
       const orangeFrameNorm = califacilOmrTableFrameNormRect(omrRowCount);
       return {
         meta: {
@@ -4049,9 +4046,9 @@ export default function CalificarPage() {
       if (!warped) {
         clearPreview();
         toast.error(
-          'No se ven los 4 cuadritos negros de las esquinas. Encuadra la hoja completa, con buena luz.'
+          'No se pudo alinear la foto con la hoja CaliFácil. Encuadra los 4 cuadritos negros, con buena luz, y vuelve a tomar.'
         );
-        setLiveStatus('Centra la hoja: los 4 cuadritos negros deben verse.');
+        setLiveStatus('Alinea los 4 cuadritos negros y toma de nuevo.');
         return;
       }
 

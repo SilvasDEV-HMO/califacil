@@ -26,6 +26,7 @@ import {
   scaleCanvasToMaxSide,
   scaleQuadToCanvas,
   warpAndValidateCalifacilSheet,
+  registerWarpedSheetToPrintTemplate,
   warpCalifacilSheetFromCornerMarkers,
   warpCalifacilSheetFromQuad,
   califacilWarpLetterPixelSize,
@@ -205,11 +206,11 @@ export function prepareCanonicalCalifacilLetterCanvas(
       const fill = measureRoiSheetFillRatio(q, warpSrc.width, warpSrc.height);
       // Solo ignorar un quad que es toda la foto (no los 4 negros de una hoja a recorte completo).
       if (fill > 0.985) continue;
-      const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast });
+      const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast: false });
       if (!result.warped) continue;
-      const alignment =
-        result.alignment ?? measureWarpedFiducialAlignment(result.warped, maxErrorPx);
-      const finished = finishCanonical(result.warped, alignment);
+      const registered = registerWarpedSheetToPrintTemplate(result.warped, maxErrorPx);
+      if (!registered.ok) continue;
+      const finished = finishCanonical(registered.canvas, registered.alignment);
       if (!finished || !finished.alignment.ok) continue;
       const a = finished.alignment;
       const score = 400 - Math.min(80, a.maxErrorPx);

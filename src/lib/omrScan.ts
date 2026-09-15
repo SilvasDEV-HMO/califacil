@@ -6169,6 +6169,71 @@ export function refineWarpedCalifacilSheet(
   };
 }
 
+/**
+ * Registro silencioso contra la hoja impresa (fiduciales + franjas → carta 1230×1600).
+ * Solo fotos (`forceWarp`); si el residual es alto, `ok` es false.
+ */
+export function registerWarpedSheetToPrintTemplate(
+  warped: HTMLCanvasElement,
+  maxErrorPx = MAX_WARP_ALIGNMENT_ERROR_PX
+): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport; ok: boolean } {
+  const expected = califacilWarpLetterPixelSize();
+  const fiducialPass = refineWarpedCalifacilSheet(warped, {
+    fast: false,
+    maxAllowedPx: maxErrorPx,
+    targetMaxErrorPx: REFINE_WARP_TARGET_MAX_ERROR_PX,
+  });
+  let current = fiducialPass.canvas;
+  const W = current.width;
+  const H = current.height;
+  const dst: [Point, Point, Point, Point] = [
+    { x: 1, y: 1 },
+    { x: W - 2, y: 1 },
+    { x: W - 2, y: H - 2 },
+    { x: 1, y: H - 2 },
+  ];
+
+  const stripQuad = detectAnswerSheetQuadViaAlignStrips(current);
+  if (stripQuad) {
+    const fill = measureRoiSheetFillRatio(stripQuad, W, H);
+    let maxShift = 0;
+    for (let i = 0; i < 4; i++) {
+      const dx = stripQuad[i]!.x - dst[i]!.x;
+      const dy = stripQuad[i]!.y - dst[i]!.y;
+      maxShift = Math.max(maxShift, Math.hypot(dx, dy));
+    }
+    if (fill >= 0.7 && fill <= 0.995 && maxShift > 3.5 && maxShift < Math.min(W, H) * 0.14) {
+      const h = computeHomographySrcToDst(stripQuad, dst);
+      if (h) {
+        const aligned = warpCanvasWithHomography(current, h, W, H);
+        if (aligned) {
+          const again = refineWarpedCalifacilSheet(aligned, {
+            fast: false,
+            maxAllowedPx: maxErrorPx,
+            maxIterations: 2,
+          });
+          current = again.canvas;
+        }
+      }
+    }
+  }
+
+  const letter =
+    current.width === expected.width && current.height === expected.height
+      ? current
+      : warpToExactLetterSize(current);
+  const alignment = measureWarpedFiducialAlignment(letter, maxErrorPx);
+  const strips = countCalifacilAlignStrips(letter);
+  const corners = countCalifacilCornerMarkers(letter);
+  const ok =
+    alignment.ok &&
+    strips >= 2 &&
+    corners >= 3 &&
+    Math.abs(letter.width - expected.width) <= 4 &&
+    Math.abs(letter.height - expected.height) <= 4;
+  return { canvas: letter, alignment, ok };
+}
+
 /** Tras deskew el canvas puede crecer; vuelve a carta 850×1100 con fiduciales. */
 function warpToExactLetterSize(canvas: HTMLCanvasElement): HTMLCanvasElement {
   const { width: outW, height: outH } = califacilWarpLetterPixelSize(
