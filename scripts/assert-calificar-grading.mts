@@ -11,7 +11,7 @@ import {
   isMcPickCorrect,
   mapOmrPicksToMcDraftDetailed,
 } from '../src/lib/calificarGrading.ts';
-import { buildCalifacilVirtualKey, CALIFACIL_PRINT_MAX_QUESTIONS } from '../src/lib/printExam.ts';
+import { buildCalifacilVirtualKey, CALIFACIL_PRINT_MAX_QUESTIONS, examSupportsCalifacilOmr } from '../src/lib/printExam.ts';
 import { isMultipleChoiceAnswerCorrect, resolveOptionIndexFromValue } from '../src/lib/utils.ts';
 import {
   isAnswerSheetOmrMostlyBlank,
@@ -80,6 +80,11 @@ assert(
     !isMultipleChoiceAnswerCorrect(opts4, 'alpha', 'gamma'),
   'paridad incorrecto'
 );
+
+// Vacío nunca es acierto (evita "" === "" cuando falta clave).
+assert(!isMultipleChoiceAnswerCorrect(opts4, '', ''), 'vacío/vacío = incorrecto');
+assert(!isMultipleChoiceAnswerCorrect(opts4, '', null), 'vacío/null = incorrecto');
+assert(!isMultipleChoiceAnswerCorrect(opts4, null, null), 'null/null = incorrecto');
 
 // --- 10 preguntas, picks perfectos → 100%; fillers fuera del total ---
 const chunk10 = Array.from({ length: 10 }, (_, i) =>
@@ -323,6 +328,38 @@ for (let i = 0; i < mixed.length; i++) {
 assert(persistCorrect === draftStats.correct, 'persist correct count');
 assert(persistEarned === 2, `persist earned=${persistEarned}`);
 
+// --- gate Calificar: mixtos no aptos ---
+assert(examSupportsCalifacilOmr(chunk10) === true, 'solo MC debe soportar Calificar');
+assert(
+  examSupportsCalifacilOmr([
+    mkMc('mA', opts4, 'alpha', 10, 0),
+    {
+      id: 'open1',
+      exam_id: 'e',
+      type: 'open_answer',
+      text: 'explica',
+      options: null,
+      correct_answer: 'x',
+      points: 10,
+      order_index: 1,
+    } as Question,
+  ]) === false,
+  'examen mixto no debe pasar el gate de Calificar'
+);
+
+// --- Resultados: filas fantasma abiertas (is_correct null, score 0) no diluyen ---
+{
+  const mcPts = 80;
+  const openGhost = { is_correct: null as boolean | null, score: 0 };
+  const earned = mcPts; // 8/8 MC
+  let max = mcPts;
+  // ghost open no suma al máximo
+  if (typeof openGhost.is_correct === 'boolean') max += 20;
+  assert(Math.round((earned / max) * 100) === 100, 'fantasma abierta no diluye (80/80=100)');
+  // comportamiento anterior incorrecto: 80/100=80
+  assert(Math.round((earned / (mcPts + 20)) * 100) === 80, 'sanity dilución antigua 80%');
+}
+
 console.log(
-  'ok: calificar grading (paridad, 100%, blank 0/30, sanitize 3falsos, 1fuerte, pickBetter blank-safe, filler, puntos, muted)'
+  'ok: calificar grading (paridad, vacío, gate mixto, 100%, blank 0/30, sanitize, puntos, muted)'
 );

@@ -48,7 +48,6 @@ import { Answer, Question, Student } from '@/types';
 import {
   formatDate,
   calculatePercentage,
-  examMaxScore,
   getGradeLabel,
   getGradeColor,
   isMultipleChoiceAnswerCorrect,
@@ -294,8 +293,14 @@ export default function ExamResultsPage() {
         return acc;
       }, {} as Record<string, Answer[]>);
 
-      const maxScore = examMaxScore(exam.questions);
       const results: StudentResult[] = Object.entries(answersByStudent).map(([studentId, studentAnswers]) => {
+        const maxScore = exam.questions.reduce((sum, q) => {
+          if (q.type === 'multiple_choice') return sum + questionPoints(q);
+          const a = studentAnswers.find((x) => x.question_id === q.id);
+          // Abiertas/pizarrón sin calificar (is_correct null), p. ej. filas fantasma de Calificar, no diluyen el %.
+          if (!a || typeof a.is_correct !== 'boolean') return sum;
+          return sum + questionPoints(q);
+        }, 0);
         const totalScore = exam.questions.reduce((sum, q) => {
           const a = studentAnswers.find((x) => x.question_id === q.id);
           if (q.type === 'multiple_choice') {
@@ -306,7 +311,8 @@ export default function ExamResultsPage() {
                 : 0)
             );
           }
-          const sc = a?.score;
+          if (!a || typeof a.is_correct !== 'boolean') return sum;
+          const sc = a.score;
           return sum + (typeof sc === 'number' ? sc : 0);
         }, 0);
         const meta = studentMetaById[studentId];

@@ -698,6 +698,15 @@ export default function StudentExamPage() {
               question.correct_answer
             );
             const pts = questionPoints(question);
+            if (process.env.NEXT_PUBLIC_GRADING_DEBUG === 'true') {
+              console.info('[grading:online]', {
+                questionId: question.id,
+                student: answerText,
+                correct: question.correct_answer,
+                ok: isCorrect,
+                pts: isCorrect ? pts : 0,
+              });
+            }
             return {
               exam_id: examId,
               student_id: studentId,
@@ -864,7 +873,16 @@ export default function StudentExamPage() {
 
       const totalPoints = examMaxScore(questions);
       const obtainedPoints = graded.reduce((s, r) => s + r._points, 0);
-      setScore(calculatePercentage(obtainedPoints, totalPoints));
+      const finalPct = calculatePercentage(obtainedPoints, totalPoints);
+      if (process.env.NEXT_PUBLIC_GRADING_DEBUG === 'true') {
+        console.info('[grading:online:final]', {
+          formula: 'round(obtainedPoints / totalPoints * 100)',
+          obtainedPoints,
+          totalPoints,
+          pct: finalPct,
+        });
+      }
+      setScore(finalPct);
       setSubmitted(true);
       toast.success('¡Examen enviado exitosamente!');
       if (questions.some((q) => isWhiteboardQuestion(q)) && openSkippedAi) {

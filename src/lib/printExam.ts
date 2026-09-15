@@ -232,9 +232,17 @@ export function chunkQuestions<T>(items: T[], size: number): T[][] {
 }
 
 /** Examen apto para impresión con hoja CaliFacil (OMR) y para la página Calificar. */
+/**
+ * Calificar exige examen 100 % opción múltiple (2–5 opciones).
+ * Un `some()` previo dejaba pasar mixtos: la nota OMR (solo MC) se diluía
+ * en Resultados al dividir entre el máximo del examen completo.
+ */
 export function examSupportsCalifacilOmr(questions: Question[]): boolean {
   if (!questions.length) return false;
-  return questions.some(isGradableMultipleChoiceQuestion);
+  return questions.every((q) => {
+    if (!isGradableMultipleChoiceQuestion(q)) return false;
+    return normalizeQuestionOptions(q.options).length <= 5;
+  });
 }
 
 /**

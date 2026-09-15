@@ -130,6 +130,7 @@ export function gradeMcDraftAgainstVirtualKey(
   let earnedPoints = 0;
   let maxMcPoints = 0;
   let gradedTotal = 0;
+  const debug = process.env.NEXT_PUBLIC_GRADING_DEBUG === 'true';
 
   for (const q of mcQuestions) {
     const expectedIndex = key.indexByQuestionId[q.id];
@@ -139,15 +140,38 @@ export function gradeMcDraftAgainstVirtualKey(
     maxMcPoints += pts;
     const answerText = (draft[q.id] ?? '').trim();
     const gotIdx = resolveStudentPickIndex(q.options, answerText);
-    if (isMcPickCorrect(expectedIndex, gotIdx, q.options, answerText)) {
+    const ok = isMcPickCorrect(expectedIndex, gotIdx, q.options, answerText);
+    if (ok) {
       correctCount++;
       earnedPoints += pts;
+    }
+    if (debug) {
+      // Un solo examen de prueba: traza mínima por pregunta.
+      console.info('[grading]', {
+        questionId: q.id,
+        student: answerText,
+        expectedIndex,
+        gotIdx,
+        ok,
+        pts: ok ? pts : 0,
+        earnedPoints,
+      });
     }
   }
 
   const total = gradedTotal;
   const wrong = Math.max(0, total - correctCount);
   const pct = maxMcPoints > 0 ? calculatePercentage(earnedPoints, maxMcPoints) : 0;
+  if (debug) {
+    console.info('[grading:final]', {
+      formula: 'round(earnedPoints / maxMcPoints * 100)',
+      earnedPoints,
+      maxMcPoints,
+      pct,
+      correct: correctCount,
+      total,
+    });
+  }
   return { pct, correct: correctCount, wrong, total };
 }
 
