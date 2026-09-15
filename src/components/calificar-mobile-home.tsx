@@ -116,7 +116,7 @@ export function CalificarMobileHome({
 
   return (
     <div className="calificar-mobile-enter flex min-h-0 flex-1 flex-col lg:hidden">
-      <div className="mx-auto w-full max-w-lg flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 pb-4 pt-2">
+      <div className="mx-auto w-full max-w-lg shrink-0 space-y-4 px-4 pb-2 pt-2">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Calificar</h1>
           <p className="mt-1 text-sm text-gray-600">
@@ -157,15 +157,6 @@ export function CalificarMobileHome({
             />
           </CardContent>
         </Card>
-
-        {examId && examLoading ? (
-          <Card className="shadow-sm">
-            <CardContent className="flex items-center justify-center gap-2 py-8 text-sm text-gray-500">
-              <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
-              Preparando clave automática…
-            </CardContent>
-          </Card>
-        ) : null}
 
         {exam && !supportsCalifacil ? (
           <Card className="border-amber-200 bg-amber-50 shadow-sm">
