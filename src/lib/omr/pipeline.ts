@@ -106,7 +106,7 @@ export function isPrintedCalifacilLetterAfterWarp(canvas: HTMLCanvasElement): bo
   const center = estimateCanvasCenterLuminance(canvas);
   if (center < 0.42) return false;
   const bottom = estimateCanvasBottomBandLuminance(canvas);
-  if (center - bottom > 0.18) return false;
+  if (center - bottom > 0.28) return false;
   return true;
 }
 
@@ -154,23 +154,18 @@ export function prepareMobilePhotoAsScannedPdfLetter(
   const canonical = prepareCanonicalCalifacilLetterCanvas(source, {
     frameQuad: opts?.frameQuad ?? undefined,
     maxErrorPx: MAX_WARP_ALIGNMENT_ERROR_PX,
-    fast: false,
+    fast: true,
     forceWarp: true,
   });
   if (!canonical) return null;
   const warped = canonical.canvas;
   const alignment = canonical.alignment;
-  if (!alignment.ok || !isForcedWarpGradeCanvas(warped, alignment)) return null;
+  if (!isForcedWarpGradeCanvas(warped, alignment.ok ? alignment : undefined)) return null;
 
   const corners = countCalifacilCornerMarkers(warped);
-  const strips = hasCalifacilAlignStrips(warped);
   const cols = Math.max(2, opts?.omrCols ?? 4);
   const tableOk = isCalifacilExamSheetLikely(warped, cols);
-  if (corners < 4) {
-    if (!(corners >= 3 && strips && tableOk)) return null;
-  } else if (!strips && !tableOk) {
-    return null;
-  }
+  if (corners < 3 && !tableOk) return null;
 
   const scanned =
     prepareMobileScannedDocumentCanvas(warped, { skipPrintCrop: true }) ?? warped;
@@ -181,8 +176,7 @@ export function prepareMobilePhotoAsScannedPdfLetter(
       ? look
       : scaleCanvasToExactSize(look, expected.width, expected.height);
   const aligned = measureWarpedFiducialAlignment(sized, MAX_WARP_ALIGNMENT_ERROR_PX);
-  if (!aligned.ok && !alignment.ok) return null;
-  if (!isPrintedCalifacilLetterAfterWarp(sized)) return null;
+  if (!isPrintedCalifacilLetterAfterWarp(sized) && !tableOk && corners < 3) return null;
   return { canvas: sized, alignment: aligned.ok ? aligned : alignment };
 }
 
@@ -222,10 +216,11 @@ export function prepareCanonicalCalifacilLetterCanvas(
       sized.width === expected.width && sized.height === expected.height;
     const letterSized = exactRef || (!forceWarp && isReferenceGradeLetterCanvas(sized));
     if (!letterSized) return null;
-    if (forceWarp && !exactRef) return null;
     if (forceWarp) {
-      if (!aligned.ok) return null;
-      if (!isPrintedCalifacilLetterAfterWarp(sized)) return null;
+      if (!exactRef) return null;
+      if (!isPrintedCalifacilLetterAfterWarp(sized) && countCalifacilCornerMarkers(sized) < 3) {
+        return null;
+      }
       return { canvas: sized, alignment: aligned };
     }
     if (isCanonicalGradeCanvasReady(sized, aligned)) {
@@ -269,19 +264,15 @@ export function prepareCanonicalCalifacilLetterCanvas(
 
   if (forceWarp) {
     const tries: RoiQuad[] = [];
-    pushUniqueQuad(tries, locateAnswerSheetFiducialQuad(warpSrc, { strict: true }));
-    pushUniqueQuad(tries, detectCalifacilPhotoFiducialQuad(warpSrc));
-    pushUniqueQuad(tries, markerQuad);
     if (opts?.frameQuad) {
       const fill = measureRoiSheetFillRatio(opts.frameQuad, warpSrc.width, warpSrc.height);
-      const verified = verifyFiducialQuadOnCanvas(warpSrc, opts.frameQuad, {
-        minCorners: 4,
-        live: false,
-      });
-      if (verified && fill > 0.12 && fill <= 0.88) {
+      if (fill > 0.08 && fill <= 0.96) {
         pushUniqueQuad(tries, opts.frameQuad);
       }
     }
+    pushUniqueQuad(tries, locateAnswerSheetFiducialQuad(warpSrc, { strict: false }));
+    pushUniqueQuad(tries, detectCalifacilPhotoFiducialQuad(warpSrc));
+    pushUniqueQuad(tries, markerQuad);
 
     let best: {
       canvas: HTMLCanvasElement;
@@ -290,26 +281,14 @@ export function prepareCanonicalCalifacilLetterCanvas(
     } | null = null;
     for (const q of tries) {
       const fill = measureRoiSheetFillRatio(q, warpSrc.width, warpSrc.height);
-      if (fill > 0.92) continue;
-      const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast: false });
+      if (fill > 0.97) continue;
+      const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast: true });
       if (!result.warped) continue;
       const warpedAlign =
         result.alignment ?? measureWarpedFiducialAlignment(result.warped, maxErrorPx);
-      const registered = registerWarpedSheetToPrintTemplate(result.warped, maxErrorPx);
-      const candidate =
-        registered.alignment.ok &&
-        registered.alignment.maxErrorPx <= warpedAlign.maxErrorPx + 1
-          ? registered
-          : warpedAlign.ok
-            ? { canvas: result.warped, alignment: warpedAlign }
-            : registered.alignment.ok
-              ? registered
-              : null;
-      if (!candidate) continue;
-      const finished = finishCanonical(candidate.canvas, candidate.alignment);
-      if (!finished || !finished.alignment.ok) continue;
-      if (!isPrintedCalifacilLetterAfterWarp(finished.canvas)) continue;
-      const score = -finished.alignment.maxErrorPx;
+      const finished = finishCanonical(result.warped, warpedAlign);
+      if (!finished) continue;
+      const score = finished.alignment.ok ? -finished.alignment.maxErrorPx : -80;
       if (!best || score > best.score) {
         best = { canvas: finished.canvas, alignment: finished.alignment, score };
       }

@@ -131,7 +131,6 @@ import {
   isPrintedCalifacilLetterAfterWarp,
   isPhotoSheetWarpAcceptable,
   pdfPaginaPseudoFile,
-  letterCanvasToPdfFile,
   prepareMobilePhotoAsScannedPdfLetter,
 } from '@/lib/omr/pipeline';
 import {
@@ -4145,17 +4144,9 @@ export default function CalificarPage() {
         return;
       }
 
-      const locatedStrict = locateAnswerSheetFiducialQuad(fullCanvas, { strict: true });
+      const locatedLive = locateAnswerSheetFiducialQuad(fullCanvas);
       const frameQuadHint = opts?.frameQuad ?? null;
-      const frameQuad =
-        locatedStrict ??
-        (frameQuadHint &&
-        verifyFiducialQuadOnCanvas(fullCanvas, frameQuadHint, { minCorners: 4, live: false })
-          ? frameQuadHint
-          : null);
-      if (video && !opts?.fromGallery && !frameQuad && !locatedStrict) {
-        // Seguir: prepareMobilePhotoAsScannedPdfLetter re-detecta en el frame.
-      }
+      const frameQuad = locatedLive ?? frameQuadHint;
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
       let sheetKind: ZipGradeSheetKind =
@@ -4189,13 +4180,6 @@ export default function CalificarPage() {
           'No se enderezó la hoja. Encuadra los 4 cuadritos negros (sin mesa ni piernas).'
         );
         setLiveStatus('Centra la hoja: los 4 cuadritos negros deben verse.');
-        return;
-      }
-
-      if (sheetKind === 'califacil' && !isPrintedCalifacilLetterAfterWarp(warped)) {
-        clearPreview();
-        toast.error('No se enderezó la hoja. Encuadra los 4 cuadritos negros e inténtalo de nuevo.');
-        setLiveStatus('La foto no parece un escáner. Repite con la hoja completa.');
         if (video) resumeLiveVideoAfterScan(video);
         return;
       }
@@ -4243,17 +4227,9 @@ export default function CalificarPage() {
       let displayCanvas: HTMLCanvasElement = warped;
       let readingOverride: CalifacilOmrReadingResult | undefined;
 
-      let pdfFile: File | undefined;
       if (sheetKind === 'califacil') {
-        try {
-          pdfFile = await letterCanvasToPdfFile(warped);
-          const rendered = await renderPdfGradingPageCanvas(pdfFile, 1);
-          displayCanvas = rendered.canvas;
-          scanCanvas = rendered.canvas;
-          warped = rendered.canvas;
-        } catch {
-          pdfFile = undefined;
-        }
+        displayCanvas = warped;
+        scanCanvas = warped;
         const letterFreeze = canvasPreviewJpeg(displayCanvas, 900, 0.7);
         if (letterFreeze) setMobileScanPreviewUrl(letterFreeze.dataUrl);
       } else {
@@ -4288,12 +4264,12 @@ export default function CalificarPage() {
 
       const result = await finalizeCapturedSheet(
         sheetKind === 'califacil' ? displayCanvas : scanCanvas,
-        sheetKind === 'califacil' ? pdfFile : undefined,
+        sheetKind === 'califacil' ? pdfPaginaPseudoFile(1) : undefined,
         {
-        preWarped: sheetKind === 'califacil' ? !pdfFile : true,
+        preWarped: true,
         warpAlignment: alignment,
         skipReviewUi: true,
-        skipSheetValidation: sheetKind !== 'califacil',
+        skipSheetValidation: true,
         displaySource: displayCanvas,
         readingOverride,
         uploadKind: sheetKind === 'califacil' ? 'pdf' : undefined,
@@ -4626,7 +4602,7 @@ export default function CalificarPage() {
       setScanBusy(false);
       setLiveStatus('');
       toast.error('La lectura tardó demasiado. Prueba con un PDF o una foto más nítida.');
-    }, useLiveCameraUi ? 12000 : 60000);
+    }, useLiveCameraUi ? 45000 : 60000);
     return () => window.clearTimeout(timeout);
   }, [scanBusy, useLiveCameraUi]);
 

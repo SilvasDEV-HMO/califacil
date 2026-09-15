@@ -1,6 +1,6 @@
 export const CAPTURE_STABLE_TICKS_REQUIRED = 2;
-/** Ticks consecutivos (~50 ms) con 4/4 antes de congelar y disparar. */
-export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 4;
+/** Al primer tick con 4/4: congelar y disparar (sin esperar un segundo). */
+export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 1;
 
 export type AutoCaptureGate = {
   autoShutterEnabled: boolean;
