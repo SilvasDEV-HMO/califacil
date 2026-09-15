@@ -12,7 +12,7 @@ import {
 import { createPortal, flushSync } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertCircle, FileUp, FolderOpen, Info, LayoutDashboard, Loader2, X } from 'lucide-react';
+import { AlertCircle, FileUp, Files, FolderOpen, Info, LayoutDashboard, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { useExam, useExams } from '@/hooks/useExams';
@@ -129,6 +129,8 @@ import {
   isForcedWarpGradeCanvas,
   isPrintedCalifacilLetterAfterWarp,
   isPhotoSheetWarpAcceptable,
+  pdfPaginaPseudoFile,
+  prepareMobilePhotoAsScannedPdfLetter,
 } from '@/lib/omr/pipeline';
 import {
   prepareLetterGradeCanvas,
@@ -721,7 +723,10 @@ export default function CalificarPage() {
   >(undefined);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const filesInputRef = useRef<HTMLInputElement>(null);
   const cameraCaptureInputRef = useRef<HTMLInputElement>(null);
+  const [folderFileChooser, setFolderFileChooser] = useState<File[] | null>(null);
+  const [folderFileChosen, setFolderFileChosen] = useState<Record<number, boolean>>({});
   const [batchSummary, setBatchSummary] = useState<BatchGradeItem[] | null>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   /** Cancela lecturas desktop JPG/PDF tardías (timeout / nueva subida). */
@@ -1792,10 +1797,25 @@ export default function CalificarPage() {
         const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
         const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
         // Overlay = geometría anclada a anillos (misma carta que el JPEG).
-        const overlayGeom =
+        let overlayGeom =
           meta.geometry?.cells?.length
             ? meta.geometry
             : buildDisplayOverlayGeometry(reviewCanvas, omrCols, omrRowCount);
+        if (overlayGeom?.cells?.length) {
+          overlayGeom = syncCalifacilOmrGeometryImageSize(
+            overlayGeom,
+            reviewCanvas.width,
+            reviewCanvas.height
+          );
+          const attached = snapReviewOverlayToPrintedRings(
+            reviewCanvas,
+            { ...meta, geometry: overlayGeom, picks: raw },
+            omrCols,
+            omrRowCount,
+            { maxShiftRatio: 0.28, maxShiftRatioY: 0.22, biasRows: omrRowCount }
+          );
+          overlayGeom = attached.geometry ?? overlayGeom;
+        }
         const geomClone = overlayGeom
           ? syncCalifacilOmrGeometryImageSize(overlayGeom, previewW, previewH)
           : emptyOverlayGeometry(previewW, previewH);
@@ -1878,7 +1898,7 @@ export default function CalificarPage() {
             { ...meta, geometry: reviewGeom, picks: raw },
             omrCols,
             omrRowCount,
-            { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
+            { maxShiftRatio: 0.28, maxShiftRatioY: 0.22, biasRows: omrRowCount }
           );
           reviewGeom = attached.geometry ?? reviewGeom;
         } else if (previewCanvas) {
@@ -1895,7 +1915,7 @@ export default function CalificarPage() {
               { ...meta, geometry: reviewGeom, picks: raw },
               omrCols,
               omrRowCount,
-              { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
+              { maxShiftRatio: 0.28, maxShiftRatioY: 0.22, biasRows: omrRowCount }
             );
             reviewGeom = attached.geometry ?? reviewGeom;
           }
@@ -2155,9 +2175,7 @@ export default function CalificarPage() {
         return;
       }
       const gradeCanvas = canonical.canvas;
-      const pseudoFile = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], `pdf-pagina-${pageNumber}.jpg`, {
-        type: 'image/jpeg',
-      });
+      const pseudoFile = pdfPaginaPseudoFile(pageNumber);
       flushSync(() => setLiveStatus('Leyendo examen…'));
       await yieldForSpinnerPaint();
       await finalizeCapturedSheet(gradeCanvas, pseudoFile, {
@@ -2715,6 +2733,23 @@ export default function CalificarPage() {
                 locatedFiducials,
                 0.38
               );
+              const snapFill = measureRoiSheetFillRatio(snapQuad, roiW, roiH);
+              const sheetReady = isMobileExamSheetReadyForCapture({
+                fiducialCount,
+                fiducialCorners,
+                stripAligned,
+                quad: snapQuad,
+                roiW,
+                roiH,
+                fillRatio: snapFill,
+                roiCanvas,
+              });
+              if (!sheetReady) {
+                setMobileExamReadyForCapture(false);
+                setLiveStatus('Encuadra solo la hoja de respuestas (cuadros negros).');
+                nextDelay = MOBILE_CORNER_LOOP_MS;
+                return;
+              }
               smoothedRoiQuadRef.current = snapQuad;
               lastRawRoiQuadRef.current = locatedFiducials;
               lastRoiQuadRef.current = snapQuad;
@@ -2723,7 +2758,7 @@ export default function CalificarPage() {
               setMobileStableTicks(cornerStableTicksRef.current);
               setCornersAlignedView(true);
               setMobileExamReadyForCapture(true);
-              setMobileSheetFillRatio(measureRoiSheetFillRatio(snapQuad, roiW, roiH));
+              setMobileSheetFillRatio(snapFill);
               mobileCaptureGateRef.current = {
                 fiducialCount,
                 fiducialCorners,
@@ -2732,7 +2767,7 @@ export default function CalificarPage() {
                 fiducialQuad: locatedFiducials,
                 roiW,
                 roiH,
-                fillRatio: measureRoiSheetFillRatio(snapQuad, roiW, roiH),
+                fillRatio: snapFill,
                 roiCanvas,
               };
               lowVisibilityTicksRef.current = 0;
@@ -3502,10 +3537,7 @@ export default function CalificarPage() {
     setBatchSummary(null);
     const results: BatchGradeItem[] = [];
 
-    const pdfPseudo = (pageNumber: number) =>
-      new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], `pdf-pagina-${pageNumber}.jpg`, {
-        type: 'image/jpeg',
-      });
+    const pdfPseudo = (pageNumber: number) => pdfPaginaPseudoFile(pageNumber);
 
     try {
       for (let i = 0; i < files.length; i++) {
@@ -3680,7 +3712,45 @@ export default function CalificarPage() {
     const list = e.target.files;
     e.target.value = '';
     if (!list || list.length === 0) return;
+    offerFolderFileChooser(Array.from(list));
+  };
+
+  const handleMultiGradeFiles = async (e: ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files;
+    e.target.value = '';
+    if (!list || list.length === 0) return;
     await ingestPickedDesktopFiles(Array.from(list));
+  };
+
+  const offerFolderFileChooser = (picked: File[]) => {
+    const all = picked
+      .filter(isDesktopFolderGradeFile)
+      .sort((a, b) =>
+        folderFileLabel(a).localeCompare(folderFileLabel(b), 'es', { numeric: true })
+      );
+    if (all.length === 0) {
+      toast.error('La carpeta no tiene PDF (ni JPG/PNG) para calificar.');
+      return;
+    }
+    if (all.length === 1) {
+      void ingestPickedDesktopFiles(all);
+      return;
+    }
+    setFolderFileChooser(all);
+    setFolderFileChosen(Object.fromEntries(all.map((_, i) => [i, true])));
+  };
+
+  const confirmFolderFileChooser = async () => {
+    const files = folderFileChooser;
+    if (!files?.length) return;
+    const selected = files.filter((_, i) => folderFileChosen[i] !== false);
+    if (selected.length === 0) {
+      toast.error('Marca al menos un examen para calificar.');
+      return;
+    }
+    setFolderFileChooser(null);
+    setFolderFileChosen({});
+    await ingestPickedDesktopFiles(selected);
   };
 
   const ingestPickedDesktopFiles = async (picked: File[]) => {
@@ -3752,7 +3822,7 @@ export default function CalificarPage() {
     }
   };
 
-  const pickGradeFiles = async () => {
+  const pickGradeFolder = async () => {
     setDesktopScanKind('folder');
     const picker = window as Window & {
       showDirectoryPicker?: (opts?: { mode?: 'read' }) => Promise<DirectoryHandleLike>;
@@ -3761,11 +3831,7 @@ export default function CalificarPage() {
       try {
         const dir = await picker.showDirectoryPicker({ mode: 'read' });
         const files = await collectGradeFilesFromDirectoryHandle(dir);
-        if (files.length === 0) {
-          toast.error('La carpeta no tiene PDF (ni JPG/PNG) para calificar.');
-          return;
-        }
-        await ingestPickedDesktopFiles(files);
+        offerFolderFileChooser(files);
         return;
       } catch (err) {
         const name = err instanceof DOMException ? err.name : '';
@@ -3773,6 +3839,42 @@ export default function CalificarPage() {
       }
     }
     folderInputRef.current?.click();
+  };
+
+  const pickGradeFileList = async () => {
+    setDesktopScanKind('folder');
+    const picker = window as Window & {
+      showOpenFilePicker?: (opts: {
+        multiple?: boolean;
+        types?: Array<{ description?: string; accept: Record<string, string[]> }>;
+      }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+    };
+    if (typeof picker.showOpenFilePicker === 'function') {
+      try {
+        const handles = await picker.showOpenFilePicker({
+          multiple: true,
+          types: [
+            {
+              description: 'Exámenes escaneados',
+              accept: {
+                'application/pdf': ['.pdf'],
+                'image/jpeg': ['.jpg', '.jpeg'],
+                'image/png': ['.png'],
+                'image/webp': ['.webp'],
+              },
+            },
+          ],
+        });
+        const files = await Promise.all(handles.map((h) => h.getFile()));
+        if (files.length === 0) return;
+        await ingestPickedDesktopFiles(files);
+        return;
+      } catch (err) {
+        const name = err instanceof DOMException ? err.name : '';
+        if (name === 'AbortError') return;
+      }
+    }
+    filesInputRef.current?.click();
   };
 
   const presentInstantCaptureGrade = useCallback(
@@ -4030,25 +4132,13 @@ export default function CalificarPage() {
       let alignment: WarpAlignmentReport | null = null;
 
       if (sheetKind !== 'zipgrade') {
-        const canonical = prepareCanonicalCalifacilLetterCanvas(fullCanvas, {
+        const scanned = prepareMobilePhotoAsScannedPdfLetter(fullCanvas, {
           frameQuad: frameQuad ?? undefined,
-          maxErrorPx: MAX_WARP_ALIGNMENT_ERROR_PX,
-          fast: false,
-          forceWarp: true,
+          omrCols,
         });
-        if (canonical) {
-          warped = canonical.canvas;
-          alignment = canonical.alignment;
-        }
-        if (!warped || !alignment?.ok || !isForcedWarpGradeCanvas(warped, alignment)) {
-          warped = null;
-          alignment = null;
-        } else if (
-          !hasCalifacilAlignStrips(warped) ||
-          countCalifacilCornerMarkers(warped) < 3
-        ) {
-          warped = null;
-          alignment = null;
+        if (scanned) {
+          warped = scanned.canvas;
+          alignment = scanned.alignment;
         }
       }
 
@@ -4107,196 +4197,49 @@ export default function CalificarPage() {
         }
       }
 
-      let califacilFastScan: Awaited<ReturnType<typeof runFastWarpedScan>> | null = null;
       let zipPreviewMeta: Pick<OmrScanMetaResult, 'geometry' | 'picks'> | null = null;
       let scanCanvas: HTMLCanvasElement = warped;
       let displayCanvas: HTMLCanvasElement = warped;
+      let readingOverride: CalifacilOmrReadingResult | undefined;
 
       if (sheetKind === 'califacil') {
-        califacilFastScan = await runFastWarpedScan(warped, alignment, chunkRows);
-        scanCanvas = warped;
         displayCanvas = warped;
-        if (
-          califacilFastScan.docCanvas instanceof HTMLCanvasElement &&
-          isForcedWarpGradeCanvas(califacilFastScan.docCanvas, alignment)
-        ) {
-          scanCanvas = califacilFastScan.docCanvas;
-        }
-        if (
-          califacilFastScan.displayCanvas instanceof HTMLCanvasElement &&
-          isForcedWarpGradeCanvas(califacilFastScan.displayCanvas, alignment)
-        ) {
-          displayCanvas = califacilFastScan.displayCanvas;
-          scanCanvas = displayCanvas;
-        } else if (
-          califacilFastScan.docCanvas instanceof HTMLCanvasElement &&
-          isForcedWarpGradeCanvas(califacilFastScan.docCanvas, alignment)
-        ) {
-          displayCanvas = califacilFastScan.docCanvas;
-          scanCanvas = displayCanvas;
-        }
-        if (califacilFastScan.rejectedCorners && !isForcedWarpGradeCanvas(displayCanvas, alignment)) {
-          clearPreview();
-          const corners = countCalifacilCornerMarkers(warped);
-          const glareLikely = corners >= 2 && corners < 4;
-          toast.error(
-            glareLikely
-              ? 'Mejora la luz y evita el brillo en las esquinas. Luego centra de nuevo.'
-              : 'Centra la hoja: 3 esquinas + franjas laterales, o las 4 esquinas negras.'
-          );
-          setLiveStatus(
-            glareLikely
-              ? 'Reduce el brillo arriba y acerca las esquinas negras.'
-              : 'Centra la hoja: 3 esquinas + franjas laterales, o las 4.'
-          );
-          if (video) resumeLiveVideoAfterScan(video);
-          return;
-        }
-        // Preview + overlay = misma carta warpeada (plantilla PDF, no foto cruda).
+        scanCanvas = warped;
         const letterFreeze = canvasPreviewJpeg(displayCanvas, 900, 0.7);
         if (letterFreeze) setMobileScanPreviewUrl(letterFreeze.dataUrl);
-        const snappedGeom = califacilFastScan.meta?.geometry ?? null;
-        const overlayGeom = syncCalifacilOmrGeometryImageSize(
-          snappedGeom ??
-            buildDisplayOverlayGeometry(displayCanvas, omrCols, omrRowCount),
-          letterFreeze?.width ?? displayCanvas.width,
-          letterFreeze?.height ?? displayCanvas.height
-        );
-        setMobileScanPreviewGeometry(overlayGeom);
-        if (califacilFastScan.meta?.picks?.length) {
-          setMobileScanPreviewPicks(califacilFastScan.meta.picks.slice(0, chunkRows));
-        }
       } else {
         const zgPreview = scanZipGradeAnswerSheet(warped, omrCols, chunkRows);
         zipPreviewMeta = { picks: zgPreview.picks, geometry: zgPreview.geometry };
         scanCanvas = warped;
         displayCanvas = warped;
-      }
-
-      const hasOmr =
-        sheetKind === 'califacil'
-          ? Boolean(califacilFastScan?.meta) && isForcedWarpGradeCanvas(displayCanvas, alignment)
-          : Boolean(zipPreviewMeta?.geometry || zipPreviewMeta?.picks.some((p) => p != null));
-
-      // Con lectura OMR válida: ir directo al popup (sin review manual).
-      if (sheetKind === 'califacil' && !hasOmr) {
-        clearPreview();
-        toast.error('No se pudo leer las burbujas. Encuadra de nuevo e intenta otra vez.');
-        setLiveStatus('No se leyó la tabla. Vuelve a capturar.');
-        if (video) resumeLiveVideoAfterScan(video);
-        return;
-      }
-
-      // Sin preview JPEG bloqueante: ir directo a finalize → popup.
-      // El preview del modal se genera ligero dentro de finalizeCapturedSheet.
-
-      let readingOverride: CalifacilOmrReadingResult | undefined;
-      if (sheetKind === 'zipgrade' && zipPreviewMeta) {
-        const zgRows = Array.from({ length: chunkRows }, () => ({
-          pick: null as number | null,
-          ambiguous: false,
-          inkFractions: [] as number[],
-        }));
-        readingOverride = buildCalifacilOmrReadingOverride(
-          {
-            picks: zipPreviewMeta.picks,
-            rows: zgRows,
-            needsVisionAssist: false,
-            maxSameColumnCount: 0,
-            geometry: zipPreviewMeta.geometry,
-            reviewSourceCanvas: displayCanvas,
-            controlNumberDigits: [],
-            controlNumber: null,
-          },
-          chunk,
-          scanCanvas,
-          liveLockedAnswersRef.current,
-          alignment
-        );
-      } else if (sheetKind === 'califacil' && califacilFastScan?.meta) {
-        const letterCanvas = displayCanvas;
-        let warpMeta = sanitizeAnswerSheetOmrMeta(
-          {
-            ...califacilFastScan.meta,
-            picks: califacilFastScan.meta.picks.slice(0, Math.max(chunkRows, omrRowCount)),
-            rows: califacilFastScan.meta.rows.slice(0, Math.max(chunkRows, omrRowCount)),
-            reviewSourceCanvas: letterCanvas,
-            geometry: califacilFastScan.meta.geometry,
-          },
-          chunkRows
-        );
-
-        const displayGeom = syncCalifacilOmrGeometryImageSize(
-          warpMeta.geometry ??
-            buildDisplayOverlayGeometry(letterCanvas, omrCols, omrRowCount),
-          letterCanvas.width,
-          letterCanvas.height
-        );
-
-        const resolvedCount = countResolvedOmrPicks(warpMeta.picks.slice(0, chunkRows));
-        const blankSheet = isAnswerSheetOmrMostlyBlank(warpMeta, chunkRows);
-        const collapsed =
-          resolvedCount >= 8 &&
-          warpMeta.maxSameColumnCount >= Math.max(8, Math.ceil(resolvedCount * 0.8));
-        let trusted = resolvedCount >= Math.ceil(chunkRows * 0.7) && !blankSheet;
-        const partialOk = resolvedCount >= 1 && !blankSheet && !collapsed;
-
-        if (blankSheet) {
-          warpMeta = {
-            ...warpMeta,
-            picks: Array(chunkRows).fill(null) as (number | null)[],
-            rows: warpMeta.rows.slice(0, chunkRows).map((r) => ({
-              ...r,
-              pick: null,
-              ambiguous: false,
-            })),
-            maxSameColumnCount: 0,
-            needsVisionAssist: false,
-            reviewSourceCanvas: letterCanvas,
-            geometry: displayGeom,
-          };
-          trusted = false;
-        } else if (trusted || partialOk) {
-          warpMeta = {
-            ...warpMeta,
-            picks: warpMeta.picks.slice(0, chunkRows),
-            rows: warpMeta.rows.slice(0, chunkRows),
-            reviewSourceCanvas: letterCanvas,
-            geometry: displayGeom,
-          };
-        } else {
-          warpMeta = {
-            ...warpMeta,
-            picks: Array(chunkRows).fill(null) as (number | null)[],
-            rows: warpMeta.rows.slice(0, chunkRows).map((r) => ({
-              ...r,
-              pick: null,
-              ambiguous: false,
-            })),
-            maxSameColumnCount: 0,
-            needsVisionAssist: false,
-            reviewSourceCanvas: letterCanvas,
-            geometry: displayGeom,
-          };
+        if (zipPreviewMeta) {
+          const zgRows = Array.from({ length: chunkRows }, () => ({
+            pick: null as number | null,
+            ambiguous: false,
+            inkFractions: [] as number[],
+          }));
+          readingOverride = buildCalifacilOmrReadingOverride(
+            {
+              picks: zipPreviewMeta.picks,
+              rows: zgRows,
+              needsVisionAssist: false,
+              maxSameColumnCount: 0,
+              geometry: zipPreviewMeta.geometry,
+              reviewSourceCanvas: displayCanvas,
+              controlNumberDigits: [],
+              controlNumber: null,
+            },
+            chunk,
+            scanCanvas,
+            liveLockedAnswersRef.current,
+            alignment
+          );
         }
-
-        readingOverride = buildCalifacilOmrReadingOverride(
-          {
-            ...warpMeta,
-            reviewSourceCanvas: letterCanvas,
-            geometry: displayGeom,
-          },
-          chunk,
-          letterCanvas,
-          liveLockedAnswersRef.current,
-          alignment,
-          { trustedMobileRead: trusted || blankSheet || partialOk }
-        );
       }
 
       const result = await finalizeCapturedSheet(
         sheetKind === 'califacil' ? displayCanvas : scanCanvas,
-        undefined,
+        sheetKind === 'califacil' ? pdfPaginaPseudoFile(1) : undefined,
         {
         preWarped: true,
         warpAlignment: alignment,
@@ -4304,7 +4247,7 @@ export default function CalificarPage() {
         skipSheetValidation: true,
         displaySource: displayCanvas,
         readingOverride,
-        uploadKind: sheetKind === 'califacil' ? 'flatDocument' : undefined,
+        uploadKind: sheetKind === 'califacil' ? 'pdf' : undefined,
       });
       if (result.success) {
         setMobileScanPreviewUrl(null);
@@ -4324,8 +4267,6 @@ export default function CalificarPage() {
       clearMobileScanPreviewState,
       finalizeCapturedSheet,
       omrCols,
-      omrRowCount,
-      runFastWarpedScan,
       setTorchEnabled,
       sheets,
     ]
@@ -4575,80 +4516,21 @@ export default function CalificarPage() {
         setReviewStatus('No hay preguntas en esta hoja.');
         return;
       }
-      const { meta, docCanvas, displayCanvas, rejectedCorners, bubbleFit } = await runFastWarpedScan(
-        mobileReviewAlign.warped,
-        mobileReviewAlign.alignment,
-        chunk.length
-      );
-      if (rejectedCorners || !meta) {
-        setReviewStatus('Centra la hoja: 3 esquinas + franjas laterales, o las 4.');
-        toast.error('Centra la hoja: 3 esquinas + franjas laterales, o las 4 esquinas negras.');
-        return;
-      }
-      let gradeMeta = sanitizeAnswerSheetOmrMeta(meta, chunk.length);
-      if (isAnswerSheetOmrMostlyBlank(gradeMeta, chunk.length)) {
-        gradeMeta = {
-          ...gradeMeta,
-          picks: Array(chunk.length).fill(null) as (number | null)[],
-          rows: gradeMeta.rows.slice(0, chunk.length).map((r) => ({
-            ...r,
-            pick: null,
-            ambiguous: false,
-          })),
-          maxSameColumnCount: 0,
-          needsVisionAssist: false,
-        };
-      } else if (
-        (bubbleFit ?? 0) < LETTER_GRADE_MIN_BUBBLE_FIT ||
-        countResolvedOmrPicks(gradeMeta.picks.slice(0, chunk.length)) <
-          Math.ceil(chunk.length * 0.7) ||
-        isWeakMobileOmrMeta(gradeMeta, chunk.length, chunk.length) ||
-        !isStrongMobileOmrMeta(gradeMeta, chunk.length, chunk.length)
-      ) {
-        setReviewStatus('Lectura poco fiable. Vuelve a capturar con mejor luz.');
-        toast.error('No se pudo leer bien las respuestas. Encuadra de nuevo e intenta otra vez.');
-        return;
-      }
-      const resolved = resolveMobileGradeDisplay(
-        displayCanvas,
-        docCanvas,
+      const scanned = prepareMobilePhotoAsScannedPdfLetter(mobileReviewAlign.warped, {
         omrCols,
-        omrRowCount,
-        gradeMeta
-      );
-      const fitOk =
-        (bubbleFit ?? 0) >= LETTER_GRADE_MIN_BUBBLE_FIT ||
-        (resolved.geometry != null &&
-          measureLetterGeometryBubbleFit(
-            resolved.previewCanvas,
-            resolved.geometry,
-            omrRowCount
-          ) >= LETTER_GRADE_MIN_BUBBLE_FIT);
-      const readingOverride = buildCalifacilOmrReadingOverride(
-        {
-          ...gradeMeta,
-          reviewSourceCanvas: resolved.previewCanvas,
-          geometry: resolved.geometry,
-        },
-        chunk,
-        docCanvas,
-        liveLockedAnswersRef.current,
-        mobileReviewAlign.alignment,
-        {
-          trustedMobileRead:
-            fitOk &&
-            countResolvedOmrPicks(gradeMeta.picks.slice(0, chunk.length)) >=
-              Math.ceil(chunk.length * 0.7),
-        }
-      );
-      const result = await finalizeCapturedSheet(docCanvas, undefined, {
+      });
+      if (!scanned) {
+        setReviewStatus('Centra la hoja: 4 esquinas negras y franjas laterales.');
+        toast.error('Eso no es una hoja CaliFácil. Encuadra el examen impreso.');
+        return;
+      }
+      const result = await finalizeCapturedSheet(scanned.canvas, pdfPaginaPseudoFile(1), {
         preWarped: true,
-        warpAlignment: mobileReviewAlign.alignment,
+        warpAlignment: scanned.alignment,
         skipReviewUi: true,
         skipSheetValidation: true,
-        displaySource: resolved.previewCanvas,
-        readingOverride,
-        uploadKind: 'flatDocument',
+        displaySource: scanned.canvas,
+        uploadKind: 'pdf',
       });
       if (result.success) {
         playScanCompleteChime();
@@ -4663,7 +4545,7 @@ export default function CalificarPage() {
     } finally {
       setReviewScanning(false);
     }
-  }, [finalizeCapturedSheet, mobileReviewAlign, omrCols, omrRowCount, runFastWarpedScan, sheets]);
+  }, [finalizeCapturedSheet, mobileReviewAlign, omrCols, sheets]);
 
   finalizeMobileReviewGradeRef.current = finalizeMobileReviewGrade;
 
@@ -5268,6 +5150,15 @@ export default function CalificarPage() {
             {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
             onChange={handleFolderFiles}
           />
+          <input
+            ref={filesInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+            className="hidden"
+            aria-hidden
+            onChange={handleMultiGradeFiles}
+          />
         </>
       )}
 
@@ -5281,7 +5172,7 @@ export default function CalificarPage() {
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
             ? 'Cámara a pantalla completa: encuadra toda la hoja impresa. Captura automática al detectar respuestas, o pulsa el botón naranja.'
-            : 'En ordenador sube PDF escaneados, o una carpeta con todos los PDF, para calificar automáticamente.'}
+            : 'En ordenador sube PDF escaneados, una carpeta (y eliges qué archivos), o archivos sueltos.'}
         </p>
       </div>
 
@@ -5412,7 +5303,7 @@ export default function CalificarPage() {
                       type="button"
                       className="bg-orange-600 hover:bg-orange-700"
                       disabled={scanBusy || !canGradeStudents}
-                      onClick={() => void pickGradeFiles()}
+                      onClick={() => void pickGradeFolder()}
                     >
                       {scanBusy && desktopScanKind === 'folder' ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
@@ -5423,16 +5314,118 @@ export default function CalificarPage() {
                         ? 'Calificando carpeta…'
                         : 'Elegir carpeta…'}
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                      disabled={scanBusy || !canGradeStudents}
+                      onClick={() => void pickGradeFileList()}
+                    >
+                      <Files className="mr-2 h-4 w-4" aria-hidden />
+                      Elegir archivos…
+                    </Button>
                   </div>
                   <p className="text-[11px] text-gray-500">
-                    Elige la carpeta: se califican todos los PDF que hay dentro (también JPG/PNG si
-                    hay).
+                    Carpeta: eliges la carpeta y luego qué PDF (o JPG/PNG) calificar. Archivos:
+                    entras a la carpeta y marcas los exámenes en el explorador.
                   </p>
                   {scanBusy && liveStatus ? (
                     <p className="text-xs font-medium text-orange-800">{liveStatus}</p>
                   ) : null}
                 </div>
               )}
+
+              <Dialog
+                open={Boolean(folderFileChooser?.length)}
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setFolderFileChooser(null);
+                    setFolderFileChosen({});
+                  }
+                }}
+              >
+                <DialogContent className="max-h-[min(90vh,640px)] max-w-lg gap-0 overflow-hidden p-0">
+                  <DialogHeader className="border-b px-4 py-3 sm:px-6">
+                    <DialogTitle>Exámenes en la carpeta</DialogTitle>
+                    <DialogDescription>
+                      Marca los que quieres calificar. Por defecto van todos.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="flex items-center gap-2 border-b px-4 py-2 sm:px-6">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setFolderFileChosen(
+                          Object.fromEntries((folderFileChooser ?? []).map((_, i) => [i, true]))
+                        )
+                      }
+                    >
+                      Todos
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setFolderFileChosen(
+                          Object.fromEntries((folderFileChooser ?? []).map((_, i) => [i, false]))
+                        )
+                      }
+                    >
+                      Ninguno
+                    </Button>
+                    <span className="ml-auto text-xs text-gray-500">
+                      {(folderFileChooser ?? []).filter((_, i) => folderFileChosen[i] !== false).length}
+                      /{folderFileChooser?.length ?? 0}
+                    </span>
+                  </div>
+                  <div className="max-h-[min(50vh,360px)] overflow-y-auto px-4 py-2 sm:px-6">
+                    <ul className="space-y-1">
+                      {(folderFileChooser ?? []).map((file, i) => (
+                        <li key={`${folderFileLabel(file)}-${i}`}>
+                          <label className="flex cursor-pointer items-start gap-2 rounded-md px-1 py-1.5 hover:bg-orange-50">
+                            <input
+                              type="checkbox"
+                              className="mt-1 h-4 w-4 accent-orange-600"
+                              checked={folderFileChosen[i] !== false}
+                              onChange={(ev) =>
+                                setFolderFileChosen((prev) => ({
+                                  ...prev,
+                                  [i]: ev.target.checked,
+                                }))
+                              }
+                            />
+                            <span className="break-all text-sm text-gray-800">
+                              {folderFileLabel(file)}
+                            </span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <DialogFooter className="border-t px-4 py-3 sm:px-6">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setFolderFileChooser(null);
+                        setFolderFileChosen({});
+                      }}
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="button"
+                      className="bg-orange-600 hover:bg-orange-700"
+                      onClick={() => void confirmFolderFileChooser()}
+                    >
+                      Calificar seleccionados
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
 
               <Dialog open={virtualKeyTableDialogOpen} onOpenChange={setVirtualKeyTableDialogOpen}>
                 <DialogContent className="max-h-[min(90vh,720px)] max-w-lg gap-0 overflow-y-auto p-4 sm:p-6">
@@ -5702,7 +5695,7 @@ export default function CalificarPage() {
                         type="button"
                         className="bg-orange-600 hover:bg-orange-700"
                         disabled={scanBusy || !canGradeStudents}
-                        onClick={() => void pickGradeFiles()}
+                        onClick={() => void pickGradeFolder()}
                       >
                         {scanBusy && desktopScanKind === 'folder' ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
@@ -5713,10 +5706,20 @@ export default function CalificarPage() {
                           ? 'Calificando carpeta…'
                           : 'Elegir carpeta…'}
                       </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                        disabled={scanBusy || !canGradeStudents}
+                        onClick={() => void pickGradeFileList()}
+                      >
+                        <Files className="mr-2 h-4 w-4" aria-hidden />
+                        Elegir archivos…
+                      </Button>
                     </div>
                     <p className="text-[11px] text-gray-500">
-                      Elige la carpeta: se califican todos los PDF que hay dentro (también JPG/PNG
-                      si hay).
+                      Carpeta: eliges la carpeta y luego qué PDF calificar. Archivos: entras a la
+                      carpeta y marcas los exámenes en el explorador.
                     </p>
                   </div>
                 </div>

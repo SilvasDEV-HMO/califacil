@@ -22,7 +22,7 @@ type Props = {
 
 type BubbleCircle = { cx: number; cy: number; r: number };
 
-const RADIUS_SCALE = 0.3;
+const RADIUS_SCALE = 0.26;
 const SANE_BUBBLE_R_MIN = 0.002;
 const SANE_BUBBLE_R_MAX = 0.06;
 
@@ -65,12 +65,11 @@ function resolveCircle(
   imageW: number,
   imageH: number
 ): BubbleCircle | null {
-  const fromCell = cell ? cellToBubbleCircle(cell, imageW, imageH) : null;
-  if (fromCell) return fromCell;
   const maxRPx = Math.min(imageW, imageH) * 0.04;
   if (bubble && isSaneBubbleR(bubble.r)) {
     return bubbleSampleToCircle(bubble, imageW, imageH, maxRPx);
   }
+  if (cell) return cellToBubbleCircle(cell, imageW, imageH);
   return null;
 }
 

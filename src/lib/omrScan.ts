@@ -3757,7 +3757,7 @@ export function isMobileExamSheetReadyForCapture(opts: {
 
   const fill =
     opts.fillRatio ?? measureRoiSheetFillRatio(opts.quad, opts.roiW, opts.roiH);
-  if (fill < 0.06) return false;
+  if (fill < 0.12) return false;
 
   return true;
 }

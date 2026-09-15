@@ -21,7 +21,9 @@ import {
   isMobileWarpedAnswerSheetReady,
   mapRoiQuadToFrame,
   measureWarpedFiducialAlignment,
+  prepareAnswerSheetDisplayCanvas,
   prepareMobileGradeDocumentCanvas,
+  prepareMobileScannedDocumentCanvas,
   prepareMobileScannedDocumentCanvasFast,
   refineWarpedCalifacilSheet,
   scaleCanvasToMaxSide,
@@ -112,6 +114,54 @@ export function isForcedWarpGradeCanvas(
   if (!sizeOk) return false;
   if (alignment) return alignment.ok;
   return true;
+}
+
+/** Contrato de archivo que usa el escritorio para raster PDF → OMR. */
+export function pdfPaginaPseudoFile(pageNumber = 1): File {
+  return new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], `pdf-pagina-${pageNumber}.jpg`, {
+    type: 'image/jpeg',
+  });
+}
+
+/**
+ * Foto de cámara/galería → hoja carta recortada, enderezada y con look de escáner.
+ * Rechaza capturas que no sean hoja CaliFácil.
+ */
+export function prepareMobilePhotoAsScannedPdfLetter(
+  source: HTMLCanvasElement,
+  opts?: { frameQuad?: RoiQuad | null; omrCols?: number }
+): { canvas: HTMLCanvasElement; alignment: WarpAlignmentReport } | null {
+  const canonical = prepareCanonicalCalifacilLetterCanvas(source, {
+    frameQuad: opts?.frameQuad ?? undefined,
+    maxErrorPx: MAX_WARP_ALIGNMENT_ERROR_PX,
+    fast: false,
+    forceWarp: true,
+  });
+  if (!canonical) return null;
+  const warped = canonical.canvas;
+  const alignment = canonical.alignment;
+  if (!alignment.ok || !isForcedWarpGradeCanvas(warped, alignment)) return null;
+
+  const corners = countCalifacilCornerMarkers(warped);
+  const strips = hasCalifacilAlignStrips(warped);
+  const cols = Math.max(2, opts?.omrCols ?? 4);
+  const tableOk = isCalifacilExamSheetLikely(warped, cols);
+  if (corners < 4) {
+    if (!(corners >= 3 && strips && tableOk)) return null;
+  } else if (!strips && !tableOk) {
+    return null;
+  }
+
+  const scanned =
+    prepareMobileScannedDocumentCanvas(warped, { skipPrintCrop: true }) ?? warped;
+  const look = prepareAnswerSheetDisplayCanvas(scanned) ?? scanned;
+  const expected = califacilWarpLetterPixelSize();
+  const sized =
+    look.width === expected.width && look.height === expected.height
+      ? look
+      : scaleCanvasToExactSize(look, expected.width, expected.height);
+  const aligned = measureWarpedFiducialAlignment(sized, MAX_WARP_ALIGNMENT_ERROR_PX);
+  return { canvas: sized, alignment: aligned.ok ? aligned : alignment };
 }
 
 /**
