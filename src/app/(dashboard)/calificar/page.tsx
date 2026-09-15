@@ -2705,8 +2705,8 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            // 4/4 + franjas: hoja CaliFácil, no un teclado u otra escena.
-            if (examReadyForCapture && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS && stripAligned) {
+            // 4/4 en esquinas naranjas: captura automática (el warp descarta teclado/mesa).
+            if (fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS) {
               const pageQuadRaw: RoiQuad = [
                 { x: 2, y: 2 },
                 { x: roiW - 3, y: 2 },
@@ -2768,7 +2768,7 @@ export default function CalificarPage() {
 
             cornerStableTicksRef.current = 0;
             setMobileStableTicks(0);
-            setMobileExamReadyForCapture(examReadyForCapture);
+            setMobileExamReadyForCapture(false);
             setCornersAlignedView(false);
 
             if (!quadValid || !roiQuad) {
@@ -4767,8 +4767,8 @@ export default function CalificarPage() {
     const gate = mobileCaptureGateRef.current;
     const corners = gate.fiducialCorners?.filter(Boolean).length ?? gate.fiducialCount;
     const allFour = gate.fiducialCorners?.every(Boolean) ?? corners >= MOBILE_MIN_FIDUCIAL_CORNERS;
-    if (!allFour || corners < MOBILE_MIN_FIDUCIAL_CORNERS || !gate.stripAligned) {
-      toast.error('Encuadra la hoja impresa: 4 cuadros negros y las franjas laterales.');
+    if (!allFour || corners < MOBILE_MIN_FIDUCIAL_CORNERS) {
+      toast.error('Alinea los 4 cuadros negros con las esquinas naranjas.');
       return;
     }
 
