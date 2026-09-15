@@ -403,7 +403,7 @@ const LIVE_STRICT_OVERLAY_TICKS = 2;
 /** Intervalo del loop de detección de documento en móvil (ms). */
 const MOBILE_CORNER_LOOP_MS = 50;
 /** Mantiene el polígono visible un instante si la detección parpadea (fluidez iOS). */
-const DOCUMENT_POLYGON_HOLD_MS = 420;
+const DOCUMENT_POLYGON_HOLD_MS = 900;
 /** Tiempo mínimo de espera con hoja alineada antes de auto-captura. */
 const MOBILE_ALIGN_HOLD_MS = CAPTURE_STABLE_TICKS_REQUIRED * MOBILE_CORNER_LOOP_MS;
 /** Luminancia mínima del fotograma; por debajo se considera cámara negra. */
@@ -2653,7 +2653,7 @@ export default function CalificarPage() {
               roiQuadRaw !== null && isValidMobileRoiQuad(roiQuadRaw, roiW, roiH);
             const roiQuad =
               quadValid && roiQuadRaw
-                ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.38)
+                ? smoothMobileRoiQuad(smoothedRoiQuadRef.current, roiQuadRaw, 0.24)
                 : null;
             const fillRatio =
               roiQuad !== null ? measureRoiSheetFillRatio(roiQuad, roiW, roiH) : 0;
@@ -2725,12 +2725,17 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
-            // 4/4: warp con los centros de los cuadros negros, no con el marco naranja.
-            if (fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS && locatedFiducials) {
+            const captureQuad =
+              locatedFiducials ??
+              (fiducialCount >= MOBILE_LIVE_MIN_FIDUCIAL_CORNERS && quadValid
+                ? roiQuadRaw
+                : null);
+            // 3–4 cuadritos: warp con centros negros (o franjas), no con el marco naranja.
+            if (captureQuad && examReadyForCapture) {
               const snapQuad = smoothMobileRoiQuad(
                 smoothedRoiQuadRef.current,
-                locatedFiducials,
-                0.38
+                captureQuad,
+                0.24
               );
               const snapFill = measureRoiSheetFillRatio(snapQuad, roiW, roiH);
               const sheetReady = isMobileExamSheetReadyForCapture({
@@ -2745,12 +2750,12 @@ export default function CalificarPage() {
               });
               if (!sheetReady) {
                 setMobileExamReadyForCapture(false);
-                setLiveStatus('Encuadra solo la hoja de respuestas (cuadros negros).');
+                setLiveStatus('Encuadra la hoja de respuestas (cuadritos negros).');
                 nextDelay = MOBILE_CORNER_LOOP_MS;
                 return;
               }
               smoothedRoiQuadRef.current = snapQuad;
-              lastRawRoiQuadRef.current = locatedFiducials;
+              lastRawRoiQuadRef.current = captureQuad;
               lastRoiQuadRef.current = snapQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
               cornerStableTicksRef.current += 1;
@@ -2763,7 +2768,7 @@ export default function CalificarPage() {
                 fiducialCorners,
                 stripAligned,
                 quad: snapQuad,
-                fiducialQuad: locatedFiducials,
+                fiducialQuad: locatedFiducials ?? captureQuad,
                 roiW,
                 roiH,
                 fillRatio: snapFill,
@@ -2782,15 +2787,17 @@ export default function CalificarPage() {
                 setShutterFlash(true);
                 window.setTimeout(() => setShutterFlash(false), 160);
                 triggerMobileSheetCaptureRef.current(video, {
-                  roiQuad: locatedFiducials,
+                  roiQuad: captureQuad,
                   roiCapture,
                 });
                 setLiveStatus('Capturando…');
               } else if (!autoShutterEnabledRef.current) {
-                setLiveStatus('Cuadros 4/4 — toca Capturar.');
+                setLiveStatus(
+                  `Cuadros ${fiducialCount}/4 — toca Capturar.`
+                );
               } else {
                 setLiveStatus(
-                  `Cuadros 4/4 — mantén quieto… (${Math.min(
+                  `Listo ${fiducialCount}/4 — un segundo… (${Math.min(
                     cornerStableTicksRef.current,
                     MOBILE_CAPTURE_STABLE_TICKS_REQUIRED
                   )}/${MOBILE_CAPTURE_STABLE_TICKS_REQUIRED})`
@@ -2826,7 +2833,7 @@ export default function CalificarPage() {
                 autotorchTriedRef.current = true;
                 void setTorchEnabled(true);
                 setLiveStatus(
-                  'Activé el flash. Alinea los 4 cuadritos negros con las esquinas naranjas.'
+                  'Activé el flash. Encuadra la hoja: basta con ver 3 cuadritos negros.'
                 );
               } else if (
                 fiducialCount < MOBILE_LIVE_MIN_FIDUCIAL_CORNERS &&
@@ -2839,7 +2846,7 @@ export default function CalificarPage() {
                 );
               } else {
                 setLiveStatus(
-                  `Cuadros negros: ${fiducialCount}/4. Alinea cada esquina negra con el recuadro naranja.`
+                  `Cuadros ${fiducialCount}/4. Muestra la hoja completa; no hace falta clavar las 4 esquinas.`
                 );
               }
               nextDelay = MOBILE_CORNER_LOOP_MS;
@@ -2854,15 +2861,15 @@ export default function CalificarPage() {
             lastRawRoiQuadRef.current = roiQuadRaw;
             setCornersAlignedView(false);
             setLiveStatus(
-              fiducialCount < MOBILE_MIN_FIDUCIAL_CORNERS
+              fiducialCount < MOBILE_LIVE_MIN_FIDUCIAL_CORNERS
                 ? !fiducialCorners[0] &&
                   !fiducialCorners[1] &&
                   (fiducialCorners[2] || fiducialCorners[3])
                   ? 'Acerca las esquinas superiores y reduce el brillo arriba de la hoja.'
-                  : `Cuadros negros: ${fiducialCount}/4. Alinea cada esquina negra con el recuadro naranja.`
+                  : `Cuadros ${fiducialCount}/4. Muestra más hoja; con 3 cuadritos ya puedes capturar.`
                 : fillRatio < MOBILE_MIN_ROI_FILL_RATIO
                   ? 'Acerca el teléfono hasta ver la hoja completa.'
-                  : 'Alinea los 4 cuadros negros con las esquinas naranjas.'
+                  : `Cuadros ${fiducialCount}/4 — toca Capturar o espera un segundo.`
             );
             nextDelay = MOBILE_CORNER_LOOP_MS;
             return;
@@ -2919,7 +2926,7 @@ export default function CalificarPage() {
               setLiveResolvedCount(resolvedNoExam);
             }
             const nextStatus = isMobile
-              ? 'Alinea los 4 cuadros negros de esquina con las esquinas naranjas del marco.'
+              ? 'Encuadra la hoja de respuestas. Con 3 cuadritos negros basta; no hace falta clavar las 4 esquinas.'
               : 'Encuadra toda la hoja dentro de la pantalla, con buena luz y la tabla de respuestas visible abajo.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
@@ -3092,7 +3099,7 @@ export default function CalificarPage() {
           const autoCaptureMin = Math.max(1, Math.ceil(chunk.length * MOBILE_AUTO_CAPTURE_MIN_RATIO));
           if (isMobile && !strictOk && chunk.length > 0) {
             const nextStatus =
-              'Alinea los 4 cuadros negros de esquina con las esquinas naranjas del marco.';
+              'Encuadra la hoja. Con 3 cuadritos negros puedes capturar.';
             if (nextStatus !== hotLoopStatus) {
               hotLoopStatus = nextStatus;
               setLiveStatus(nextStatus);
@@ -4122,10 +4129,13 @@ export default function CalificarPage() {
 
       const frameQuad = opts?.frameQuad ?? null;
       if (video && !opts?.fromGallery) {
-        if (!frameQuad || !verifyFiducialQuadOnCanvas(fullCanvas, frameQuad)) {
+        const quadOk =
+          frameQuad &&
+          verifyFiducialQuadOnCanvas(fullCanvas, frameQuad, { minCorners: 3, live: true });
+        if (!quadOk && !frameQuad) {
           clearPreview();
-          toast.error('No se ven los 4 cuadritos negros. Encuadra la hoja de respuestas.');
-          setLiveStatus('Acerca los 4 cuadritos negros a las esquinas naranjas.');
+          toast.error('No se ve la hoja. Encuadra el examen e inténtalo de nuevo.');
+          setLiveStatus('Encuadra la hoja de respuestas y toca Capturar.');
           if (video) resumeLiveVideoAfterScan(video);
           return;
         }
@@ -4653,10 +4663,11 @@ export default function CalificarPage() {
   const captureMobilePhotoManually = useCallback(async () => {
     const gate = mobileCaptureGateRef.current;
     const corners = gate.fiducialCorners?.filter(Boolean).length ?? gate.fiducialCount;
-    const fiducialQuad = gate.fiducialQuad ?? lastRawRoiQuadRef.current;
-    const allFour = Boolean(fiducialQuad) && corners >= MOBILE_MIN_FIDUCIAL_CORNERS;
-    if (!allFour || !fiducialQuad) {
-      toast.error('Alinea los 4 cuadros negros con las esquinas naranjas.');
+    const fiducialQuad =
+      gate.fiducialQuad ?? gate.quad ?? lastRawRoiQuadRef.current ?? lastRoiQuadRef.current;
+    const canShoot = Boolean(fiducialQuad) && corners >= MOBILE_LIVE_MIN_FIDUCIAL_CORNERS;
+    if (!canShoot || !fiducialQuad) {
+      toast.error('Encuadra la hoja (se ven al menos 3 cuadritos negros) y vuelve a tocar Capturar.');
       return;
     }
 

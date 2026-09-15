@@ -238,7 +238,7 @@ assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blan
     controlNumber: null as string | null,
   };
   const stripPicks: (number | null)[] = Array.from({ length: rows }, () => null);
-  stripPicks[3] = 1;
+  for (let i = 0; i < 12; i++) stripPicks[i] = i % 4;
   const stripMeta = {
     picks: stripPicks,
     rows: Array.from({ length: rows }, (_, i) => ({
@@ -246,7 +246,7 @@ assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blan
       ambiguous: false,
       inkFractions:
         stripPicks[i] != null
-          ? [0.05, 0.26, 0.04, 0.04]
+          ? [0.05, 0.26, 0.18, 0.16]
           : [0.045, 0.04, 0.04, 0.038],
     })),
     needsVisionAssist: false,
@@ -274,8 +274,41 @@ assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blan
   assert(!isAnswerSheetOmrMostlyBlank(stripNotBlank, rows), 'stripNotBlank no blank');
   const chosen = pickBetterOmrMeta(blankMeta, stripNotBlank, rows);
   assert(
-    chosen.picks.every((p) => p == null),
-    'pickBetterOmrMeta prefiere blank sobre strip con 1 pick'
+    chosen.picks.filter((p) => p != null).length === 12,
+    'pickBetterOmrMeta prefiere examen con 12 lecturas sobre blank'
+  );
+}
+
+// --- 3 D misma columna + mediana alta (PDF vectorial / franja) → blank ---
+{
+  const rows = 30;
+  const picks: (number | null)[] = Array.from({ length: rows }, () => null);
+  picks[0] = 3;
+  picks[1] = 3;
+  picks[2] = 3;
+  const rowMetas = Array.from({ length: rows }, (_, i) => ({
+    pick: picks[i],
+    ambiguous: false,
+    inkFractions:
+      picks[i] != null
+        ? [0.08, 0.07, 0.08, 0.22]
+        : [0.14, 0.13, 0.12, 0.16],
+  }));
+  const meta = {
+    picks,
+    rows: rowMetas,
+    needsVisionAssist: false,
+    maxSameColumnCount: 3,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  assert(isAnswerSheetOmrMostlyBlank(meta, rows), '3 D misma columna = mostly-blank');
+  const cleaned = sanitizeAnswerSheetOmrMeta(meta, rows);
+  assert(
+    cleaned.picks.every((p) => p == null),
+    '3 D sanitizados a null'
   );
 }
 

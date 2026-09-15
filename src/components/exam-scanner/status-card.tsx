@@ -146,7 +146,7 @@ function StatusCardBody({
       >
         Cuadros negros: {fiducialCount}/4
         {stripAligned ? ' · Franjas OK' : ''}
-        {captureReady && fiducialCount >= 4 ? ' · Listo' : ''}
+        {captureReady && fiducialCount >= 3 ? ' · Listo' : ''}
       </p>
       {showBar && pct > 4 ? (
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/15">
@@ -168,11 +168,9 @@ function StatusCardBody({
         >
           {captureReady
             ? autoShutterEnabled
-              ? fiducialCount >= 4
-                ? 'Captura automática al 4/4…'
-                : 'Captura automática al 4/4 · o toca Capturar'
-              : 'Toca para capturar'
-            : 'Alinea los 4 cuadritos negros con las esquinas naranjas'}
+              ? 'Quédate un momento… captura automática'
+              : 'Toca Capturar'
+            : 'Muestra la hoja (3 o 4 cuadritos negros). No hace falta clavar las esquinas.'}
         </p>
       ) : null}
     </div>

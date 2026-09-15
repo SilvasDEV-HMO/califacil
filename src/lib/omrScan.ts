@@ -2578,6 +2578,27 @@ export function detectCalifacilPhotoFiducialQuad(
   return detectCalifacilQuadFromFiducialBlobs(id.data, width, height);
 }
 
+function completeFiducialQuadFromThree(
+  tl: Point | null,
+  tr: Point | null,
+  br: Point | null,
+  bl: Point | null
+): [Point, Point, Point, Point] | null {
+  let a = tl;
+  let b = tr;
+  let c = br;
+  let d = bl;
+  const found = [a, b, c, d].filter(Boolean).length;
+  if (found < 3) return null;
+  if (!a && b && c && d) a = { x: b.x + d.x - c.x, y: b.y + d.y - c.y };
+  if (!b && a && c && d) b = { x: a.x + c.x - d.x, y: a.y + c.y - d.y };
+  if (!c && a && b && d) c = { x: b.x + d.x - a.x, y: b.y + d.y - a.y };
+  if (!d && a && b && c) d = { x: a.x + c.x - b.x, y: a.y + c.y - b.y };
+  if (!a || !b || !c || !d) return null;
+  const ordered: [Point, Point, Point, Point] = [a, b, c, d];
+  return quadIsConvex(ordered) ? ordered : null;
+}
+
 function fiducialQuadFromExpectedCorners(
   canvas: HTMLCanvasElement
 ): [Point, Point, Point, Point] | null {
@@ -2585,20 +2606,22 @@ function fiducialQuadFromExpectedCorners(
   if (!ctx) return null;
   const { width, height } = canvas;
   if (width < 80 || height < 80) return null;
-  const d = ctx.getImageData(0, 0, width, height).data;
-  const tl = findCalifacilFiducialNearExpected(d, width, height, 'tl');
-  const tr = findCalifacilFiducialNearExpected(d, width, height, 'tr');
-  const br = findCalifacilFiducialNearExpected(d, width, height, 'br');
-  const bl = findCalifacilFiducialNearExpected(d, width, height, 'bl');
-  if (!tl || !tr || !br || !bl) return null;
-  const ordered: [Point, Point, Point, Point] = [tl, tr, br, bl];
-  if (!quadIsConvex(ordered)) return null;
-  return ordered;
+  const data = ctx.getImageData(0, 0, width, height).data;
+  const tl = findCalifacilFiducialNearExpected(data, width, height, 'tl');
+  const tr = findCalifacilFiducialNearExpected(data, width, height, 'tr');
+  const br = findCalifacilFiducialNearExpected(data, width, height, 'br');
+  const bl = findCalifacilFiducialNearExpected(data, width, height, 'bl');
+  if (tl && tr && br && bl) {
+    const ordered: [Point, Point, Point, Point] = [tl, tr, br, bl];
+    return quadIsConvex(ordered) ? ordered : null;
+  }
+  return completeFiducialQuadFromThree(tl, tr, br, bl);
 }
 
 /**
  * Centros reales de los 4 cuadros negros (TL, TR, BR, BL) en el canvas.
  * Nunca usa el rectángulo del visor naranja como si fuera la hoja.
+ * Con temblor/glare acepta 3 cuadritos y completa el cuarto.
  */
 export function locateAnswerSheetFiducialQuad(
   canvas: HTMLCanvasElement
@@ -2608,13 +2631,16 @@ export function locateAnswerSheetFiducialQuad(
     detectCalifacilQuadFromCornerMarkers(canvas) ??
     fiducialQuadFromExpectedCorners(canvas);
   if (!raw) return null;
-  return verifyFiducialQuadOnCanvas(canvas, raw) ? raw : null;
+  return verifyFiducialQuadOnCanvas(canvas, raw, { minCorners: 3, live: true })
+    ? raw
+    : null;
 }
 
-/** True si los 4 puntos son cuadritos negros impresos (no líneas de cuaderno ni sombras). */
+/** True si el quad tiene cuadritos negros impresos (live: 3/4 basta). */
 export function verifyFiducialQuadOnCanvas(
   canvas: HTMLCanvasElement,
-  quad: [Point, Point, Point, Point]
+  quad: [Point, Point, Point, Point],
+  opts?: { minCorners?: number; live?: boolean }
 ): boolean {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return false;
@@ -2622,35 +2648,39 @@ export function verifyFiducialQuadOnCanvas(
   const H = canvas.height;
   if (W < 80 || H < 80) return false;
   if (!quadIsConvex(quad)) return false;
+  const live = opts?.live === true;
+  const minCorners = Math.max(1, Math.min(4, opts?.minCorners ?? (live ? 3 : 4)));
   const [tl, tr, br, bl] = quad;
   const avgW =
     (Math.hypot(tr.x - tl.x, tr.y - tl.y) + Math.hypot(br.x - bl.x, br.y - bl.y)) * 0.5;
   const avgH =
     (Math.hypot(bl.x - tl.x, bl.y - tl.y) + Math.hypot(br.x - tr.x, br.y - tr.y)) * 0.5;
-  if (avgW < W * 0.28 || avgH < H * 0.32) return false;
+  const minW = live ? 0.18 : 0.28;
+  const minH = live ? 0.22 : 0.32;
+  if (avgW < W * minW || avgH < H * minH) return false;
   const ratio = avgH / Math.max(1, avgW);
-  if (ratio < 1.05 || ratio > 1.62) return false;
+  if (ratio < (live ? 0.92 : 1.05) || ratio > (live ? 1.95 : 1.62)) return false;
   const fill = measureRoiSheetFillRatio(quad, W, H);
-  if (fill < 0.14 || fill > 0.96) return false;
+  if (fill < (live ? 0.1 : 0.14) || fill > 0.96) return false;
 
   const patch = Math.max(12, Math.round(Math.min(W, H) * 0.055));
-  const prefs: Array<'tl' | 'tr' | 'br' | 'bl'> = ['tl', 'tr', 'br', 'bl'];
+  let ok = 0;
   for (let i = 0; i < 4; i++) {
     const p = quad[i]!;
     const x0 = Math.max(0, Math.round(p.x - patch / 2));
     const y0 = Math.max(0, Math.round(p.y - patch / 2));
     const pw = Math.min(patch, W - x0);
     const ph = Math.min(patch, H - y0);
-    if (pw < 8 || ph < 8) return false;
+    if (pw < 8 || ph < 8) continue;
     let id: ImageData;
     try {
       id = ctx.getImageData(x0, y0, pw, ph);
     } catch {
-      return false;
+      continue;
     }
-    if (!isPrintedCornerFiducialPatch(id, pw, ph, false, i < 2, i >= 2)) return false;
+    if (isPrintedCornerFiducialPatch(id, pw, ph, false, i < 2, i >= 2)) ok += 1;
   }
-  return true;
+  return ok >= minCorners;
 }
 
 function orderFiducialBlobsAsQuad(
@@ -3779,8 +3809,7 @@ export function measureRoiQuadInteriorMeanLuminance(
 }
 
 /**
- * Gate de captura móvil: las 4 esquinas negras en las guías naranjas.
- * 3 esquinas + franjas no disparan (solo HUD).
+ * Gate de captura móvil: 4 esquinas, o 3 + hoja/franjas (temblor de mano).
  */
 export function isMobileExamSheetReadyForCapture(opts: {
   fiducialCount: number;
@@ -3794,13 +3823,16 @@ export function isMobileExamSheetReadyForCapture(opts: {
 }): boolean {
   const corners = opts.fiducialCorners;
   const count = corners ? corners.filter(Boolean).length : opts.fiducialCount;
-  if (count < MOBILE_MIN_FIDUCIAL_CORNERS) return false;
+  if (count < MOBILE_LIVE_MIN_FIDUCIAL_CORNERS) return false;
   if (!opts.quad || !opts.roiW || !opts.roiH) return false;
   if (!isValidMobileRoiQuad(opts.quad, opts.roiW, opts.roiH)) return false;
 
   const fill =
     opts.fillRatio ?? measureRoiSheetFillRatio(opts.quad, opts.roiW, opts.roiH);
-  if (fill < 0.18) return false;
+  if (fill < 0.12) return false;
+  if (count < MOBILE_MIN_FIDUCIAL_CORNERS && !opts.stripAligned && fill < 0.2) {
+    return false;
+  }
 
   return true;
 }
@@ -8295,26 +8327,31 @@ export function geometryCellsForBubbleSampling(
   expandX = CALIFACIL_OMR_CELL_SAMPLE_EXPAND_X,
   expandY = CALIFACIL_OMR_CELL_SAMPLE_EXPAND_Y
 ): CalifacilOmrScanGeometry {
-  const cells = geometry.cells.map((row) =>
-    row.map((cell, colIdx) => {
+  const cells = geometry.cells.map((row) => {
+    const lastCol = Math.max(0, row.length - 1);
+    return row.map((cell, colIdx) => {
+      const y = Math.max(0, cell.y - cell.h * (expandY / 2));
+      const h = Math.min(1 - y, cell.h * (1 + expandY));
       if (colIdx === 0) {
         const shrink = 0.12;
         const inset = cell.w * shrink;
         const x = Math.max(0, cell.x + inset);
-        const y = Math.max(0, cell.y - cell.h * (expandY / 2));
         const w = Math.min(1 - x, cell.w * (1 - shrink));
-        const h = Math.min(1 - y, cell.h * (1 + expandY));
+        return { x, y, w, h };
+      }
+      if (colIdx === lastCol && lastCol > 0) {
+        const shrink = 0.12;
+        const x = Math.max(0, cell.x);
+        const w = Math.min(1 - x, cell.w * (1 - shrink));
         return { x, y, w, h };
       }
       const leftExpand = expandX / 2;
       const rightExpand = expandX / 2;
       const x = Math.max(0, cell.x - cell.w * leftExpand);
-      const y = Math.max(0, cell.y - cell.h * (expandY / 2));
       const w = Math.min(1 - x, cell.w * (1 + leftExpand + rightExpand));
-      const h = Math.min(1 - y, cell.h * (1 + expandY));
       return { x, y, w, h };
-    })
-  );
+    });
+  });
   return { ...geometry, cells };
 }
 
@@ -9646,6 +9683,27 @@ function rejectQuestionNumberFalsePositive(
   return pick;
 }
 
+/** Última columna (D): tinta de franja/anillo sin bolígrafo vs C. */
+function rejectAlignStripFalsePositive(
+  pick: number | null,
+  inkFracs: number[],
+  fills: number[],
+  cols: number
+): number | null {
+  if (pick == null || cols < 2) return pick;
+  const last = cols - 1;
+  if (pick !== last) return pick;
+  const inkD = inkFracs[last] ?? 0;
+  const inkC = inkFracs[last - 1] ?? 0;
+  const fillD = fills[last] ?? 0;
+  const fillC = fills[last - 1] ?? 0;
+  const inkGap = inkD - inkC;
+  const fillGap = fillD - fillC;
+  if (fillD >= 0.16 && inkGap >= 0.05) return pick;
+  if (inkGap < 0.05 && fillGap < 0.07) return null;
+  return pick;
+}
+
 function pickAnswerSheetRowAbsolute(params: {
   inkFracs: number[];
   fills: number[];
@@ -9693,7 +9751,12 @@ function pickAnswerSheetRowAbsolute(params: {
 
   if (inkOk && scoreOk && inkBest === scoreBest) {
     return {
-      pick: rejectQuestionNumberFalsePositive(inkBest, inkFracs, fills, cols),
+      pick: rejectAlignStripFalsePositive(
+        rejectQuestionNumberFalsePositive(inkBest, inkFracs, fills, cols),
+        inkFracs,
+        fills,
+        cols
+      ),
       ambiguous: inkGap < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap * 1.2,
       confidence: inkVal + scoreGap,
     };
@@ -9936,6 +9999,8 @@ export function isAnswerSheetOmrMostlyBlank(
   if (resolved > 0 && resolved <= strongSparseCap) {
     // 1–3 lecturas y el resto de filas sin tinta: anillos/sombra, no examen contestado.
     if (mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35) return true;
+    const pickedCols = meta.picks.slice(0, rows).filter((p): p is number => p != null);
+    if (pickedCols.length > 0 && pickedCols.every((p) => p === pickedCols[0])) return true;
   }
 
   // Pocas lecturas con tinta débil (foto de pantalla / moiré / anillos): tratar como blank.

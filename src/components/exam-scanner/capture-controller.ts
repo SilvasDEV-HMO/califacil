@@ -1,6 +1,6 @@
 export const CAPTURE_STABLE_TICKS_REQUIRED = 2;
-/** Ticks consecutivos con 4/4 en esquinas naranjas (~50 ms c/u) antes del disparo. */
-export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 5;
+/** Ticks consecutivos (~50 ms) con 3–4 cuadritos antes del disparo (temblor de mano). */
+export const MOBILE_CAPTURE_STABLE_TICKS_REQUIRED = 2;
 
 export type AutoCaptureGate = {
   autoShutterEnabled: boolean;

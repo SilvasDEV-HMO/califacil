@@ -76,7 +76,7 @@ function OverlayRendererInner({
   const guidePoints = guideQuad?.map((p) => `${p.x},${p.y}`).join(' ') ?? '';
 
   const fiducialCount = fiducialCorners.filter(Boolean).length;
-  const sheetAligned = fiducialCount >= 4;
+  const sheetAligned = fiducialCount >= 3;
 
   const alignGuideRect = useMemo(() => {
     if (!staticGuide || staticGuide.width <= 40) return null;

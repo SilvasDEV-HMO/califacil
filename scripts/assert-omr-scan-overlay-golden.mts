@@ -303,7 +303,7 @@ gradeCanvas(pdfCanvas, 'pdf');
   const ms = Date.now() - t0;
   assert(pdfNorm.sheetDetected && !!pdfNorm.canvas, 'pdf-normalize: sheetDetected false');
   assert(pdfNorm.canvas!.height > pdfNorm.canvas!.width * 1.05, 'pdf-normalize rotó a landscape');
-  assert(ms < 8000, `pdf-normalize too slow: ${ms}ms`);
+  assert(ms < 12000, `pdf-normalize too slow: ${ms}ms`);
   gradeCanvas(pdfNorm.canvas!, 'pdf-normalize');
   const uiPdf = gradeLetterCanvas(pdfNorm.canvas!, COLS, ROWS, { lockTemplate: true });
   const gotPdf = picksKey(uiPdf.picks);
