@@ -218,7 +218,9 @@ export default function DashboardLayout({
               : 'overflow-x-hidden px-4 pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-5',
             dashboardHome
               ? 'flex flex-col max-sm:overflow-y-auto max-sm:app-scroll sm:overflow-hidden'
-              : 'app-scroll overflow-y-auto overflow-x-hidden'
+              : isCalificarRoute
+                ? 'max-lg:overflow-hidden lg:app-scroll lg:overflow-y-auto lg:overflow-x-hidden'
+                : 'app-scroll overflow-y-auto overflow-x-hidden'
           )}
         >
           {children}

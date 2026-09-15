@@ -4960,7 +4960,7 @@ export default function CalificarPage() {
       className={cn(
         'mx-auto flex min-h-full w-full max-w-7xl flex-col gap-3 pb-6 sm:gap-4 sm:pb-8',
         isMobile && 'max-w-none gap-0 pb-0 lg:gap-3 lg:pb-8',
-        isMobile && phase === 'elegir' && 'h-full min-h-0 lg:h-auto lg:bg-transparent'
+        isMobile && phase === 'elegir' && 'flex h-full min-h-0 flex-1 flex-col lg:h-auto lg:bg-transparent'
       )}
     >
       <Dialog open={autoGradeDialogOpen} onOpenChange={setAutoGradeDialogOpen}>

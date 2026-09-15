@@ -116,7 +116,8 @@ export function CalificarMobileHome({
 
   return (
     <div className="calificar-mobile-enter flex min-h-0 flex-1 flex-col lg:hidden">
-      <div className="mx-auto w-full max-w-lg shrink-0 space-y-4 px-4 pb-2 pt-2">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-2 pt-2">
+        <div className="mx-auto w-full max-w-lg space-y-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Calificar</h1>
           <p className="mt-1 text-sm text-gray-600">
@@ -165,6 +166,7 @@ export function CalificarMobileHome({
             </CardContent>
           </Card>
         ) : null}
+        </div>
       </div>
 
       <div className="shrink-0 border-t border-orange-100/90 bg-white px-4 py-3">
