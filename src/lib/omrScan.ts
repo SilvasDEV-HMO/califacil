@@ -5580,6 +5580,8 @@ export function snapReviewOverlayToPrintedRings(
   if ((geom.bubbles?.length ?? 0) < rows) {
     geom.bubbles = overlayBubblesFromCells(geom, canvas.width, canvas.height, rows, cols);
   }
+  const geomBubbles = geom.bubbles;
+  if (!geomBubbles?.length) return first;
 
   const W = Math.max(1, canvas.width);
   const H = Math.max(1, canvas.height);
@@ -5588,7 +5590,7 @@ export function snapReviewOverlayToPrintedRings(
   const dys: number[] = [];
   for (let r = 0; r < biasRows; r++) {
     const rowCells = geom.cells[r];
-    const rowBubbles = geom.bubbles[r];
+    const rowBubbles = geomBubbles[r];
     if (!rowCells?.length || !rowBubbles?.length) continue;
     for (let c = 0; c < cols; c++) {
       const cell = rowCells[c];
