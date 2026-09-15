@@ -12,11 +12,13 @@ import {
   detectCalifacilQuadFromCornerMarkers,
   detectCalifacilPhotoFiducialQuad,
   locateAnswerSheetFiducialQuad,
+  verifyFiducialQuadOnCanvas,
   isCalifacilExamSheetLikely,
   isCalifacilWarpedLetterCanvas,
   hasCalifacilAlignStrips,
   countCalifacilAlignStrips,
   estimateCanvasCenterLuminance,
+  estimateCanvasBottomBandLuminance,
   isMobileWarpedAnswerSheetAcceptable,
   isMobileWarpedAnswerSheetReady,
   mapRoiQuadToFrame,
@@ -97,9 +99,14 @@ export function isPrintedCalifacilLetterAfterWarp(canvas: HTMLCanvasElement): bo
   ) {
     return false;
   }
-  if (countCalifacilCornerMarkers(canvas) < 3) return false;
-  if (countCalifacilAlignStrips(canvas) < 2) return false;
-  if (estimateCanvasCenterLuminance(canvas) < 0.42) return false;
+  const corners = countCalifacilCornerMarkers(canvas);
+  if (corners < 3) return false;
+  const strips = countCalifacilAlignStrips(canvas);
+  if (strips < 2 && corners < 4) return false;
+  const center = estimateCanvasCenterLuminance(canvas);
+  if (center < 0.42) return false;
+  const bottom = estimateCanvasBottomBandLuminance(canvas);
+  if (center - bottom > 0.18) return false;
   return true;
 }
 
@@ -114,6 +121,19 @@ export function isForcedWarpGradeCanvas(
   if (!sizeOk) return false;
   if (alignment) return alignment.ok;
   return true;
+}
+
+/** PDF carta (8.5×11 in) con la hoja ya warpeada, para el mismo raster que escritorio. */
+export async function letterCanvasToPdfFile(
+  canvas: HTMLCanvasElement,
+  fileName = 'califacil-scan.pdf'
+): Promise<File> {
+  const { jsPDF } = await import('jspdf');
+  const jpeg = canvas.toDataURL('image/jpeg', 0.92);
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
+  doc.addImage(jpeg, 'JPEG', 0, 0, 8.5, 11);
+  const blob = doc.output('blob');
+  return new File([blob], fileName, { type: 'application/pdf' });
 }
 
 /** Contrato de archivo que usa el escritorio para raster PDF → OMR. */
@@ -161,6 +181,8 @@ export function prepareMobilePhotoAsScannedPdfLetter(
       ? look
       : scaleCanvasToExactSize(look, expected.width, expected.height);
   const aligned = measureWarpedFiducialAlignment(sized, MAX_WARP_ALIGNMENT_ERROR_PX);
+  if (!aligned.ok && !alignment.ok) return null;
+  if (!isPrintedCalifacilLetterAfterWarp(sized)) return null;
   return { canvas: sized, alignment: aligned.ok ? aligned : alignment };
 }
 
@@ -202,6 +224,8 @@ export function prepareCanonicalCalifacilLetterCanvas(
     if (!letterSized) return null;
     if (forceWarp && !exactRef) return null;
     if (forceWarp) {
+      if (!aligned.ok) return null;
+      if (!isPrintedCalifacilLetterAfterWarp(sized)) return null;
       return { canvas: sized, alignment: aligned };
     }
     if (isCanonicalGradeCanvasReady(sized, aligned)) {
@@ -245,16 +269,19 @@ export function prepareCanonicalCalifacilLetterCanvas(
 
   if (forceWarp) {
     const tries: RoiQuad[] = [];
-    const frameFill = opts?.frameQuad
-      ? measureRoiSheetFillRatio(opts.frameQuad, warpSrc.width, warpSrc.height)
-      : 1;
-    // Quad live = centros de fiduciales. Ignorar el marco naranja (~página completa).
-    if (opts?.frameQuad && frameFill <= 0.992) {
-      pushUniqueQuad(tries, opts.frameQuad);
-    }
+    pushUniqueQuad(tries, locateAnswerSheetFiducialQuad(warpSrc, { strict: true }));
     pushUniqueQuad(tries, detectCalifacilPhotoFiducialQuad(warpSrc));
     pushUniqueQuad(tries, markerQuad);
-    pushUniqueQuad(tries, locateAnswerSheetFiducialQuad(warpSrc));
+    if (opts?.frameQuad) {
+      const fill = measureRoiSheetFillRatio(opts.frameQuad, warpSrc.width, warpSrc.height);
+      const verified = verifyFiducialQuadOnCanvas(warpSrc, opts.frameQuad, {
+        minCorners: 4,
+        live: false,
+      });
+      if (verified && fill > 0.12 && fill <= 0.88) {
+        pushUniqueQuad(tries, opts.frameQuad);
+      }
+    }
 
     let best: {
       canvas: HTMLCanvasElement;
@@ -263,7 +290,7 @@ export function prepareCanonicalCalifacilLetterCanvas(
     } | null = null;
     for (const q of tries) {
       const fill = measureRoiSheetFillRatio(q, warpSrc.width, warpSrc.height);
-      if (fill > 0.998) continue;
+      if (fill > 0.92) continue;
       const result = warpAndValidateCalifacilSheet(warpSrc, q, maxErrorPx, { fast: false });
       if (!result.warped) continue;
       const warpedAlign =
@@ -281,6 +308,7 @@ export function prepareCanonicalCalifacilLetterCanvas(
       if (!candidate) continue;
       const finished = finishCanonical(candidate.canvas, candidate.alignment);
       if (!finished || !finished.alignment.ok) continue;
+      if (!isPrintedCalifacilLetterAfterWarp(finished.canvas)) continue;
       const score = -finished.alignment.maxErrorPx;
       if (!best || score > best.score) {
         best = { canvas: finished.canvas, alignment: finished.alignment, score };

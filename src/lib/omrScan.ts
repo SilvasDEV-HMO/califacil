@@ -804,6 +804,26 @@ export function estimateCanvasEdgeLuminance(canvas: HTMLCanvasElement): number {
   return n > 0 ? sum / n : 0;
 }
 
+/** Franja inferior (0–1). Jeans/mesa tras un warp falso bajan este valor. */
+export function estimateCanvasBottomBandLuminance(
+  canvas: HTMLCanvasElement,
+  bandFrac = 0.12
+): number {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 0;
+  const W = canvas.width;
+  const H = canvas.height;
+  const bh = Math.max(8, Math.floor(H * bandFrac));
+  const id = ctx.getImageData(0, H - bh, W, bh);
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i < id.data.length; i += 4) {
+    sum += (id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114) / 255;
+    n++;
+  }
+  return n > 0 ? sum / n : 0;
+}
+
 function viewfinderGuideCornerPatches(
   W: number,
   H: number
@@ -2624,14 +2644,19 @@ function fiducialQuadFromExpectedCorners(
  * Con temblor/glare acepta 3 cuadritos y completa el cuarto.
  */
 export function locateAnswerSheetFiducialQuad(
-  canvas: HTMLCanvasElement
+  canvas: HTMLCanvasElement,
+  opts?: { strict?: boolean }
 ): [Point, Point, Point, Point] | null {
   const raw =
     detectCalifacilPhotoFiducialQuad(canvas) ??
     detectCalifacilQuadFromCornerMarkers(canvas) ??
     fiducialQuadFromExpectedCorners(canvas);
   if (!raw) return null;
-  return verifyFiducialQuadOnCanvas(canvas, raw, { minCorners: 3, live: true })
+  const strict = opts?.strict === true;
+  return verifyFiducialQuadOnCanvas(canvas, raw, {
+    minCorners: strict ? 4 : 3,
+    live: !strict,
+  })
     ? raw
     : null;
 }
@@ -8464,6 +8489,21 @@ export function cropAnswerSheetNameSnippetDataUrl(
   const ctx = out.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
+  try {
+    const sampled = ctx.getImageData(0, 0, out.width, out.height);
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < sampled.data.length; i += 16) {
+      sum +=
+        (sampled.data[i]! * 0.299 + sampled.data[i + 1]! * 0.587 + sampled.data[i + 2]! * 0.114) /
+        255;
+      n++;
+    }
+    const mean = n > 0 ? sum / n : 1;
+    if (mean > 0.93) return null;
+  } catch {
+    /* ignore */
+  }
   return out.toDataURL('image/jpeg', 0.9);
 }
 
@@ -9997,10 +10037,22 @@ export function isAnswerSheetOmrMostlyBlank(
   // 3/30 no es un examen contestado; no tumba hojas con ≥10% de marcas reales.
   const strongSparseCap = Math.max(3, Math.floor(rows * 0.1));
   if (resolved > 0 && resolved <= strongSparseCap) {
-    // 1–3 lecturas y el resto de filas sin tinta: anillos/sombra, no examen contestado.
-    if (mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35) return true;
+    let pickInkSum = 0;
+    let pickN = 0;
+    for (let i = 0; i < rows; i++) {
+      if (meta.picks[i] == null) continue;
+      pickInkSum += rowMaxInkFraction(meta.rows[i]);
+      pickN++;
+    }
+    const avgPickInk = pickN > 0 ? pickInkSum / pickN : 0;
+    const realPen = avgPickInk >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction;
     const pickedCols = meta.picks.slice(0, rows).filter((p): p is number => p != null);
-    if (pickedCols.length > 0 && pickedCols.every((p) => p === pickedCols[0])) return true;
+    const sameCol =
+      pickedCols.length > 0 && pickedCols.every((p) => p === pickedCols[0]);
+    if (sameCol && (mid >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 || !realPen)) {
+      return true;
+    }
+    if (!realPen && mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35) return true;
   }
 
   // Pocas lecturas con tinta débil (foto de pantalla / moiré / anillos): tratar como blank.

@@ -131,6 +131,7 @@ import {
   isPrintedCalifacilLetterAfterWarp,
   isPhotoSheetWarpAcceptable,
   pdfPaginaPseudoFile,
+  letterCanvasToPdfFile,
   prepareMobilePhotoAsScannedPdfLetter,
 } from '@/lib/omr/pipeline';
 import {
@@ -1684,11 +1685,16 @@ export default function CalificarPage() {
               ? 'Lectura insuficiente: alinea las esquinas negras, mejora la luz y evita sombras.'
               : 'Lectura insuficiente: prueba una foto más nítida de la página completa o del pie CaliFacil, bien iluminada.'
           );
-          // Móvil auto-grade: NUNCA calificar lecturas parciales/inventadas.
+          // Móvil auto-grade: no guardar lecturas parciales/inventadas (salvo hoja en blanco = 0%).
           if (skipReviewUi && isMobileCamera) {
-            notify.message(
-              `Lectura parcial (${mergedResolved}/${chunk.length}). Las casillas vacías se calificarán como incorrectas.`
-            );
+            if (mostlyBlank) {
+              notify.message('Hoja sin respuestas marcadas — calificación 0%.');
+            } else {
+              notify.error(
+                `No se leyó bien la hoja (${mergedResolved}/${chunk.length}). Encuadra los 4 cuadritos negros e inténtalo de nuevo.`
+              );
+              return { success: false };
+            }
           } else if (!skipReviewUi) {
             notify.error(
               isMobile
@@ -1769,7 +1775,6 @@ export default function CalificarPage() {
             (c): c is HTMLCanvasElement =>
               c instanceof HTMLCanvasElement && isPrintedCalifacilLetterAfterWarp(c)
           ) ??
-          letterCandidates.find((c): c is HTMLCanvasElement => c instanceof HTMLCanvasElement) ??
           null;
         if (!reviewCanvas) {
           notify.error(
@@ -2725,16 +2730,20 @@ export default function CalificarPage() {
             setLiveScanLockedRows([]);
             setLiveScanAmbiguousRows([]);
 
+            // Auto: solo 4 cuadritos reales. Capturar a mano puede ir con 3.
+            const autoQuad =
+              locatedFiducials && fiducialCount >= MOBILE_MIN_FIDUCIAL_CORNERS
+                ? locatedFiducials
+                : null;
             const captureQuad =
-              locatedFiducials ??
+              autoQuad ??
               (fiducialCount >= MOBILE_LIVE_MIN_FIDUCIAL_CORNERS && quadValid
                 ? roiQuadRaw
                 : null);
-            // 3–4 cuadritos: warp con centros negros (o franjas), no con el marco naranja.
-            if (captureQuad && examReadyForCapture) {
+            if (autoQuad && examReadyForCapture) {
               const snapQuad = smoothMobileRoiQuad(
                 smoothedRoiQuadRef.current,
-                captureQuad,
+                autoQuad,
                 0.24
               );
               const snapFill = measureRoiSheetFillRatio(snapQuad, roiW, roiH);
@@ -2755,7 +2764,7 @@ export default function CalificarPage() {
                 return;
               }
               smoothedRoiQuadRef.current = snapQuad;
-              lastRawRoiQuadRef.current = captureQuad;
+              lastRawRoiQuadRef.current = autoQuad;
               lastRoiQuadRef.current = snapQuad;
               lastRoiCaptureMetaRef.current = roiCapture;
               cornerStableTicksRef.current += 1;
@@ -2768,7 +2777,7 @@ export default function CalificarPage() {
                 fiducialCorners,
                 stripAligned,
                 quad: snapQuad,
-                fiducialQuad: locatedFiducials ?? captureQuad,
+                fiducialQuad: autoQuad,
                 roiW,
                 roiH,
                 fillRatio: snapFill,
@@ -2787,7 +2796,7 @@ export default function CalificarPage() {
                 setShutterFlash(true);
                 window.setTimeout(() => setShutterFlash(false), 160);
                 triggerMobileSheetCaptureRef.current(video, {
-                  roiQuad: captureQuad,
+                  roiQuad: autoQuad,
                   roiCapture,
                 });
                 setLiveStatus('Capturando…');
@@ -4127,18 +4136,16 @@ export default function CalificarPage() {
         return;
       }
 
-      const frameQuad = opts?.frameQuad ?? null;
-      if (video && !opts?.fromGallery) {
-        const quadOk =
-          frameQuad &&
-          verifyFiducialQuadOnCanvas(fullCanvas, frameQuad, { minCorners: 3, live: true });
-        if (!quadOk && !frameQuad) {
-          clearPreview();
-          toast.error('No se ve la hoja. Encuadra el examen e inténtalo de nuevo.');
-          setLiveStatus('Encuadra la hoja de respuestas y toca Capturar.');
-          if (video) resumeLiveVideoAfterScan(video);
-          return;
-        }
+      const locatedStrict = locateAnswerSheetFiducialQuad(fullCanvas, { strict: true });
+      const frameQuadHint = opts?.frameQuad ?? null;
+      const frameQuad =
+        locatedStrict ??
+        (frameQuadHint &&
+        verifyFiducialQuadOnCanvas(fullCanvas, frameQuadHint, { minCorners: 4, live: false })
+          ? frameQuadHint
+          : null);
+      if (video && !opts?.fromGallery && !frameQuad && !locatedStrict) {
+        // Seguir: prepareMobilePhotoAsScannedPdfLetter re-detecta en el frame.
       }
 
       const sheetFormatHint = classifyAnswerSheetFormat(fullCanvas);
@@ -4170,9 +4177,17 @@ export default function CalificarPage() {
       if (!warped) {
         clearPreview();
         toast.error(
-          'Eso no es una hoja CaliFácil. Encuadra el examen impreso (cuadros negros y franjas).'
+          'No se enderezó la hoja. Encuadra los 4 cuadritos negros (sin mesa ni piernas).'
         );
-        setLiveStatus('Apunta a la hoja de respuestas, no al escritorio.');
+        setLiveStatus('Centra la hoja: los 4 cuadritos negros deben verse.');
+        return;
+      }
+
+      if (sheetKind === 'califacil' && !isPrintedCalifacilLetterAfterWarp(warped)) {
+        clearPreview();
+        toast.error('No se enderezó la hoja. Encuadra los 4 cuadritos negros e inténtalo de nuevo.');
+        setLiveStatus('La foto no parece un escáner. Repite con la hoja completa.');
+        if (video) resumeLiveVideoAfterScan(video);
         return;
       }
 
@@ -4219,9 +4234,17 @@ export default function CalificarPage() {
       let displayCanvas: HTMLCanvasElement = warped;
       let readingOverride: CalifacilOmrReadingResult | undefined;
 
+      let pdfFile: File | undefined;
       if (sheetKind === 'califacil') {
-        displayCanvas = warped;
-        scanCanvas = warped;
+        try {
+          pdfFile = await letterCanvasToPdfFile(warped);
+          const rendered = await renderPdfGradingPageCanvas(pdfFile, 1);
+          displayCanvas = rendered.canvas;
+          scanCanvas = rendered.canvas;
+          warped = rendered.canvas;
+        } catch {
+          pdfFile = undefined;
+        }
         const letterFreeze = canvasPreviewJpeg(displayCanvas, 900, 0.7);
         if (letterFreeze) setMobileScanPreviewUrl(letterFreeze.dataUrl);
       } else {
@@ -4256,12 +4279,12 @@ export default function CalificarPage() {
 
       const result = await finalizeCapturedSheet(
         sheetKind === 'califacil' ? displayCanvas : scanCanvas,
-        sheetKind === 'califacil' ? pdfPaginaPseudoFile(1) : undefined,
+        sheetKind === 'califacil' ? pdfFile : undefined,
         {
-        preWarped: true,
+        preWarped: sheetKind === 'califacil' ? !pdfFile : true,
         warpAlignment: alignment,
         skipReviewUi: true,
-        skipSheetValidation: true,
+        skipSheetValidation: sheetKind !== 'califacil',
         displaySource: displayCanvas,
         readingOverride,
         uploadKind: sheetKind === 'califacil' ? 'pdf' : undefined,
@@ -4310,8 +4333,6 @@ export default function CalificarPage() {
       // Sincronizar guía + layout (clientWidth) justo antes de recortar.
       updateLiveVideoLayout();
 
-      const sensorW = video.videoWidth;
-      const sensorH = video.videoHeight;
       const fullCanvas = captureVideoFullFrame(video, { maxSide: MOBILE_CAPTURE_MAX_SIDE });
       if (!fullCanvas) {
         clearMobileScanPreview(video, mobileScanPreviewSetters);
@@ -4320,37 +4341,6 @@ export default function CalificarPage() {
         return;
       }
 
-      // Solo lo que está DENTRO del recuadro naranja (4 esquinas); recorta mesa/bisel.
-      const layout = liveVideoLayoutRef.current;
-      const guide = staticScannerGuideRectRef.current;
-      let guideCrop: HTMLCanvasElement | null = null;
-      if (guide && layout) {
-        guideCrop = cropCanvasToViewportGuideRect(fullCanvas, guide, layout, sensorW, sensorH);
-      }
-      // Fallback: recalcular guía desde el contenedor actual si el mapeo falló.
-      if (!guideCrop) {
-        const container = mobileVideoViewportRef.current;
-        const cw = container?.clientWidth ?? 0;
-        const ch = container?.clientHeight ?? 0;
-        if (cw >= 40 && ch >= 40 && sensorW >= 40) {
-          const freshGuide = createStaticScannerGuide(cw, ch);
-          const freshLayout = getObjectCoverVideoLetterbox(sensorW, sensorH, cw, ch);
-          if (freshGuide) {
-            guideCrop = cropCanvasToViewportGuideRect(
-              fullCanvas,
-              freshGuide,
-              freshLayout,
-              sensorW,
-              sensorH
-            );
-          }
-        }
-      }
-
-      const gradeCanvas = guideCrop ?? fullCanvas;
-      const usedGuideCrop = Boolean(guideCrop);
-
-      // No mostrar el recorte naranja (mesa). El preview será la carta warpeada.
       flushSync(() => {
         setMobileScanPreviewGeometry(null);
         setMobileScanPreviewPicks([]);
@@ -4359,20 +4349,16 @@ export default function CalificarPage() {
       });
       await yieldForSpinnerPaint();
 
-      // P0: usar el roiQuad live que disparó 4/4 (esquinas, no franjas).
-      let warpSource: HTMLCanvasElement = gradeCanvas;
+      let warpSource: HTMLCanvasElement = fullCanvas;
       let frameQuad: RoiQuad | null = null;
-      let guideCropped = usedGuideCrop;
       if (opts?.roiQuad && opts?.roiCapture) {
-        warpSource = fullCanvas;
         frameQuad = frameQuadOnFullCanvas(opts.roiQuad, opts.roiCapture, fullCanvas);
-        guideCropped = false;
       }
 
       await processMobileCapturedCanvas(warpSource, video, {
         frameQuad,
         fromGallery: false,
-        guideCropped,
+        guideCropped: false,
       });
     },
     [processMobileCapturedCanvas, mobileScanPreviewSetters, updateLiveVideoLayout]

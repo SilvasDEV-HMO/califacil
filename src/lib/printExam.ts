@@ -1575,18 +1575,14 @@ export function getAnswerSheetNameFieldPageRatios(): {
   const metaGapPx = ptToWarpPx(10);
   const shortFieldW = contentW * 0.22;
   const nameFieldOuterW = Math.max(1, contentW - 2 * shortFieldW - 2 * metaGapPx);
-  const nameLabelPx = ptToWarpPx(52);
-  const fieldGapPx = ptToWarpPx(3);
-  // Caja de escritura (~32pt), no solo la raya de 12pt.
   const lineHPx = ptToWarpPx(32);
   const ascentPadPx = ptToWarpPx(10);
-  const lineW = Math.max(1, nameFieldOuterW - nameLabelPx - fieldGapPx);
 
   return {
-    left: (sideMarginPx + nameLabelPx + fieldGapPx) / pageW,
+    left: sideMarginPx / pageW,
     top: Math.max(0, (metaRowTopPx - ascentPadPx) / pageH),
-    width: lineW / pageW,
-    height: lineHPx / pageH,
+    width: nameFieldOuterW / pageW,
+    height: Math.min(0.08, (lineHPx + ptToWarpPx(8)) / pageH),
   };
 }
 
