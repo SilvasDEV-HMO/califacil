@@ -673,7 +673,14 @@ export async function runCalifacilOmrReadingPipeline(
     }
   }
 
+  meta = {
+    ...sanitizeAnswerSheetOmrMeta(meta, chunk.length),
+    geometry: meta.geometry,
+    reviewSourceCanvas: meta.reviewSourceCanvas,
+  };
+  raw = [...meta.picks];
   mapped = mapRawToDraftDetailed(raw, chunk);
+  mostlyBlank = isAnswerSheetOmrMostlyBlank(meta, chunk.length);
   const picksInChunk = raw.slice(0, chunk.length);
 
   const locks = { ...input.liveLockedAnswers };

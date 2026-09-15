@@ -22,7 +22,7 @@ type Props = {
 
 type BubbleCircle = { cx: number; cy: number; r: number };
 
-const RADIUS_SCALE = 0.28;
+const RADIUS_SCALE = 0.24;
 const SANE_BUBBLE_R_MIN = 0.002;
 const SANE_BUBBLE_R_MAX = 0.06;
 
@@ -130,16 +130,11 @@ export function CalifacilOmrReviewOverlay({
           const expectedCell = hasExpected ? rowCells[expectedPick] : null;
           const expectedBubble = hasExpected ? geometry.bubbles?.[row]?.[expectedPick!] : null;
           const expectedCircle = resolveCircle(expectedBubble, expectedCell, W, H);
-
           const pickCell =
             pick !== null && pick >= 0 && pick < rowCells.length ? rowCells[pick] : null;
           const pickBubble =
             pick !== null && pick >= 0 ? geometry.bubbles?.[row]?.[pick] : null;
           const pickCircle = resolveCircle(pickBubble, pickCell, W, H);
-          const rowCy = pickCircle?.cy ?? expectedCircle?.cy ?? null;
-          const expectedOnRow =
-            expectedCircle && rowCy != null ? { ...expectedCircle, cy: rowCy } : expectedCircle;
-          const pickOnRow = pickCircle && rowCy != null ? { ...pickCircle, cy: rowCy } : pickCircle;
 
           const isCorrect = hasExpected && pick !== null && pick === expectedPick;
           const isWrong = hasExpected && pick !== null && pick !== expectedPick;
@@ -147,11 +142,11 @@ export function CalifacilOmrReviewOverlay({
 
           return (
             <g key={row}>
-              {expectedOnRow && !isCorrect ? (
+              {expectedCircle && !isCorrect ? (
                 <circle
-                  cx={expectedOnRow.cx}
-                  cy={expectedOnRow.cy}
-                  r={expectedOnRow.r}
+                  cx={expectedCircle.cx}
+                  cy={expectedCircle.cy}
+                  r={expectedCircle.r}
                   fill={`rgba(234,88,12,${Math.max(0, Math.min(1, expectedOpacity))})`}
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}
@@ -159,33 +154,33 @@ export function CalifacilOmrReviewOverlay({
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {isCorrect && (pickOnRow || expectedOnRow) ? (
+              {isCorrect && (pickCircle || expectedCircle) ? (
                 <circle
-                  cx={(pickOnRow ?? expectedOnRow)!.cx}
-                  cy={(pickOnRow ?? expectedOnRow)!.cy}
-                  r={(pickOnRow ?? expectedOnRow)!.r}
+                  cx={(pickCircle ?? expectedCircle)!.cx}
+                  cy={(pickCircle ?? expectedCircle)!.cy}
+                  r={(pickCircle ?? expectedCircle)!.r}
                   fill="rgba(22,163,74,0.95)"
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {isWrong && pickOnRow ? (
+              {isWrong && pickCircle ? (
                 <circle
-                  cx={pickOnRow.cx}
-                  cy={pickOnRow.cy}
-                  r={pickOnRow.r}
+                  cx={pickCircle.cx}
+                  cy={pickCircle.cy}
+                  r={pickCircle.r}
                   fill="rgba(220,38,38,0.95)"
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}
                   vectorEffect="non-scaling-stroke"
                 />
               ) : null}
-              {!hasExpected && pickOnRow ? (
+              {!hasExpected && pickCircle ? (
                 <circle
-                  cx={pickOnRow.cx}
-                  cy={pickOnRow.cy}
-                  r={pickOnRow.r}
+                  cx={pickCircle.cx}
+                  cy={pickCircle.cy}
+                  r={pickCircle.r}
                   fill="rgba(22,163,74,0.9)"
                   stroke="rgba(255,255,255,0.98)"
                   strokeWidth={whiteStroke}

@@ -9930,22 +9930,12 @@ export function isAnswerSheetOmrMostlyBlank(
   // Sin ninguna lectura OMR y poca tinta "marcada": hoja en blanco (anillos impresos no cuentan).
   if (resolved === 0 && marked <= markedCap) return true;
 
-  // 1–2 picks sparse (moiré / sombra / franja): SIEMPRE blank, sin gate de mediana.
-  // Cierra 2/30 inventados en foto de pantalla; no tumba exámenes ≥40% contestados.
-  const strongSparseCap = Math.max(2, Math.floor(rows * 0.07));
+  // 1–3 picks sparse (anillos impresos / sombra / franja): hoja en blanco.
+  // 3/30 no es un examen contestado; no tumba hojas con ≥10% de marcas reales.
+  const strongSparseCap = Math.max(3, Math.floor(rows * 0.1));
   if (resolved > 0 && resolved <= strongSparseCap) {
-    if (marked < resolved) return true;
-    let inkSum = 0;
-    let n = 0;
-    for (let i = 0; i < rows; i++) {
-      if (meta.picks[i] == null) continue;
-      const row = meta.rows[i];
-      inkSum += row ? rowMaxInkFraction(row) : 0;
-      n++;
-    }
-    const avgInk = n > 0 ? inkSum / n : 0;
-    if (avgInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 2.2) return true;
-    return false;
+    // 1–3 lecturas y el resto de filas sin tinta: anillos/sombra, no examen contestado.
+    if (mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35) return true;
   }
 
   // Pocas lecturas con tinta débil (foto de pantalla / moiré / anillos): tratar como blank.
