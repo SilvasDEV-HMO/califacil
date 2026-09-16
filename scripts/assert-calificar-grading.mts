@@ -283,6 +283,34 @@ assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blan
 assert(calculatePercentage(10, 30) === 33, '10/30 = 33%');
 assert(calculatePercentage(11, 30) === 37, '11/30 = 37%');
 
+// --- 8 sombras parecidas (sin hueco de fila) → 0 ---
+{
+  const rows = 30;
+  const picks: (number | null)[] = Array.from({ length: rows }, () => null);
+  for (let i = 0; i < 8; i++) picks[i] = 2;
+  const rowMetas = Array.from({ length: rows }, (_, i) => ({
+    pick: picks[i],
+    ambiguous: false,
+    inkFractions:
+      picks[i] != null
+        ? [0.18, 0.17, 0.19, 0.16]
+        : [0.16, 0.15, 0.16, 0.15],
+  }));
+  const meta = {
+    picks,
+    rows: rowMetas,
+    needsVisionAssist: false,
+    maxSameColumnCount: 8,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  assert(isAnswerSheetOmrMostlyBlank(meta, rows), '8 sombras = blank');
+  const cleaned = sanitizeAnswerSheetOmrMeta(meta, rows);
+  assert(cleaned.picks.every((p) => p == null), '8 sombras → 0 picks');
+}
+
 
 // --- pickBetterOmrMeta: blank gana a strip con 1 pick ---
 {

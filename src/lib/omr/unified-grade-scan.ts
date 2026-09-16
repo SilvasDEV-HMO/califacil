@@ -255,32 +255,9 @@ export function pickBetterOmrMeta(
   b: OmrScanMetaResult,
   rows: number
 ): OmrScanMetaResult {
-  const inkScore = (meta: OmrScanMetaResult): number => {
-    let sum = 0;
-    let n = 0;
-    for (let i = 0; i < rows; i++) {
-      const row = meta.rows[i];
-      if (!row) continue;
-      const fracs = row.inkFractions ?? [];
-      const maxInk = fracs.length > 0 ? Math.max(...fracs) : 0;
-      if (meta.picks[i] != null || maxInk > 0) {
-        sum += maxInk;
-        n++;
-      }
-    }
-    return n > 0 ? sum / n : 0;
-  };
-
   const blankA = isAnswerSheetOmrMostlyBlank(a, rows);
   const blankB = isAnswerSheetOmrMostlyBlank(b, rows);
-  if (blankA !== blankB) {
-    const nonBlank = blankA ? b : a;
-    const blank = blankA ? a : b;
-    if (isStrongMobileOmrMeta(nonBlank, rows)) return nonBlank;
-    // Tinta fuerte en el no-blank: preferirlo aunque no llegue a “strong” por conteo.
-    if (inkScore(nonBlank) >= 0.22) return nonBlank;
-    return blank;
-  }
+  if (blankA !== blankB) return blankA ? b : a;
 
   const weakA = isWeakMobileOmrMeta(a, rows);
   const weakB = isWeakMobileOmrMeta(b, rows);
@@ -288,13 +265,11 @@ export function pickBetterOmrMeta(
 
   const ra = countResolvedPicks(a, rows);
   const rb = countResolvedPicks(b, rows);
-  const ia = inkScore(a);
-  const ib = inkScore(b);
-  // Ambos débiles: preferir más tinta (lectura real parcial), no menos picks.
   if (weakA && weakB) {
-    if (Math.abs(ib - ia) > 0.04) return ib > ia ? b : a;
-    if (rb !== ra) return rb > ra ? b : a;
-  } else if (rb !== ra) {
+    if (ra !== rb) return ra < rb ? a : b;
+    return a;
+  }
+  if (rb !== ra) {
     return rb > ra ? b : a;
   }
   if (b.maxSameColumnCount !== a.maxSameColumnCount) {

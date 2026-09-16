@@ -109,6 +109,9 @@ const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
   blankMaxInk: 0.095,
   minCenterVsRing: 0.035,
   minFillGap: 0.05,
+  /** vs mediana de interiores de toda la hoja (sombra no cuenta). */
+  sheetOutlierAdd: 0.12,
+  sheetOutlierRatio: 1.45,
 } as const;
 
 /**
@@ -5364,13 +5367,18 @@ export function sampleBubbleMarkAtCell(
   height: number,
   cell: OmrNormRect,
   otsuT: number,
-  thresholds: ScanThresholds
+  thresholds: ScanThresholds,
+  opts?: { lockCenter?: boolean }
 ): { fillDark: number; ringDark: number; inkFrac: number; score: number } {
   const W = width;
   const H = height;
   const cellW = Math.max(1, cell.w * W);
   const cellH = Math.max(1, cell.h * H);
-  const center = refineBubbleCenterInCell(data, W, H, cell, { preferInk: false });
+  const cx0 = (cell.x + cell.w * 0.5) * W;
+  const cy0 = (cell.y + cell.h * 0.5) * H;
+  const center = opts?.lockCenter
+    ? { x: cx0, y: cy0 }
+    : refineBubbleCenterInCell(data, W, H, cell, { preferInk: false });
   const radiusPx = Math.max(2, Math.min(cellW, cellH) * 0.34);
   const diskRInk = Math.max(2, Math.round(radiusPx * 0.55));
   const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
@@ -5504,7 +5512,7 @@ export function attachAnswerSheetReviewBubbleOverlay(
     canvas.height
   );
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  const maxShiftRatio = opts?.maxShiftRatio ?? 0.1;
+  void opts;
 
   const bubblesAlignedWithCells = (
     g: CalifacilOmrScanGeometry
@@ -5548,52 +5556,9 @@ export function attachAnswerSheetReviewBubbleOverlay(
   }
 
   const data = getOmrCanvasImageData(canvas);
-  if (!data) return { ...meta, geometry: geom };
+  if (!data && !geom.cells?.length) return { ...meta, geometry: geom };
 
-  const W = canvas.width;
-  const H = canvas.height;
-  const bubbles: CalifacilOmrBubbleSample[][] = [];
-
-  for (let r = 0; r < rows; r++) {
-    const rowCells = geom.cells[r];
-    const rowBubbles: CalifacilOmrBubbleSample[] = [];
-    if (!rowCells?.length) {
-      bubbles.push(rowBubbles);
-      continue;
-    }
-    for (let c = 0; c < cols; c++) {
-      const cell = rowCells[c];
-      if (!cell) continue;
-      // Anclar a anillos impresos (nunca preferInk en review).
-      const raw = refineBubbleCenterInCell(data, W, H, cell, {
-        preferInk: false,
-        searchStepDivisor: opts?.fineSearch ? 10 : 4,
-      });
-      const cx0 = (cell.x + cell.w * 0.5) * W;
-      const cy0 = (cell.y + cell.h * 0.5) * H;
-      const maxDx = cell.w * W * maxShiftRatio;
-      const maxDy = cell.h * H * maxShiftRatio;
-      const center = {
-        x: Math.max(cx0 - maxDx, Math.min(cx0 + maxDx, raw.x)),
-        y: Math.max(cy0 - maxDy, Math.min(cy0 + maxDy, raw.y)),
-      };
-      const cellW = Math.max(1, cell.w * W);
-      const cellH = Math.max(1, cell.h * H);
-      const rPx = Math.max(3, Math.min(cellW, cellH) * 0.38);
-      rowBubbles.push({
-        cx: center.x / W,
-        cy: center.y / H,
-        r: rPx / Math.min(W, H),
-        bounds: cell,
-        inkFrac: 0,
-        fillDark: 0,
-        ringDark: 0,
-        score: 0,
-        confidence: 0,
-      });
-    }
-    bubbles.push(rowBubbles);
-  }
+  const bubbles = overlayBubblesFromCells(geom, canvas.width, canvas.height, rows, cols);
 
   return {
     ...meta,
@@ -5610,7 +5575,7 @@ export function attachAnswerSheetReviewBubbleOverlay(
  */
 export function ensureCalifacilPrintedRowGeometry(
   canvas: HTMLCanvasElement,
-  geometry: CalifacilOmrScanGeometry | null | undefined,
+  _geometry: CalifacilOmrScanGeometry | null | undefined,
   columns: number
 ): CalifacilOmrScanGeometry {
   const rows = CALIFACIL_OMR_DEFAULT_ROWS;
@@ -5620,19 +5585,10 @@ export function ensureCalifacilPrintedRowGeometry(
     canvas.width,
     canvas.height
   );
-  if (!geometry?.cells?.length) return printed;
-  const synced = syncCalifacilOmrGeometryImageSize(geometry, canvas.width, canvas.height);
-  const rowCols = synced.cells[0]?.length ?? 0;
-  if (synced.cells.length >= rows && rowCols >= cols) {
-    return {
-      ...synced,
-      cells: synced.cells.slice(0, rows).map((row) => row.slice(0, cols)),
-      bubbles: synced.bubbles?.length
-        ? synced.bubbles.slice(0, rows).map((row) => (row ?? []).slice(0, cols))
-        : synced.bubbles,
-    };
-  }
-  return printed;
+  return {
+    ...printed,
+    bubbles: overlayBubblesFromCells(printed, canvas.width, canvas.height, rows, cols),
+  };
 }
 
 function overlayBubblesFromCells(
@@ -5673,100 +5629,16 @@ export function snapReviewOverlayToPrintedRings(
   meta: OmrScanMetaResult,
   columns: number,
   _rowCount: number,
-  opts?: { maxShiftRatio?: number; maxShiftRatioY?: number; biasRows?: number }
+  _opts?: { maxShiftRatio?: number; maxShiftRatioY?: number; biasRows?: number }
 ): OmrScanMetaResult {
   const rows = CALIFACIL_OMR_DEFAULT_ROWS;
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  const maxShiftRatio = opts?.maxShiftRatio ?? 0.1;
-  const maxShiftRatioY = opts?.maxShiftRatioY ?? 0.1;
-  const gridGeom = ensureCalifacilPrintedRowGeometry(canvas, meta.geometry, cols);
-
-  const first = attachAnswerSheetReviewBubbleOverlay(
-    canvas,
-    { ...meta, geometry: gridGeom },
-    columns,
-    rows,
-    {
-      forceRebuild: true,
-      maxShiftRatio: Math.min(maxShiftRatio, maxShiftRatioY),
-      fineSearch: true,
-    }
-  );
-
-  const geom = first.geometry;
-  if (!geom?.cells?.length) return first;
-  if ((geom.bubbles?.length ?? 0) < rows) {
-    geom.bubbles = overlayBubblesFromCells(geom, canvas.width, canvas.height, rows, cols);
-  }
-  const geomBubbles = geom.bubbles;
-  if (!geomBubbles?.length) return first;
-
-  const W = Math.max(1, canvas.width);
-  const H = Math.max(1, canvas.height);
-  const data = getOmrCanvasImageData(canvas);
-  const bubbles: CalifacilOmrBubbleSample[][] = [];
-
-  for (let r = 0; r < rows; r++) {
-    const rowCells = geom.cells[r];
-    const rowBubbles: CalifacilOmrBubbleSample[] = [];
-    if (!rowCells?.length) {
-      bubbles.push(rowBubbles);
-      continue;
-    }
-    for (let c = 0; c < cols; c++) {
-      const cell = rowCells[c];
-      if (!cell) continue;
-      const cx0 = (cell.x + cell.w * 0.5) * W;
-      const cy0 = (cell.y + cell.h * 0.5) * H;
-      const origin = { x: cx0, y: cy0 };
-      const raw = data
-        ? refineBubbleCenterInCell(data, W, H, cell, {
-            preferInk: false,
-            searchStepDivisor: 10,
-            originPx: origin,
-          })
-        : origin;
-      const maxDx = cell.w * W * maxShiftRatio;
-      const maxDy = cell.h * H * maxShiftRatioY;
-      const center = {
-        x: Math.max(cx0 - maxDx, Math.min(cx0 + maxDx, raw.x)),
-        y: Math.max(cy0 - maxDy, Math.min(cy0 + maxDy, raw.y)),
-      };
-      const cellW = Math.max(1, cell.w * W);
-      const cellH = Math.max(1, cell.h * H);
-      const rPx = Math.max(3, Math.min(cellW, cellH) * 0.38);
-      rowBubbles.push({
-        cx: center.x / W,
-        cy: center.y / H,
-        r: rPx / Math.min(W, H),
-        bounds: cell,
-        inkFrac: 0,
-        fillDark: 0,
-        ringDark: 0,
-        score: 0,
-        confidence: 0,
-      });
-    }
-    bubbles.push(rowBubbles);
-  }
-
-  const snappedCells = geom.cells.slice(0, rows).map((rowCells, r) =>
-    (rowCells ?? []).slice(0, cols).map((cell, c) => {
-      const b = bubbles[r]?.[c];
-      if (!cell || !b || !Number.isFinite(b.cx) || !Number.isFinite(b.cy)) return cell;
-      return {
-        ...cell,
-        x: b.cx - cell.w * 0.5,
-        y: b.cy - cell.h * 0.5,
-      };
-    })
-  );
-
+  const gridGeom = ensureCalifacilPrintedRowGeometry(canvas, null, cols);
+  const bubbles = overlayBubblesFromCells(gridGeom, canvas.width, canvas.height, rows, cols);
   return {
-    ...first,
+    ...meta,
     geometry: {
-      ...geom,
-      cells: snappedCells,
+      ...gridGeom,
       bubbles,
     },
   };
@@ -5790,31 +5662,10 @@ export function buildLetterDisplayOverlayGeometry(
   const rows = clampCalifacilOmrRowCount(rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const base = buildAnswerSheetOmrGeometry(rows, cols, canvas.width, canvas.height);
-  if (opts?.skipSnap) {
-    return base;
-  }
-  const maxShiftRatio = opts?.maxShiftRatio ?? 0.1;
-  const attached = attachAnswerSheetReviewBubbleOverlay(
-    canvas,
-    {
-      picks: Array(rows).fill(null),
-      rows: Array.from({ length: rows }, () => ({
-        pick: null,
-        ambiguous: false,
-        inkFractions: [] as number[],
-      })),
-      needsVisionAssist: false,
-      maxSameColumnCount: 0,
-      geometry: base,
-      reviewSourceCanvas: canvas,
-      controlNumberDigits: [],
-      controlNumber: null,
-    },
-    cols,
-    rows,
-    { forceRebuild: true, maxShiftRatio }
-  );
-  return attached.geometry ?? base;
+  return {
+    ...base,
+    bubbles: overlayBubblesFromCells(base, canvas.width, canvas.height, rows, cols),
+  };
 }
 
 /**
@@ -9216,7 +9067,9 @@ function readControlNumberFromTemplateGeometry(
         rings.push(0);
         continue;
       }
-      const sample = sampleBubbleMarkAtCell(data, width, height, cell, otsuT, thresholds);
+      const sample = sampleBubbleMarkAtCell(data, width, height, cell, otsuT, thresholds, {
+        lockCenter: true,
+      });
       fills.push(sample.fillDark);
       scores.push(sample.score);
       inkFracs.push(sample.inkFrac);
@@ -9788,14 +9641,48 @@ function rejectAlignStripFalsePositive(
   return pick;
 }
 
+export function isPenFillOutlier(fill: number, sheetMed: number): boolean {
+  const med = Math.max(0, sheetMed);
+  return (
+    fill >= med + CALIFACIL_ANSWER_SHEET_ABSOLUTE.sheetOutlierAdd &&
+    fill / Math.max(med, 0.05) >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.sheetOutlierRatio
+  );
+}
+
+function rowInkGap(fracs: number[] | undefined): number {
+  if (!fracs?.length) return 0;
+  let best = 0;
+  let second = 0;
+  for (const v of fracs) {
+    if (v >= best) {
+      second = best;
+      best = v;
+    } else if (v > second) {
+      second = v;
+    }
+  }
+  return best - second;
+}
+
+function collectSheetInkSamples(meta: OmrScanMetaResult, rows: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < rows; i++) {
+    const fracs = meta.rows[i]?.inkFractions;
+    if (!fracs?.length) continue;
+    for (const f of fracs) out.push(f);
+  }
+  return out;
+}
+
 function pickAnswerSheetRowAbsolute(params: {
   inkFracs: number[];
   fills: number[];
   scores: number[];
   rings?: number[];
   cols: number;
+  sheetMed?: number;
 }): { pick: number | null; ambiguous: boolean; confidence: number } {
-  const { inkFracs, fills, scores, rings, cols } = params;
+  const { inkFracs, fills, scores, rings, cols, sheetMed } = params;
   const maxInk = inkFracs.reduce((a, b) => Math.max(a, b), 0);
   if (maxInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk) {
     return { pick: null, ambiguous: false, confidence: 0 };
@@ -9844,8 +9731,10 @@ function pickAnswerSheetRowAbsolute(params: {
   const penOk =
     centerVsRing >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minCenterVsRing &&
     fillGap >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minFillGap;
+  const outlierOk =
+    sheetMed == null || isPenFillOutlier(fillBest, sheetMed);
 
-  if (inkOk && scoreOk && penOk && inkBest === scoreBest) {
+  if (inkOk && scoreOk && penOk && outlierOk && inkBest === scoreBest) {
     return {
       pick: rejectAlignStripFalsePositive(
         rejectQuestionNumberFalsePositive(inkBest, inkFracs, fills, cols),
@@ -9858,7 +9747,7 @@ function pickAnswerSheetRowAbsolute(params: {
     };
   }
 
-  if (!inkOk || !scoreOk || !penOk || inkBest !== scoreBest) {
+  if (!inkOk || !scoreOk || !penOk || !outlierOk || inkBest !== scoreBest) {
     const ambiguous =
       maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 &&
       inkOk !== scoreOk &&
@@ -9912,10 +9801,17 @@ export function readAnswerSheetPicksFromTemplateGeometry(
   let resolvedCount = 0;
   let confidenceSum = 0;
 
+  const sampled: {
+    fills: number[];
+    scores: number[];
+    inkFracs: number[];
+    rings: number[];
+  }[] = [];
+
   for (let row = 0; row < rows; row++) {
     const rowCells = geometry.cells[row];
     if (!rowCells?.length) {
-      rowMetas.push({ pick: null, ambiguous: false, inkFractions: [] });
+      sampled.push({ fills: [], scores: [], inkFracs: [], rings: [] });
       continue;
     }
 
@@ -9957,81 +9853,43 @@ export function readAnswerSheetPicksFromTemplateGeometry(
         rings.push(0);
         continue;
       }
-      const sample = sampleBubbleMarkAtCell(data, width, height, cell, otsuT, thresholds);
+      const sample = sampleBubbleMarkAtCell(data, width, height, cell, otsuT, thresholds, {
+        lockCenter: true,
+      });
       fills.push(sample.fillDark);
       scores.push(sample.score);
       inkFracs.push(sample.inkFrac);
       rings.push(sample.ringDark);
     }
+    sampled.push({ fills, scores, inkFracs, rings });
+  }
 
-    const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, rings, cols });
-    let finalAbs = abs;
-    let finalInkFracs = inkFracs;
+  const allFills = sampled.flatMap((s) => s.fills);
+  const sheetMed = medianNumber(allFills);
 
-    if (abs.pick === null || abs.ambiguous) {
-      const cy = (rowY0 + rowY1) * 0.5;
-      const radiusPx = Math.max(3, Math.round((rowY1 - rowY0) * 0.22));
-      const diskRInk = Math.max(2, Math.round(radiusPx * 0.55));
-      const columnEdges: number[] = [];
-      for (let c = 0; c <= cols; c++) {
-        if (c === 0) {
-          const cell = rowCells[0];
-          columnEdges.push(cell ? cell.x * W : rowX0);
-        } else if (c === cols) {
-          const cell = rowCells[cols - 1];
-          columnEdges.push(cell ? (cell.x + cell.w) * W : rowX1);
-        } else {
-          const left = rowCells[c - 1];
-          const right = rowCells[c];
-          columnEdges.push(
-            left && right
-              ? ((left.x + left.w) * W + right.x * W) * 0.5
-              : rowX0 + ((rowX1 - rowX0) * c) / cols
-          );
-        }
-      }
-      for (const dy of [4, 3, 2, -2, -3, -4, 5, -5, 6, -6, 8, -8]) {
-        const retryCy = Math.max(
-          rowY0 + 2,
-          Math.min(rowY1 - 2, Math.round(cy + dy))
-        );
-        if (retryCy === Math.round(cy)) continue;
-        const retry = sampleAnswerSheetRowAtCy(
-          data,
-          width,
-          height,
-          columnEdges,
-          cols,
-          retryCy,
-          radiusPx,
-          diskRInk,
-          otsuT,
-          thresholds
-        );
-        const retryAbs = pickAnswerSheetRowAbsolute({
-          inkFracs: retry.inkFracs,
-          fills: retry.fills,
-          scores: retry.scores,
-          rings: retry.rings,
-          cols,
-        });
-        if (retryAbs.pick !== null && (!finalAbs.pick || retryAbs.confidence > finalAbs.confidence)) {
-          finalAbs = retryAbs;
-          finalInkFracs = retry.inkFracs;
-          if (!retryAbs.ambiguous) break;
-        }
-      }
+  for (let row = 0; row < rows; row++) {
+    const s = sampled[row];
+    if (!s?.fills.length) {
+      rowMetas.push({ pick: null, ambiguous: false, inkFractions: [] });
+      continue;
     }
-
-    out[row] = finalAbs.pick;
-    rowMetas.push({
-      pick: finalAbs.pick,
-      ambiguous: finalAbs.ambiguous,
-      inkFractions: [...finalInkFracs],
+    const abs = pickAnswerSheetRowAbsolute({
+      inkFracs: s.inkFracs,
+      fills: s.fills,
+      scores: s.scores,
+      rings: s.rings,
+      cols,
+      sheetMed,
     });
-    if (finalAbs.pick !== null) {
+    out[row] = abs.pick;
+    rowMetas.push({
+      pick: abs.pick,
+      ambiguous: abs.ambiguous,
+      inkFractions: [...s.inkFracs],
+    });
+    if (abs.pick !== null) {
       resolvedCount++;
-      confidenceSum += finalAbs.confidence;
+      confidenceSum += abs.confidence;
     }
   }
 
@@ -10085,56 +9943,21 @@ export function isAnswerSheetOmrMostlyBlank(
 ): boolean {
   const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
   if (rows <= 0) return true;
-  const resolved = meta.picks.slice(0, rows).filter((p) => p != null).length;
-  const marked = countAnswerSheetMarkedRows(meta, rows);
-  const markedCap = Math.max(1, Math.ceil(rows * 0.15));
-  const mid = answerSheetRowInkMedian(meta, rows);
-  const penMin = CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction;
-  let penCount = 0;
+  const samples = collectSheetInkSamples(meta, rows);
+  const sheetMed = medianNumber(samples);
+  let outlierCount = 0;
   for (let i = 0; i < rows; i++) {
     if (meta.picks[i] == null) continue;
-    if (rowMaxInkFraction(meta.rows[i]) >= penMin) penCount++;
-  }
-  if (penCount === 0) return true;
-  if (penCount <= 3) return false;
-
-  // Pocas lecturas con tinta débil (foto de pantalla / moiré / anillos): tratar como blank.
-  const sparseCap = Math.max(2, Math.ceil(rows * 0.2));
-  if (resolved > 0 && resolved <= sparseCap) {
-    let inkSum = 0;
-    let n = 0;
-    for (let i = 0; i < rows; i++) {
-      if (meta.picks[i] == null) continue;
-      const row = meta.rows[i];
-      inkSum += row ? rowMaxInkFraction(row) : 0;
-      n++;
-    }
-    const avgInk = n > 0 ? inkSum / n : 0;
-    if (avgInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 2.2) {
-      return true;
+    const row = meta.rows[i];
+    const maxInk = rowMaxInkFraction(row);
+    if (
+      isPenFillOutlier(maxInk, sheetMed) &&
+      rowInkGap(row?.inkFractions) >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap
+    ) {
+      outlierCount++;
     }
   }
-
-  const weakResolvedCap = Math.ceil(rows * 0.4);
-  if (resolved > 0 && resolved < weakResolvedCap) {
-    let inkSum = 0;
-    let n = 0;
-    for (let i = 0; i < rows; i++) {
-      if (meta.picks[i] == null) continue;
-      const row = meta.rows[i];
-      inkSum += row ? rowMaxInkFraction(row) : 0;
-      n++;
-    }
-    const avgInk = n > 0 ? inkSum / n : 0;
-    if (avgInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 2.2) {
-      return true;
-    }
-  }
-
-  if (marked > markedCap) return false;
-
-  // Mediana de maxInk por fila: hoja vacía / ruido debe quedar bajo blankMaxInk.
-  return mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.25;
+  return outlierCount === 0;
 }
 
 /** Anula lecturas falsas en hojas en blanco o con pocas marcas reales. */
@@ -10160,10 +9983,16 @@ export function sanitizeAnswerSheetOmrMeta(
   }
 
   const picks = meta.picks.slice(0, rows);
-  const penMin = CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction;
+  const samples = collectSheetInkSamples(meta, rows);
+  const sheetMed = medianNumber(samples);
   const rowMetas = meta.rows.slice(0, rows).map((row, i) => {
     const maxInk = rowMaxInkFraction(row);
-    if (picks[i] === null || maxInk < penMin) {
+    const gap = rowInkGap(row?.inkFractions);
+    if (
+      picks[i] === null ||
+      !isPenFillOutlier(maxInk, sheetMed) ||
+      gap < CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkGap
+    ) {
       picks[i] = null;
       return { ...row, pick: null, ambiguous: false };
     }

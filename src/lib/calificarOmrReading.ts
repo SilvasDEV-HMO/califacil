@@ -301,11 +301,11 @@ export async function runCalifacilOmrReadingPipeline(
     uploadKind === 'flatDocument' ||
     Boolean(isMobile && skipReviewUi);
 
-  // Blank / lectura débil: re-leer sobre geometría de overlay antes de aceptar 0%.
+  // Blank / lectura débil: no inflar con un segundo pase que inventa anillos.
   if (
     !skipLetterOverlayRecovery &&
-    ((mostlyBlank && mapped.resolvedCount === 0) ||
-      isWeakMobileOmrMeta(meta, chunk.length, chunk.length))
+    !mostlyBlank &&
+    isWeakMobileOmrMeta(meta, chunk.length, chunk.length)
   ) {
     const snapCanvas =
       (scanCanvas &&
@@ -332,17 +332,18 @@ export async function runCalifacilOmrReadingPipeline(
           meta
         );
         if (
-          letterSnap.picks.filter((p) => p != null).length >
-          snapMeta.picks.filter((p) => p != null).length
+          letterSnap.picks.filter((p) => p != null).length > 0 &&
+          letterSnap.picks.filter((p) => p != null).length <=
+            Math.max(1, snapMeta.picks.filter((p) => p != null).length)
         ) {
           snapMeta = letterSnap;
         }
       }
       const snapMapped = mapRawToDraftDetailed([...snapMeta.picks], chunk);
       if (
-        isUsableOmrRecoveryMeta(snapMeta, chunk.length) ||
-        (snapMapped.resolvedCount > mapped.resolvedCount &&
-          !isAnswerSheetOmrMostlyBlank(snapMeta, chunk.length))
+        isUsableOmrRecoveryMeta(snapMeta, chunk.length) &&
+        snapMapped.resolvedCount <= mapped.resolvedCount + 2 &&
+        snapMapped.resolvedCount >= mapped.resolvedCount
       ) {
         meta = snapMeta;
         raw = [...snapMeta.picks];
@@ -359,7 +360,7 @@ export async function runCalifacilOmrReadingPipeline(
     mapped = mapRawToDraftDetailed(raw, chunk);
   }
 
-  if (isMobile && mapped.resolvedCount < minResolved && !(preWarped && isMobileCamera)) {
+  if (isMobile && mapped.resolvedCount > 0 && mapped.resolvedCount < minResolved && !(preWarped && isMobileCamera)) {
     const recoverySource =
       autoOrientCalifacilSheet(source, omrCols, {
         useGuideCrop: false,
@@ -378,7 +379,11 @@ export async function runCalifacilOmrReadingPipeline(
       const recoveryRaw = [...recoveryMeta.picks];
       const recoveryMapped = mapRawToDraftDetailed(recoveryRaw, chunk);
 
-      if (recoveryMapped.resolvedCount > mapped.resolvedCount) {
+      if (
+        !isAnswerSheetOmrMostlyBlank(recoveryMeta, chunk.length) &&
+        recoveryMapped.resolvedCount <= mapped.resolvedCount + 2 &&
+        recoveryMapped.resolvedCount >= mapped.resolvedCount
+      ) {
         meta = recoveryMeta;
         raw = recoveryRaw;
         mapped = recoveryMapped;
