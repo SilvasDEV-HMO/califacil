@@ -1817,7 +1817,7 @@ export default function CalificarPage() {
             { ...meta, geometry: overlayGeom, picks: raw },
             omrCols,
             omrRowCount,
-            { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
+            { maxShiftRatio: 0.1, maxShiftRatioY: 0.1, biasRows: omrRowCount }
           );
           overlayGeom = attached.geometry ?? overlayGeom;
         }
@@ -1903,7 +1903,7 @@ export default function CalificarPage() {
             { ...meta, geometry: reviewGeom, picks: raw },
             omrCols,
             omrRowCount,
-            { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
+            { maxShiftRatio: 0.1, maxShiftRatioY: 0.1, biasRows: omrRowCount }
           );
           reviewGeom = attached.geometry ?? reviewGeom;
         } else if (previewCanvas) {
@@ -1920,7 +1920,7 @@ export default function CalificarPage() {
               { ...meta, geometry: reviewGeom, picks: raw },
               omrCols,
               omrRowCount,
-              { maxShiftRatio: 0.18, maxShiftRatioY: 0.16, biasRows: omrRowCount }
+              { maxShiftRatio: 0.1, maxShiftRatioY: 0.1, biasRows: omrRowCount }
             );
             reviewGeom = attached.geometry ?? reviewGeom;
           }
@@ -3489,7 +3489,7 @@ export default function CalificarPage() {
     });
     if (answersError) throw answersError;
 
-    const pct = calculatePercentage(earnedPoints, maxMcPoints);
+    const pct = calculatePercentage(correctCount, mcTotal);
     const wrong = Math.max(0, mcTotal - correctCount);
     return { pct, correct: correctCount, wrong, total: mcTotal };
   };

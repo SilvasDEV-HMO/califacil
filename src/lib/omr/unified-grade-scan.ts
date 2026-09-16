@@ -95,7 +95,7 @@ export function buildDisplayOverlayGeometry(
   }
   return buildLetterDisplayOverlayGeometry(canvas, cols, rows, {
     skipSnap: opts?.skipSnap,
-    maxShiftRatio: opts?.maxShiftRatio ?? 0.22,
+    maxShiftRatio: opts?.maxShiftRatio ?? 0.1,
   });
 }
 

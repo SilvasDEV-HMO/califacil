@@ -103,10 +103,12 @@ export const CALIFACIL_OMR_SCAN = {
 const CALIFACIL_ANSWER_SHEET_ABSOLUTE = {
   minInkFraction: 0.28,
   minInkGap: 0.08,
-  minFillDarkness: 0.14,
+  minFillDarkness: 0.2,
   minScoreAbsolute: 0.04,
-  minScoreGap: 0.04,
+  minScoreGap: 0.05,
   blankMaxInk: 0.095,
+  minCenterVsRing: 0.035,
+  minFillGap: 0.05,
 } as const;
 
 /**
@@ -5502,7 +5504,7 @@ export function attachAnswerSheetReviewBubbleOverlay(
     canvas.height
   );
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  const maxShiftRatio = opts?.maxShiftRatio ?? 0.35;
+  const maxShiftRatio = opts?.maxShiftRatio ?? 0.1;
 
   const bubblesAlignedWithCells = (
     g: CalifacilOmrScanGeometry
@@ -5675,8 +5677,8 @@ export function snapReviewOverlayToPrintedRings(
 ): OmrScanMetaResult {
   const rows = CALIFACIL_OMR_DEFAULT_ROWS;
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
-  const maxShiftRatio = opts?.maxShiftRatio ?? 0.18;
-  const maxShiftRatioY = opts?.maxShiftRatioY ?? 0.16;
+  const maxShiftRatio = opts?.maxShiftRatio ?? 0.1;
+  const maxShiftRatioY = opts?.maxShiftRatioY ?? 0.1;
   const gridGeom = ensureCalifacilPrintedRowGeometry(canvas, meta.geometry, cols);
 
   const first = attachAnswerSheetReviewBubbleOverlay(
@@ -5701,23 +5703,6 @@ export function snapReviewOverlayToPrintedRings(
 
   const W = Math.max(1, canvas.width);
   const H = Math.max(1, canvas.height);
-  const biasRows = rows;
-  const dxs: number[] = [];
-  const dys: number[] = [];
-  for (let r = 0; r < biasRows; r++) {
-    const rowCells = geom.cells[r];
-    const rowBubbles = geomBubbles[r];
-    if (!rowCells?.length || !rowBubbles?.length) continue;
-    for (let c = 0; c < cols; c++) {
-      const cell = rowCells[c];
-      const b = rowBubbles[c];
-      if (!cell || !b || !Number.isFinite(b.cx) || !Number.isFinite(b.cy)) continue;
-      dxs.push(b.cx - (cell.x + cell.w * 0.5));
-      dys.push(b.cy - (cell.y + cell.h * 0.5));
-    }
-  }
-  const medDx = medianNumber(dxs);
-  const medDy = medianNumber(dys);
   const data = getOmrCanvasImageData(canvas);
   const bubbles: CalifacilOmrBubbleSample[][] = [];
 
@@ -5733,7 +5718,7 @@ export function snapReviewOverlayToPrintedRings(
       if (!cell) continue;
       const cx0 = (cell.x + cell.w * 0.5) * W;
       const cy0 = (cell.y + cell.h * 0.5) * H;
-      const origin = { x: cx0 + medDx * W, y: cy0 + medDy * H };
+      const origin = { x: cx0, y: cy0 };
       const raw = data
         ? refineBubbleCenterInCell(data, W, H, cell, {
             preferInk: false,
@@ -5761,11 +5746,6 @@ export function snapReviewOverlayToPrintedRings(
         score: 0,
         confidence: 0,
       });
-    }
-    const rowCys = rowBubbles.map((b) => b.cy).filter((y) => Number.isFinite(y));
-    if (rowCys.length > 0) {
-      const rowCy = medianNumber(rowCys);
-      for (const b of rowBubbles) b.cy = rowCy;
     }
     bubbles.push(rowBubbles);
   }
@@ -5813,7 +5793,7 @@ export function buildLetterDisplayOverlayGeometry(
   if (opts?.skipSnap) {
     return base;
   }
-  const maxShiftRatio = opts?.maxShiftRatio ?? 0.12;
+  const maxShiftRatio = opts?.maxShiftRatio ?? 0.1;
   const attached = attachAnswerSheetReviewBubbleOverlay(
     canvas,
     {
@@ -5850,7 +5830,7 @@ export function rereadOmrWithLetterBubbleSnap(
   const rows = clampCalifacilOmrRowCount(rowCount);
   const cols = Math.max(2, Math.min(5, Math.round(columns)));
   const letterGeom = buildLetterDisplayOverlayGeometry(canvas, cols, rows, {
-    maxShiftRatio: 0.22,
+    maxShiftRatio: 0.1,
   });
   return rereadOmrPicksOnGeometry(canvas, letterGeom, cols, rows, baseMeta);
 }
@@ -7991,11 +7971,11 @@ const FRAME_GRID_SCAN_THRESHOLDS: ScanThresholds = {
 
 /** Umbrales relajados para lectura en hoja ya enderezada (foto móvil / sombras). */
 const MOBILE_WARPED_SCAN_THRESHOLDS: ScanThresholds = {
-  minMarkDarkness: 0.052,
-  minBestVsSecondGap: 0.026,
-  minBestVsSecondRatio: 1.2,
-  minCenterVsRingDelta: 0.026,
-  minSolidCenterDarkness: 0.15,
+  minMarkDarkness: 0.072,
+  minBestVsSecondGap: 0.038,
+  minBestVsSecondRatio: 1.35,
+  minCenterVsRingDelta: 0.04,
+  minSolidCenterDarkness: 0.24,
   ringDarknessWeight: CALIFACIL_OMR_SCAN.ringDarknessWeight,
 };
 
@@ -9225,6 +9205,7 @@ function readControlNumberFromTemplateGeometry(
     const fills: number[] = [];
     const scores: number[] = [];
     const inkFracs: number[] = [];
+    const rings: number[] = [];
 
     for (let d = 0; d <= 9; d++) {
       const cell = colCells[d];
@@ -9232,15 +9213,17 @@ function readControlNumberFromTemplateGeometry(
         fills.push(0);
         scores.push(0);
         inkFracs.push(0);
+        rings.push(0);
         continue;
       }
       const sample = sampleBubbleMarkAtCell(data, width, height, cell, otsuT, thresholds);
       fills.push(sample.fillDark);
       scores.push(sample.score);
       inkFracs.push(sample.inkFrac);
+      rings.push(sample.ringDark);
     }
 
-    const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols: 10 });
+    const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, rings, cols: 10 });
     digits[col] = abs.pick;
   }
 
@@ -9418,10 +9401,11 @@ function sampleAnswerSheetRowAtCy(
   diskRInk: number,
   otsuT: number,
   thresholds: ScanThresholds
-): { fills: number[]; scores: number[]; inkFracs: number[] } {
+): { fills: number[]; scores: number[]; inkFracs: number[]; rings: number[] } {
   const fills: number[] = [];
   const scores: number[] = [];
   const inkFracs: number[] = [];
+  const rings: number[] = [];
   const rw = thresholds.ringDarknessWeight ?? CALIFACIL_OMR_SCAN.ringDarknessWeight;
   for (let c = 0; c < cols; c++) {
     const cx = (columnEdges[c]! + columnEdges[c + 1]!) * 0.5;
@@ -9443,12 +9427,13 @@ function sampleAnswerSheetRowAtCy(
       Math.max(2, Math.round(radiusPx))
     );
     fills.push(fillDark);
+    rings.push(ringDark);
     scores.push(fillDark - ringDark * rw);
     inkFracs.push(
       sampleDiskInkFractionAtThreshold(data, width, height, cx, cy, diskRInk, otsuT)
     );
   }
-  return { fills, scores, inkFracs };
+  return { fills, scores, inkFracs, rings };
 }
 
 function bestColumnByGap(values: number[], cols: number): { best: number; gap: number; val: number } {
@@ -9807,9 +9792,10 @@ function pickAnswerSheetRowAbsolute(params: {
   inkFracs: number[];
   fills: number[];
   scores: number[];
+  rings?: number[];
   cols: number;
 }): { pick: number | null; ambiguous: boolean; confidence: number } {
-  const { inkFracs, fills, scores, cols } = params;
+  const { inkFracs, fills, scores, rings, cols } = params;
   const maxInk = inkFracs.reduce((a, b) => Math.max(a, b), 0);
   if (maxInk < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk) {
     return { pick: null, ambiguous: false, confidence: 0 };
@@ -9839,6 +9825,14 @@ function pickAnswerSheetRowAbsolute(params: {
   const scoreVal = scores[scoreBest] ?? 0;
   const scoreGap = scoreVal - (scores[scoreSecond] ?? 0);
   const fillBest = fills[scoreBest] ?? 0;
+  const ringBest = rings?.[scoreBest] ?? 0;
+  let fillSecondVal = 0;
+  for (let c = 0; c < cols; c++) {
+    if (c === scoreBest) continue;
+    fillSecondVal = Math.max(fillSecondVal, fills[c] ?? 0);
+  }
+  const fillGap = fillBest - fillSecondVal;
+  const centerVsRing = fillBest - ringBest;
 
   const inkOk =
     inkVal >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction &&
@@ -9847,8 +9841,11 @@ function pickAnswerSheetRowAbsolute(params: {
     fillBest >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minFillDarkness &&
     scoreVal >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minScoreAbsolute &&
     scoreGap >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minScoreGap;
+  const penOk =
+    centerVsRing >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minCenterVsRing &&
+    fillGap >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minFillGap;
 
-  if (inkOk && scoreOk && inkBest === scoreBest) {
+  if (inkOk && scoreOk && penOk && inkBest === scoreBest) {
     return {
       pick: rejectAlignStripFalsePositive(
         rejectQuestionNumberFalsePositive(inkBest, inkFracs, fills, cols),
@@ -9861,8 +9858,7 @@ function pickAnswerSheetRowAbsolute(params: {
     };
   }
 
-  // Exigir tinta + score: un solo canal (p. ej. score por moiré/contorno) no basta.
-  if (!inkOk || !scoreOk || inkBest !== scoreBest) {
+  if (!inkOk || !scoreOk || !penOk || inkBest !== scoreBest) {
     const ambiguous =
       maxInk > CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 &&
       inkOk !== scoreOk &&
@@ -9950,6 +9946,7 @@ export function readAnswerSheetPicksFromTemplateGeometry(
     const fills: number[] = [];
     const scores: number[] = [];
     const inkFracs: number[] = [];
+    const rings: number[] = [];
 
     for (let c = 0; c < cols; c++) {
       const cell = rowCells[c];
@@ -9957,15 +9954,17 @@ export function readAnswerSheetPicksFromTemplateGeometry(
         fills.push(0);
         scores.push(0);
         inkFracs.push(0);
+        rings.push(0);
         continue;
       }
       const sample = sampleBubbleMarkAtCell(data, width, height, cell, otsuT, thresholds);
       fills.push(sample.fillDark);
       scores.push(sample.score);
       inkFracs.push(sample.inkFrac);
+      rings.push(sample.ringDark);
     }
 
-    const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols });
+    const abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, rings, cols });
     let finalAbs = abs;
     let finalInkFracs = inkFracs;
 
@@ -10013,6 +10012,7 @@ export function readAnswerSheetPicksFromTemplateGeometry(
           inkFracs: retry.inkFracs,
           fills: retry.fills,
           scores: retry.scores,
+          rings: retry.rings,
           cols,
         });
         if (retryAbs.pick !== null && (!finalAbs.pick || retryAbs.confidence > finalAbs.confidence)) {
@@ -10062,7 +10062,7 @@ export function countAnswerSheetMarkedRows(
   for (let i = 0; i < rows; i++) {
     const row = meta.rows[i];
     if (!row || row.pick === null) continue;
-    if (rowMaxInkFraction(row) >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35) n++;
+    if (rowMaxInkFraction(row) >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction) n++;
   }
   return n;
 }
@@ -10089,30 +10089,14 @@ export function isAnswerSheetOmrMostlyBlank(
   const marked = countAnswerSheetMarkedRows(meta, rows);
   const markedCap = Math.max(1, Math.ceil(rows * 0.15));
   const mid = answerSheetRowInkMedian(meta, rows);
-  // Sin ninguna lectura OMR y poca tinta "marcada": hoja en blanco (anillos impresos no cuentan).
-  if (resolved === 0 && marked <= markedCap) return true;
-
-  // 1–3 picks sparse (anillos impresos / sombra / franja): hoja en blanco.
-  // 3/30 no es un examen contestado; no tumba hojas con ≥10% de marcas reales.
-  const strongSparseCap = Math.max(3, Math.floor(rows * 0.1));
-  if (resolved > 0 && resolved <= strongSparseCap) {
-    let pickInkSum = 0;
-    let pickN = 0;
-    for (let i = 0; i < rows; i++) {
-      if (meta.picks[i] == null) continue;
-      pickInkSum += rowMaxInkFraction(meta.rows[i]);
-      pickN++;
-    }
-    const avgPickInk = pickN > 0 ? pickInkSum / pickN : 0;
-    const realPen = avgPickInk >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction;
-    const pickedCols = meta.picks.slice(0, rows).filter((p): p is number => p != null);
-    const sameCol =
-      pickedCols.length > 0 && pickedCols.every((p) => p === pickedCols[0]);
-    if (sameCol && (mid >= CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35 || !realPen)) {
-      return true;
-    }
-    if (!realPen && mid < CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.35) return true;
+  const penMin = CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction;
+  let penCount = 0;
+  for (let i = 0; i < rows; i++) {
+    if (meta.picks[i] == null) continue;
+    if (rowMaxInkFraction(meta.rows[i]) >= penMin) penCount++;
   }
+  if (penCount === 0) return true;
+  if (penCount <= 3) return false;
 
   // Pocas lecturas con tinta débil (foto de pantalla / moiré / anillos): tratar como blank.
   const sparseCap = Math.max(2, Math.ceil(rows * 0.2));
@@ -10159,7 +10143,6 @@ export function sanitizeAnswerSheetOmrMeta(
   rowCount?: number
 ): OmrScanMetaResult {
   const rows = clampCalifacilOmrRowCount(rowCount ?? meta.picks.length);
-  const blankInk = CALIFACIL_ANSWER_SHEET_ABSOLUTE.blankMaxInk * 1.2;
 
   // Hoja mostly-blank: siempre 0 picks (nunca conservar 3 falsos → 3/30).
   if (isAnswerSheetOmrMostlyBlank(meta, rows)) {
@@ -10177,9 +10160,10 @@ export function sanitizeAnswerSheetOmrMeta(
   }
 
   const picks = meta.picks.slice(0, rows);
+  const penMin = CALIFACIL_ANSWER_SHEET_ABSOLUTE.minInkFraction;
   const rowMetas = meta.rows.slice(0, rows).map((row, i) => {
     const maxInk = rowMaxInkFraction(row);
-    if (picks[i] === null || maxInk < blankInk) {
+    if (picks[i] === null || maxInk < penMin) {
       picks[i] = null;
       return { ...row, pick: null, ambiguous: false };
     }
@@ -10592,7 +10576,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
     let ambiguous = false;
 
     if (templateGridOnly) {
-      let abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, cols });
+      let abs = pickAnswerSheetRowAbsolute({ inkFracs, fills, scores, rings, cols });
       if (abs.pick === null) {
         for (const dy of [4, 3, 2, -2, -3, -4, 5, -5, 6, -6, 8, -8]) {
           const retryCy = Math.max(
@@ -10616,6 +10600,7 @@ function scanCalifacilOmrCanvasDetailedWithProfile(
             inkFracs: retry.inkFracs,
             fills: retry.fills,
             scores: retry.scores,
+            rings: retry.rings,
             cols,
           });
           if (retryAbs.pick !== null) {

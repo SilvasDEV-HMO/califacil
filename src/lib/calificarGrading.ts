@@ -147,7 +147,7 @@ export function gradeMcDraftAgainstVirtualKey(
 
   const total = gradedTotal;
   const wrong = Math.max(0, total - correctCount);
-  const pct = maxMcPoints > 0 ? calculatePercentage(earnedPoints, maxMcPoints) : 0;
+  const pct = total > 0 ? calculatePercentage(correctCount, total) : 0;
   return { pct, correct: correctCount, wrong, total };
 }
 

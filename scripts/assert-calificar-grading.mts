@@ -12,7 +12,7 @@ import {
   mapOmrPicksToMcDraftDetailed,
 } from '../src/lib/calificarGrading.ts';
 import { buildCalifacilVirtualKey, CALIFACIL_PRINT_MAX_QUESTIONS } from '../src/lib/printExam.ts';
-import { isMultipleChoiceAnswerCorrect, resolveOptionIndexFromValue } from '../src/lib/utils.ts';
+import { calculatePercentage, isMultipleChoiceAnswerCorrect, resolveOptionIndexFromValue } from '../src/lib/utils.ts';
 import {
   isAnswerSheetOmrMostlyBlank,
   sanitizeAnswerSheetOmrMeta,
@@ -187,17 +187,17 @@ assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blan
   assert(after.correct === 0 && after.pct === 0, '5 falsos → 0/30');
 }
 
-// --- 1 pick "fuerte" + mediana de hoja vacía (madera/strip) → blank → 0/30 ---
+// --- 1–2 picks de bolígrafo reales: conservar (no anular por mediana de tabla) ---
 {
   const rows = 30;
   const picks: (number | null)[] = Array.from({ length: rows }, () => null);
-  picks[7] = 2; // coincide con clave → sería 1/30 sin sanitize
+  picks[0] = 0;
   const rowMetas = Array.from({ length: rows }, (_, i) => ({
     pick: picks[i],
     ambiguous: false,
     inkFractions:
       picks[i] != null
-        ? [0.06, 0.05, 0.28, 0.05]
+        ? [0.42, 0.05, 0.04, 0.04]
         : [0.045, 0.04, 0.04, 0.038],
   }));
   const meta = {
@@ -210,15 +210,79 @@ assert(blank30.correct === 0 && blank30.total === 30 && blank30.pct === 0, 'blan
     controlNumberDigits: [] as (number | null)[],
     controlNumber: null as string | null,
   };
-  assert(isAnswerSheetOmrMostlyBlank(meta, rows), '1 pick fuerte + mediana ruido = mostly-blank');
+  assert(!isAnswerSheetOmrMostlyBlank(meta, rows), '1 pick bolígrafo no es mostly-blank');
   const cleaned = sanitizeAnswerSheetOmrMeta(meta, rows);
-  assert(
-    cleaned.picks.every((p) => p == null),
-    '1 pick fuerte sanitizado a null'
-  );
-  const after = gradeOmrChunkPicksAgainstVirtualKey(chunk30, cleaned.picks, key30);
-  assert(after.correct === 0 && after.pct === 0, '1 falso fuerte → 0/30');
+  assert(cleaned.picks.filter((p) => p != null).length === 1, 'conservar 1 marca real');
 }
+
+{
+  const rows = 30;
+  const picks: (number | null)[] = Array.from({ length: rows }, () => null);
+  picks[0] = 0;
+  picks[1] = 1;
+  for (let i = 2; i < 10; i++) picks[i] = i % 4;
+  const rowMetas = Array.from({ length: rows }, (_, i) => ({
+    pick: picks[i],
+    ambiguous: false,
+    inkFractions:
+      i === 0
+        ? [0.45, 0.05, 0.04, 0.04]
+        : i === 1
+          ? [0.05, 0.44, 0.04, 0.04]
+          : picks[i] != null
+            ? [0.12, 0.08, 0.07, 0.07]
+            : [0.04, 0.03, 0.03, 0.03],
+  }));
+  const meta = {
+    picks,
+    rows: rowMetas,
+    needsVisionAssist: false,
+    maxSameColumnCount: 3,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  assert(!isAnswerSheetOmrMostlyBlank(meta, rows), '2 bolígrafos + ruido no wipe');
+  const cleaned = sanitizeAnswerSheetOmrMeta(meta, rows);
+  const kept = cleaned.picks.filter((p) => p != null);
+  assert(kept.length === 2, `2 reales + ruido → 2 lecturas, got ${kept.length}`);
+  assert(cleaned.picks[0] === 0 && cleaned.picks[1] === 1, 'conservar 1A y 2B');
+}
+
+// --- ~10 anillos débiles → 0/30 ---
+{
+  const rows = 30;
+  const picks: (number | null)[] = Array.from({ length: rows }, () => null);
+  for (let i = 0; i < 10; i++) picks[i] = i % 4;
+  const rowMetas = Array.from({ length: rows }, (_, i) => ({
+    pick: picks[i],
+    ambiguous: false,
+    inkFractions:
+      picks[i] != null
+        ? [0.12, 0.10, 0.09, 0.08]
+        : [0.05, 0.04, 0.04, 0.04],
+  }));
+  const meta = {
+    picks,
+    rows: rowMetas,
+    needsVisionAssist: false,
+    maxSameColumnCount: 3,
+    geometry: null,
+    reviewSourceCanvas: null,
+    controlNumberDigits: [] as (number | null)[],
+    controlNumber: null as string | null,
+  };
+  assert(isAnswerSheetOmrMostlyBlank(meta, rows), '10 anillos débiles = mostly-blank');
+  const cleaned = sanitizeAnswerSheetOmrMeta(meta, rows);
+  assert(cleaned.picks.every((p) => p == null), '10 anillos → 0 picks');
+  const after = gradeOmrChunkPicksAgainstVirtualKey(chunk30, cleaned.picks, key30);
+  assert(after.correct === 0 && after.pct === 0, 'anillos → 0/30');
+}
+
+assert(calculatePercentage(10, 30) === 33, '10/30 = 33%');
+assert(calculatePercentage(11, 30) === 37, '11/30 = 37%');
+
 
 // --- pickBetterOmrMeta: blank gana a strip con 1 pick ---
 {
@@ -333,7 +397,7 @@ const draftMixed = mapOmrPicksToMcDraftDetailed(mixed, mixedPicks).draft;
 const draftStats = gradeMcDraftAgainstVirtualKey(draftMixed, mixed, mixedKey);
 assert(omrMixed.pct === draftStats.pct, `pct unificado omr=${omrMixed.pct} draft=${draftStats.pct}`);
 assert(omrMixed.correct === draftStats.correct, 'correct unificado');
-assert(omrMixed.pct === 40, `mixed pct=${omrMixed.pct}`);
+assert(omrMixed.pct === 67, `mixed pct=${omrMixed.pct}`);
 
 // --- pick en columna muted (opción inexistente) → incorrecto ---
 const q3 = [mkMc('short', ['a', 'b'], 'a')];
@@ -356,6 +420,6 @@ for (let i = 0; i < mixed.length; i++) {
 assert(persistCorrect === draftStats.correct, 'persist correct count');
 assert(persistEarned === 2, `persist earned=${persistEarned}`);
 
-console.log(
-  'ok: calificar grading (paridad, 100%, blank 0/30, sanitize 3falsos, 1fuerte, pickBetter blank-safe, filler, puntos, muted)'
-);
+  console.log(
+    'ok: calificar grading (paridad, 100%, blank 0/30, sanitize anillos, 2 reales, 10/30=33%, puntos, muted)'
+  );
