@@ -41,6 +41,7 @@ import {
 } from '@/lib/omrZipGrade';
 import {
   CUSTOM20_OPTIONS,
+  cropCustom20HandwrittenId,
   isCustom20Exam,
   readCustom20AnswerSheet,
 } from '@/lib/omr/custom-20/read-sheet';
@@ -591,6 +592,7 @@ export default function CalificarPage() {
   /** Geometría de celdas del último escaneo (misma relación de aspecto que la vista previa). */
   const [reviewOmrGeometry, setReviewOmrGeometry] = useState<CalifacilOmrScanGeometry | null>(null);
   const [reviewOmrPicks, setReviewOmrPicks] = useState<(number | null)[]>([]);
+  const [handwrittenCurpUrl, setHandwrittenCurpUrl] = useState<string | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
   const [desktopScanKind, setDesktopScanKind] = useState<'pdf' | 'folder' | null>(null);
 
@@ -1454,6 +1456,8 @@ export default function CalificarPage() {
         }
         gradeSource = customRead.warped;
         gradeDisplaySource = customRead.warped;
+        const idCrop = cropCustom20HandwrittenId(rawCanvas);
+        setHandwrittenCurpUrl(idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null);
         gradePreWarped = true;
         gradeSkipSheetValidation = true;
         gradeReadingOverride = buildCalifacilOmrReadingOverride(
@@ -2267,6 +2271,7 @@ export default function CalificarPage() {
     setMobileResultsDraft({});
     setResultsSheetIdx(0);
     setReviewQualityHint(null);
+    setHandwrittenCurpUrl(null);
     setPhase('elegir');
     setSheetIndex(0);
     setConfirmedByQuestionId({});
@@ -5835,6 +5840,17 @@ export default function CalificarPage() {
                     </div>
                   </div>
                 )}
+                {handwrittenCurpUrl && isCustom20Exam(user?.email, questions) ? (
+                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+                    <p className="text-xs font-medium text-sky-950">CURP escrita en la hoja</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={handwrittenCurpUrl}
+                      alt="CURP manuscrita"
+                      className="mt-1 max-h-16 w-full bg-white object-contain"
+                    />
+                  </div>
+                ) : null}
                 {canGradeStudents && currentChunk.length > 0 ? (
                   <div className="rounded-lg border border-emerald-200/80 bg-emerald-50/95 px-3 py-2 text-center">
                     <div className="text-sm font-semibold text-emerald-950">

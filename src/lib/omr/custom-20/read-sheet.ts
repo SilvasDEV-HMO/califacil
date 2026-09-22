@@ -30,6 +30,10 @@ const GRID = {
   radius: 0.012,
 } as const;
 
+/** El relleno cae un poco arriba-izquierda del anillo impreso. El overlay se centra en el anillo. */
+const OVERLAY_DX = 0.008;
+const OVERLAY_DY = 0.008;
+
 /** Oscuridad media del interior. Una marca borrada queda por debajo de la nueva. */
 const MARK_MIN = 10;
 const MARK_GAP = 8;
@@ -157,11 +161,11 @@ function gridCells(width: number, height: number): OmrNormRect[][] {
     const rowY = i === 9 ? GRID.lastRowY : GRID.rowY0 + i * GRID.rowPitch;
     const y = rowY - r;
     for (const col of [0, 1] as const) {
-      const x0 = col === 0 ? GRID.leftColX0 : GRID.rightColX0;
+      const x0 = (col === 0 ? GRID.leftColX0 : GRID.rightColX0) + OVERLAY_DX;
       cells.push(
         CUSTOM20_OPTIONS.map((_, k) => ({
           x: x0 + k * GRID.colPitch - r,
-          y,
+          y: y + OVERLAY_DY,
           w: r * 2,
           h: r * 2,
         }))
@@ -237,6 +241,35 @@ export function isCustom20Exam(
     const opts = (q.options ?? []).map((o) => String(o).trim().toUpperCase());
     return opts.length === 4 && ['A', 'B', 'C', 'D'].every((letter, i) => opts[i] === letter);
   });
+}
+
+/** Franja manuscrita justo encima de los cuadros (CURP), en la foto original. */
+export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  const quad = findCornerSquares(canvas);
+  if (!quad || typeof document === 'undefined') return null;
+  const tl = quad[0];
+  const tr = quad[1];
+  const bl = quad[3];
+  const downX = bl.x - tl.x;
+  const downY = bl.y - tl.y;
+  const band = 0.09;
+  const src: [Pt, Pt, Pt, Pt] = [
+    { x: tl.x - downX * band, y: tl.y - downY * band },
+    { x: tr.x - downX * band, y: tr.y - downY * band },
+    tr,
+    tl,
+  ];
+  const outW = 520;
+  const outH = 72;
+  const dst: [Pt, Pt, Pt, Pt] = [
+    { x: 0, y: 0 },
+    { x: outW, y: 0 },
+    { x: outW, y: outH },
+    { x: 0, y: outH },
+  ];
+  const h = computeHomographySrcToDst(src, dst);
+  if (!h) return null;
+  return warpCanvasWithHomography(canvas, h, outW, outH);
 }
 
 export function warpCustom20Canvas(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
