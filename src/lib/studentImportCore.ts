@@ -36,8 +36,67 @@ export type ImportedStudent = {
 export type StudentImportResult = {
   groupName: string | null;
   students: ImportedStudent[];
-  source: 'itson_pdf' | 'csv' | 'xlsx' | 'generic_pdf';
+  source: 'itson_pdf' | 'csv' | 'xlsx' | 'generic_pdf' | 'sep_list';
+  /** Clave de la escuela, p. ej. 26DST0060E. */
+  cct?: string | null;
+  /** Grupo de la lista, p. ej. 1-A. */
+  grupo?: string | null;
+  /** Turno: V, M o N. */
+  turno?: string | null;
 };
+
+const CCT_RE = /^\d{2}[A-Z]{3}\d{4}[A-Z]$/;
+const GRUPO_RE = /^\d{1,2}-[A-Z]$/;
+const TURNO_RE = /^[VMN]$/;
+const CURP_RE = /^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$/;
+
+export function schoolGroupLabel(cct: string, grupo: string, turno: string): string {
+  return `${cct} · ${grupo} · ${turno}`;
+}
+
+/** Normaliza el JSON de una lista escolar escaneada. Descarta filas sin CURP válida. */
+export function parseSepSchoolList(raw: unknown): StudentImportResult | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const body = raw as { cct?: unknown; grupo?: unknown; turno?: unknown; alumnos?: unknown };
+  const cct = String(body.cct ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  const grupo = String(body.grupo ?? '')
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/[–—]/g, '-');
+  const turno = String(body.turno ?? '')
+    .toUpperCase()
+    .replace(/[^VMN]/g, '')
+    .slice(0, 1);
+  if (!CCT_RE.test(cct) || !GRUPO_RE.test(grupo) || !TURNO_RE.test(turno)) return null;
+  if (!Array.isArray(body.alumnos)) return null;
+
+  const students: ImportedStudent[] = [];
+  const seen = new Set<string>();
+  for (const row of body.alumnos) {
+    if (!row || typeof row !== 'object') continue;
+    const item = row as { nombre?: unknown; curp?: unknown };
+    const name = String(item.nombre ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const curp = String(item.curp ?? '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+    if (!name || !CURP_RE.test(curp) || seen.has(curp)) continue;
+    seen.add(curp);
+    students.push({ rowNumber: students.length + 1, controlNumber: curp, name });
+  }
+  if (students.length === 0) return null;
+  return {
+    groupName: schoolGroupLabel(cct, grupo, turno),
+    students,
+    source: 'sep_list',
+    cct,
+    grupo,
+    turno,
+  };
+}
 
 function readByKeys(row: Record<string, unknown>, keys: string[]): string {
   for (const k of keys) {

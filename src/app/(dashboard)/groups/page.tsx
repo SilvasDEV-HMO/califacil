@@ -33,6 +33,7 @@ import {
 import { toast } from 'sonner';
 import { parseStudentImportFile, type StudentImportResult } from '@/lib/studentImport';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
+import { supabase } from '@/lib/supabase';
 
 export default function GroupsPage() {
   const { user } = useAuth();
@@ -60,6 +61,52 @@ export default function GroupsPage() {
       setNewGroupName('');
       setIsCreateDialogOpen(false);
     }
+  };
+
+  const placeSchoolList = async (
+    result: StudentImportResult
+  ): Promise<{ added: number; skipped: number; groupName: string } | { error: string }> => {
+    const label = result.groupName?.trim();
+    if (!user?.id || result.source !== 'sep_list' || !label) {
+      return { error: 'La lista no trae escuela, grupo y turno.' };
+    }
+    let group = groups.find((g) => g.name.trim() === label) ?? null;
+    if (!group) {
+      group = await createGroup(label);
+    }
+    if (!group) return { error: 'No se pudo crear el grupo de la escuela.' };
+
+    const { data: existing, error: existingError } = await supabase
+      .from('students')
+      .select('name, control_number')
+      .eq('group_id', group.id);
+    if (existingError) return { error: existingError.message };
+
+    const known = new Set(
+      (existing ?? []).flatMap((row) => [
+        row.name.trim().toLowerCase(),
+        (row.control_number ?? '').trim().toUpperCase(),
+      ])
+    );
+    const inserts: { group_id: string; name: string; control_number: string }[] = [];
+    let skipped = 0;
+    for (const student of result.students) {
+      const name = student.name.trim();
+      const curp = student.controlNumber.trim().toUpperCase();
+      if (known.has(name.toLowerCase()) || known.has(curp)) {
+        skipped++;
+        continue;
+      }
+      known.add(name.toLowerCase());
+      known.add(curp);
+      inserts.push({ group_id: group.id, name, control_number: curp });
+    }
+    if (inserts.length > 0) {
+      const { error } = await supabase.from('students').insert(inserts);
+      if (error) return { error: error.message };
+    }
+    setSelectedGroup(group.id);
+    return { added: inserts.length, skipped, groupName: label };
   };
 
   const handleDeleteGroup = async (groupId: string) => {
@@ -176,9 +223,10 @@ export default function GroupsPage() {
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Volver
               </Button>
-              <StudentsManager 
-                groupId={selectedGroup} 
+              <StudentsManager
+                groupId={selectedGroup}
                 groupName={groups.find(g => g.id === selectedGroup)?.name || ''}
+                onPlaceSchoolList={placeSchoolList}
               />
             </div>
           )}
@@ -219,8 +267,19 @@ export default function GroupsPage() {
   );
 }
 
-function StudentsManager({ groupId, groupName }: { groupId: string; groupName: string }) {
-  const { students, loading, addStudent, addStudentsBatch, deleteStudent, error } = useStudents(groupId);
+function StudentsManager({
+  groupId,
+  groupName,
+  onPlaceSchoolList,
+}: {
+  groupId: string;
+  groupName: string;
+  onPlaceSchoolList: (
+    result: StudentImportResult
+  ) => Promise<{ added: number; skipped: number; groupName: string } | { error: string }>;
+}) {
+  const { students, loading, addStudent, addStudentsBatch, deleteStudent, refreshStudents, error } =
+    useStudents(groupId);
   const [newStudentName, setNewStudentName] = useState('');
   const [isAdding, setIsAdding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -278,6 +337,28 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
     if (!importPreview) return;
     setIsImporting(true);
     try {
+      if (importPreview.source === 'sep_list') {
+        const placed = await onPlaceSchoolList(importPreview);
+        if ('error' in placed) {
+          toast.error('Error al importar alumnos', {
+            description: toSpanishAuthMessage(placed.error),
+          });
+          return;
+        }
+        if (placed.added === 0 && placed.skipped > 0) {
+          toast.error('No se importó ningún alumno: todos ya estaban en el grupo.');
+          return;
+        }
+        toast.success(
+          placed.skipped > 0
+            ? `${placed.added} estudiantes en ${placed.groupName} (${placed.skipped} ya estaban).`
+            : `${placed.added} estudiantes en ${placed.groupName}.`
+        );
+        if (placed.groupName === groupName.trim()) await refreshStudents();
+        setImportPreview(null);
+        return;
+      }
+
       const { added, skipped, error: importError, warning } = await addStudentsBatch(
         importPreview.students.map((student) => ({
           name: student.name,
@@ -519,14 +600,24 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
           <DialogHeader>
             <DialogTitle>Vista previa de importación</DialogTitle>
             <DialogDescription>
-              {importPreview?.source === 'itson_pdf'
-                ? 'Lista de asistencia ITSON detectada.'
-                : 'Revisa los alumnos antes de importarlos al grupo.'}
+              {importPreview?.source === 'sep_list'
+                ? 'Lista escolar. Se guardará en el grupo de esa escuela.'
+                : importPreview?.source === 'itson_pdf'
+                  ? 'Lista de asistencia ITSON detectada.'
+                  : 'Revisa los alumnos antes de importarlos al grupo.'}
             </DialogDescription>
           </DialogHeader>
           {importPreview ? (
             <div className="space-y-3 overflow-hidden">
-              {importPreview.groupName ? (
+              {importPreview.source === 'sep_list' ? (
+                <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-900">
+                  <span className="font-medium">Escuela {importPreview.cct}</span>
+                  {' · '}grupo {importPreview.grupo}
+                  {' · '}turno {importPreview.turno}
+                  <span className="mt-1 block text-orange-800">Grupo: {importPreview.groupName}</span>
+                </div>
+              ) : null}
+              {importPreview.groupName && importPreview.source !== 'sep_list' ? (
                 <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm">
                   <span className="font-medium text-orange-900">Grupo en PDF:</span>{' '}
                   <span className="text-orange-800">{importPreview.groupName}</span>
@@ -546,7 +637,9 @@ function StudentsManager({ groupId, groupName }: { groupId: string; groupName: s
                   <thead className="sticky top-0 bg-gray-50">
                     <tr className="border-b text-left">
                       <th className="px-3 py-2 font-semibold">No.</th>
-                      <th className="px-3 py-2 font-semibold">Control</th>
+                      <th className="px-3 py-2 font-semibold">
+                        {importPreview.source === 'sep_list' ? 'CURP' : 'Control'}
+                      </th>
                       <th className="px-3 py-2 font-semibold">Nombre del alumno</th>
                     </tr>
                   </thead>
