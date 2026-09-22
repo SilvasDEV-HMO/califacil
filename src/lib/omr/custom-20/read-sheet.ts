@@ -30,9 +30,9 @@ const GRID = {
   radius: 0.012,
 } as const;
 
-/** El relleno cae un poco arriba-izquierda del anillo impreso. El overlay se centra en el anillo. */
-const OVERLAY_DX = 0.008;
-const OVERLAY_DY = 0.008;
+/** Desplazamiento del overlay hacia el centro de la tinta, por columna. */
+const OVERLAY_DX = { left: 0.009, right: 0.001 } as const;
+const OVERLAY_DY = { left: 0.003, right: -0.002 } as const;
 
 /** Oscuridad media del interior. Una marca borrada queda por debajo de la nueva. */
 const MARK_MIN = 10;
@@ -161,11 +161,12 @@ function gridCells(width: number, height: number): OmrNormRect[][] {
     const rowY = i === 9 ? GRID.lastRowY : GRID.rowY0 + i * GRID.rowPitch;
     const y = rowY - r;
     for (const col of [0, 1] as const) {
-      const x0 = (col === 0 ? GRID.leftColX0 : GRID.rightColX0) + OVERLAY_DX;
+      const x0 = (col === 0 ? GRID.leftColX0 : GRID.rightColX0) + (col === 0 ? OVERLAY_DX.left : OVERLAY_DX.right);
+      const dy = col === 0 ? OVERLAY_DY.left : OVERLAY_DY.right;
       cells.push(
         CUSTOM20_OPTIONS.map((_, k) => ({
           x: x0 + k * GRID.colPitch - r,
-          y: y + OVERLAY_DY,
+          y: y + dy,
           w: r * 2,
           h: r * 2,
         }))
@@ -252,15 +253,21 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
   const bl = quad[3];
   const downX = bl.x - tl.x;
   const downY = bl.y - tl.y;
-  const band = 0.09;
+  const edgeX = tr.x - tl.x;
+  const edgeY = tr.y - tl.y;
+  const pad = 0.18;
+  const left = { x: tl.x - edgeX * pad, y: tl.y - edgeY * pad };
+  const right = { x: tr.x + edgeX * pad, y: tr.y + edgeY * pad };
+  const top = 0.125;
+  const bot = 0.058;
   const src: [Pt, Pt, Pt, Pt] = [
-    { x: tl.x - downX * band, y: tl.y - downY * band },
-    { x: tr.x - downX * band, y: tr.y - downY * band },
-    tr,
-    tl,
+    { x: left.x - downX * top, y: left.y - downY * top },
+    { x: right.x - downX * top, y: right.y - downY * top },
+    { x: right.x - downX * bot, y: right.y - downY * bot },
+    { x: left.x - downX * bot, y: left.y - downY * bot },
   ];
-  const outW = 520;
-  const outH = 72;
+  const outW = 720;
+  const outH = 80;
   const dst: [Pt, Pt, Pt, Pt] = [
     { x: 0, y: 0 },
     { x: outW, y: 0 },

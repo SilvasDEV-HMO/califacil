@@ -5847,7 +5847,7 @@ export default function CalificarPage() {
                     <img
                       src={handwrittenCurpUrl}
                       alt="CURP manuscrita"
-                      className="mt-1 max-h-16 w-full bg-white object-contain"
+                      className="mt-1 h-14 w-full bg-white object-contain"
                     />
                   </div>
                 ) : null}
