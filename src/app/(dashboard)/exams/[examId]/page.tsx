@@ -160,6 +160,7 @@ export default function ExamDetailPage() {
   });
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [descriptionDraft, setDescriptionDraft] = useState('');
   const [savingTitle, setSavingTitle] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const newQuestionOptions = normalizeOptions(newQuestion.optionsText);
@@ -290,13 +291,16 @@ export default function ExamDetailPage() {
       const response = await fetch(`/api/exams/${examId}`, {
         method: 'PATCH',
         headers: await dashboardAuthJsonHeaders(),
-        body: JSON.stringify({ title: trimmed }),
+        body: JSON.stringify({
+          title: trimmed,
+          description: descriptionDraft.trim() || null,
+        }),
       });
       if (!response.ok) {
-        toast.error('No se pudo actualizar el título');
+        toast.error('No se pudo actualizar el examen');
         return;
       }
-      toast.success('Título actualizado');
+      toast.success('Examen actualizado');
       setEditingTitle(false);
       window.location.reload();
     } catch {
@@ -330,7 +334,8 @@ export default function ExamDetailPage() {
 
   useEffect(() => {
     if (exam?.title) setTitleDraft(exam.title);
-  }, [exam?.title]);
+    setDescriptionDraft(exam?.description ?? '');
+  }, [exam?.title, exam?.description]);
 
   const handlePublish = async () => {
     try {
@@ -479,27 +484,39 @@ export default function ExamDetailPage() {
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
               {editingTitle ? (
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex min-w-0 flex-col gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      className="h-9 max-w-md text-lg font-bold"
+                      disabled={savingTitle}
+                      aria-label="Título del examen"
+                    />
+                    <Button size="icon" variant="outline" onClick={() => void handleSaveTitle()} disabled={savingTitle}>
+                      {savingTitle ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => {
+                        setEditingTitle(false);
+                        setTitleDraft(exam.title);
+                        setDescriptionDraft(exam.description ?? '');
+                      }}
+                      disabled={savingTitle}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
                   <Input
-                    value={titleDraft}
-                    onChange={(e) => setTitleDraft(e.target.value)}
-                    className="h-9 max-w-md text-lg font-bold"
+                    value={descriptionDraft}
+                    onChange={(e) => setDescriptionDraft(e.target.value)}
+                    className="h-9 max-w-md"
+                    placeholder="Descripción"
                     disabled={savingTitle}
+                    aria-label="Descripción del examen"
                   />
-                  <Button size="icon" variant="outline" onClick={() => void handleSaveTitle()} disabled={savingTitle}>
-                    {savingTitle ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => {
-                      setEditingTitle(false);
-                      setTitleDraft(exam.title);
-                    }}
-                    disabled={savingTitle}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
                 </div>
               ) : (
                 <>
@@ -510,7 +527,7 @@ export default function ExamDetailPage() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => setEditingTitle(true)}
-                    aria-label="Editar título"
+                    aria-label="Editar título y descripción"
                   >
                     <Edit className="h-4 w-4" />
                   </Button>
