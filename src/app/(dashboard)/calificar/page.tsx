@@ -40,7 +40,6 @@ import {
   type ZipGradeSheetKind,
 } from '@/lib/omrZipGrade';
 import {
-  CUSTOM20_EXAM_TITLE,
   CUSTOM20_OPTIONS,
   isCustom20Exam,
   readCustom20AnswerSheet,
@@ -1441,7 +1440,7 @@ export default function CalificarPage() {
 
       let classifiedUploadKind: DesktopUploadKind | undefined;
 
-      if (isCustom20Exam(user?.email, exam.title)) {
+      if (isCustom20Exam(user?.email, questions)) {
         const rawCanvas =
           source instanceof HTMLCanvasElement
             ? source
@@ -1475,7 +1474,7 @@ export default function CalificarPage() {
             controlNumber: null,
           },
           chunk,
-          rawCanvas,
+          customRead.warped,
           liveLockedAnswersRef.current,
           null,
           { trustedMobileRead: true }
@@ -1943,7 +1942,13 @@ export default function CalificarPage() {
           reviewGeom?.imageWidth === 640 &&
           reviewGeom?.imageHeight === 820 &&
           reviewGeom.cells.length === 20;
-        if (previewCanvas && reviewGeom?.cells?.length && !custom20Geom) {
+        if (custom20Geom && previewCanvas && reviewGeom) {
+          reviewGeom = syncCalifacilOmrGeometryImageSize(
+            reviewGeom,
+            previewCanvas.width,
+            previewCanvas.height
+          );
+        } else if (previewCanvas && reviewGeom?.cells?.length) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
             reviewGeom,
             previewCanvas.width,
@@ -2006,7 +2011,7 @@ export default function CalificarPage() {
         studentId: gradeStudentId || null,
       };
     },
-    [exam, examId, isMobile, useLiveCameraUi, mapRawToDraft, omrCols, omrRowCount, chunkQuestionOffset, runFastWarpedScan, selectedStudentId, setPreviewFromSource, sheets, sortedStudents, supportsCalifacil, user?.email]
+    [exam, examId, isMobile, useLiveCameraUi, mapRawToDraft, omrCols, omrRowCount, chunkQuestionOffset, runFastWarpedScan, selectedStudentId, setPreviewFromSource, sheets, sortedStudents, supportsCalifacil, user?.email, questions]
   );
 
   finalizeCapturedSheetRef.current = finalizeCapturedSheet;
@@ -2223,6 +2228,17 @@ export default function CalificarPage() {
     async (rawCanvas: HTMLCanvasElement, pageNumber: number) => {
       const scanCanvas =
         downscaleCanvasForOmrScan(rawCanvas, PDF_OMR_RENDER_MAX_SIDE) ?? rawCanvas;
+      if (isCustom20Exam(user?.email, questions)) {
+        const pseudoFile = pdfPaginaPseudoFile(pageNumber);
+        flushSync(() => setLiveStatus('Leyendo examen…'));
+        await yieldForSpinnerPaint();
+        await finalizeCapturedSheet(scanCanvas, pseudoFile, {
+          displaySource: scanCanvas,
+          skipSheetValidation: true,
+          uploadKind: 'pdf',
+        });
+        return;
+      }
       const canonical = prepareCanonicalCalifacilLetterCanvas(scanCanvas, { fast: true });
       if (!canonical) {
         toast.error(
@@ -2242,7 +2258,7 @@ export default function CalificarPage() {
         warpAlignment: canonical.alignment,
       });
     },
-    [finalizeCapturedSheet]
+    [finalizeCapturedSheet, questions, user?.email]
   );
 
   const resetFlow = useCallback(() => {
@@ -3649,6 +3665,28 @@ export default function CalificarPage() {
                       .canvas;
               if (gen !== gradeReadGenRef.current) return;
               const scanCanvas = downscaleCanvasForOmrScan(raw, PDF_OMR_RENDER_MAX_SIDE) ?? raw;
+              if (isCustom20Exam(user?.email, questions)) {
+                const read = await finalizeCapturedSheet(scanCanvas, pdfPseudo(p), {
+                  skipReviewUi: true,
+                  silentBatch: true,
+                  skipSheetValidation: true,
+                  uploadKind: 'pdf',
+                  displaySource: scanCanvas,
+                });
+                if (!read.success || !read.chunkDraft) {
+                  results.push({
+                    fileName: label,
+                    ok: false,
+                    error: p > 1 ? `No se leyó la página ${p}` : 'No se pudo leer la hoja',
+                  });
+                  pdfFailed = true;
+                  break;
+                }
+                Object.assign(merged, read.chunkDraft);
+                if (read.controlNumber) controlNumber = read.controlNumber ?? controlNumber;
+                if (read.studentId) studentId = read.studentId;
+                continue;
+              }
               const canonical = prepareCanonicalCalifacilLetterCanvas(scanCanvas, { fast: true });
               if (!canonical) {
                 results.push({

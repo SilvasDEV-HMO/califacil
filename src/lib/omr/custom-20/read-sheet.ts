@@ -224,8 +224,19 @@ function readGrid(warped: HTMLCanvasElement): Custom20Read {
   };
 }
 
-export function isCustom20Exam(email: string | null | undefined, title: string | null | undefined): boolean {
-  return (email ?? '').trim().toLowerCase() === CUSTOM20_ADMIN_EMAIL && (title ?? '').trim() === CUSTOM20_EXAM_TITLE;
+/** Admin con un examen de exactamente 20 reactivos A–D. No depende del título. */
+export function isCustom20Exam(
+  email: string | null | undefined,
+  questions: { type?: string | null; options?: string[] | null }[] | null | undefined
+): boolean {
+  if ((email ?? '').trim().toLowerCase() !== CUSTOM20_ADMIN_EMAIL) return false;
+  const list = questions ?? [];
+  if (list.length !== CUSTOM20_QUESTION_COUNT) return false;
+  return list.every((q) => {
+    if (q.type && q.type !== 'multiple_choice') return false;
+    const opts = (q.options ?? []).map((o) => String(o).trim().toUpperCase());
+    return opts.length === 4 && ['A', 'B', 'C', 'D'].every((letter, i) => opts[i] === letter);
+  });
 }
 
 export function warpCustom20Canvas(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
