@@ -8,6 +8,7 @@ import {
   warpCanvasWithHomography,
   type HomographyPoint,
 } from '@/lib/omr/homography';
+import type { CalifacilOmrScanGeometry, OmrNormRect } from '@/lib/omrScan';
 
 export const CUSTOM20_ADMIN_EMAIL = 'admin@califacil.com';
 export const CUSTOM20_EXAM_TITLE = 'OMR hoja 20 (prueba)';
@@ -19,18 +20,19 @@ const WARP_H = 820;
 
 /** Centros de burbuja en la hoja enderezada (0–1), fila 0 = pregunta 1 o 11. */
 const GRID = {
-  leftColX0: 0.205,
-  rightColX0: 0.438,
-  colPitch: 0.054,
-  rowY0: 0.427,
-  rowPitch: 0.0546,
-  radius: 0.011,
+  leftColX0: 0.19,
+  rightColX0: 0.49,
+  colPitch: 0.056,
+  rowY0: 0.454,
+  rowPitch: 0.049,
+  /** La fila 10 queda un poco más arriba que una rejilla uniforme. */
+  lastRowY: 0.905,
+  radius: 0.012,
 } as const;
 
-/** El lápiz de esta hoja es gris claro: el interior marcado baja de ~165. */
-const INK_LUM = 168;
-const MARK_MIN = 0.2;
-const MARK_GAP = 0.12;
+/** Oscuridad media del interior. Una marca borrada queda por debajo de la nueva. */
+const MARK_MIN = 10;
+const MARK_GAP = 8;
 
 export type Custom20Bubble = {
   letter: (typeof CUSTOM20_OPTIONS)[number];
@@ -48,6 +50,8 @@ export type Custom20Read = {
   rows: Custom20Row[];
   /** Respuestas listas para la revisión: null si ambigua o vacía. */
   picks: (number | null)[];
+  warped: HTMLCanvasElement;
+  geometry: CalifacilOmrScanGeometry;
 };
 
 type Pt = HomographyPoint;
@@ -128,9 +132,9 @@ function warpToTemplate(canvas: HTMLCanvasElement, quad: [Pt, Pt, Pt, Pt]): HTML
   return warpCanvasWithHomography(canvas, h, WARP_W, WARP_H);
 }
 
-function bubbleFill(data: Uint8ClampedArray, w: number, h: number, cx: number, cy: number, r: number): number {
-  const rIn = r * 0.72;
-  let dark = 0;
+function bubbleDarkness(data: Uint8ClampedArray, w: number, h: number, cx: number, cy: number, r: number): number {
+  const rIn = r * 0.62;
+  let sum = 0;
   let total = 0;
   const x0 = Math.max(0, Math.floor(cx - rIn));
   const x1 = Math.min(w - 1, Math.ceil(cx + rIn));
@@ -140,15 +144,50 @@ function bubbleFill(data: Uint8ClampedArray, w: number, h: number, cx: number, c
     for (let x = x0; x <= x1; x++) {
       if ((x - cx) ** 2 + (y - cy) ** 2 > rIn * rIn) continue;
       total++;
-      if (luminance(data, (y * w + x) * 4) < INK_LUM) dark++;
+      sum += 255 - luminance(data, (y * w + x) * 4);
     }
   }
-  return total ? dark / total : 0;
+  return total ? sum / total : 0;
+}
+
+function gridCells(width: number, height: number): OmrNormRect[][] {
+  const r = GRID.radius;
+  const cells: OmrNormRect[][] = [];
+  for (let i = 0; i < 10; i++) {
+    const rowY = i === 9 ? GRID.lastRowY : GRID.rowY0 + i * GRID.rowPitch;
+    const y = rowY - r;
+    for (const col of [0, 1] as const) {
+      const x0 = col === 0 ? GRID.leftColX0 : GRID.rightColX0;
+      cells.push(
+        CUSTOM20_OPTIONS.map((_, k) => ({
+          x: x0 + k * GRID.colPitch - r,
+          y,
+          w: r * 2,
+          h: r * 2,
+        }))
+      );
+    }
+  }
+  const ordered: OmrNormRect[][] = [];
+  for (let q = 0; q < 20; q++) {
+    const i = q < 10 ? q * 2 : (q - 10) * 2 + 1;
+    ordered.push(cells[i]!);
+  }
+  void width;
+  void height;
+  return ordered;
 }
 
 function readGrid(warped: HTMLCanvasElement): Custom20Read {
   const ctx = warped.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return { rows: [], picks: [] };
+  if (!ctx) {
+    return {
+      rows: [],
+      picks: [],
+      warped,
+      geometry: { imageWidth: warped.width, imageHeight: warped.height, cells: [] },
+    };
+  }
   const w = warped.width;
   const h = warped.height;
   const data = ctx.getImageData(0, 0, w, h).data;
@@ -156,19 +195,18 @@ function readGrid(warped: HTMLCanvasElement): Custom20Read {
   const rows: Custom20Row[] = [];
 
   for (let i = 0; i < 10; i++) {
-    const y = (GRID.rowY0 + i * GRID.rowPitch) * h;
+    const y = (i === 9 ? GRID.lastRowY : GRID.rowY0 + i * GRID.rowPitch) * h;
     for (const col of [0, 1] as const) {
       const question = col === 0 ? i + 1 : i + 11;
       const x0 = (col === 0 ? GRID.leftColX0 : GRID.rightColX0) * w;
       const bubbles: Custom20Bubble[] = CUSTOM20_OPTIONS.map((letter, k) => ({
         letter,
-        fill: bubbleFill(data, w, h, x0 + k * GRID.colPitch * w, y, r),
+        fill: bubbleDarkness(data, w, h, x0 + k * GRID.colPitch * w, y, r),
       }));
       const ranked = [...bubbles].sort((a, b) => b.fill - a.fill);
       const best = ranked[0]!;
       const second = ranked[1]!;
-      const ahead = best.fill - second.fill >= MARK_GAP && best.fill >= second.fill * 1.45;
-      const ambiguous = !(best.fill >= MARK_MIN && ahead);
+      const ambiguous = !(best.fill >= MARK_MIN && best.fill - second.fill >= MARK_GAP);
       const answer = ambiguous ? null : best.letter;
       rows.push({ question, answer, ambiguous: ambiguous || answer === null, bubbles });
     }
@@ -181,6 +219,8 @@ function readGrid(warped: HTMLCanvasElement): Custom20Read {
       if (row.ambiguous || !row.answer) return null;
       return CUSTOM20_OPTIONS.indexOf(row.answer as (typeof CUSTOM20_OPTIONS)[number]);
     }),
+    warped,
+    geometry: { imageWidth: w, imageHeight: h, cells: gridCells(w, h) },
   };
 }
 
@@ -188,11 +228,15 @@ export function isCustom20Exam(email: string | null | undefined, title: string |
   return (email ?? '').trim().toLowerCase() === CUSTOM20_ADMIN_EMAIL && (title ?? '').trim() === CUSTOM20_EXAM_TITLE;
 }
 
-/** Lee la hoja. Devuelve null si no encuentra los cuadros de referencia. */
-export function readCustom20AnswerSheet(canvas: HTMLCanvasElement): Custom20Read | null {
+export function warpCustom20Canvas(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   const quad = findCornerSquares(canvas);
   if (!quad) return null;
-  const warped = warpToTemplate(canvas, quad);
+  return warpToTemplate(canvas, quad);
+}
+
+/** Lee la hoja. Devuelve null si no encuentra los cuadros de referencia. */
+export function readCustom20AnswerSheet(canvas: HTMLCanvasElement): Custom20Read | null {
+  const warped = warpCustom20Canvas(canvas);
   if (!warped) return null;
   return readGrid(warped);
 }

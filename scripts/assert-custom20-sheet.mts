@@ -34,8 +34,8 @@ if (!read) {
   process.exit(1);
 }
 
-/** Marcas medidas en Hoja de Respuestas.pdf (reactivo 13 queda dudoso). */
-const expected = ['A', 'C', 'B', 'B', 'B', 'B', 'D', 'A', 'C', 'B', 'C', 'C', null, 'C', 'B', 'C', 'B', 'D', 'B', 'C'];
+/** Marcas de Hoja de Respuestas.pdf. La 14 tiene A borrada y B más oscura. */
+const expected = ['A', 'C', 'B', 'B', 'B', 'B', 'D', 'A', 'C', 'B', 'B', 'B', 'C', 'B', 'A', 'B', 'A', 'C', 'A', 'B'];
 let bad = 0;
 for (const row of read.rows) {
   const exp = expected[row.question - 1];

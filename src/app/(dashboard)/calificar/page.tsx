@@ -42,7 +42,6 @@ import {
 import {
   CUSTOM20_EXAM_TITLE,
   CUSTOM20_OPTIONS,
-  CUSTOM20_QUESTION_COUNT,
   isCustom20Exam,
   readCustom20AnswerSheet,
 } from '@/lib/omr/custom-20/read-sheet';
@@ -217,7 +216,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Exam, Question, Student } from '@/types';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
-import { isMissingSortOrderColumnError } from '@/lib/examQuestions';
 import {
   canRequestCalificarLiveCamera,
   useCalificarLiveCamera,
@@ -575,7 +573,7 @@ export default function CalificarPage() {
   // Cámara solo en móvil táctil; en escritorio (ratón) solo subida de archivos.
   const useLiveCameraUi = useCalificarLiveCamera();
   const { user } = useAuth();
-  const { exams, loading: examsLoading, refreshExams } = useExams(user?.id);
+  const { exams, loading: examsLoading } = useExams(user?.id);
 
   const [examId, setExamId] = useState<string>('');
   const { exam, loading: examLoading } = useExam(examId || undefined);
@@ -1455,7 +1453,8 @@ export default function CalificarPage() {
           );
           return { success: false };
         }
-        gradeSource = rawCanvas;
+        gradeSource = customRead.warped;
+        gradeDisplaySource = customRead.warped;
         gradePreWarped = true;
         gradeSkipSheetValidation = true;
         gradeReadingOverride = buildCalifacilOmrReadingOverride(
@@ -1470,8 +1469,8 @@ export default function CalificarPage() {
             })),
             needsVisionAssist: customRead.rows.some((row) => row.ambiguous),
             maxSameColumnCount: 0,
-            geometry: null,
-            reviewSourceCanvas: rawCanvas,
+            geometry: customRead.geometry,
+            reviewSourceCanvas: customRead.warped,
             controlNumberDigits: [],
             controlNumber: null,
           },
@@ -1940,7 +1939,11 @@ export default function CalificarPage() {
 
         // Overlay: geometría de tabla si existe (PDF, escaneo o foto); anclar a anillos, sin reléer picks.
         let reviewGeom = meta.geometry;
-        if (previewCanvas && reviewGeom?.cells?.length) {
+        const custom20Geom =
+          reviewGeom?.imageWidth === 640 &&
+          reviewGeom?.imageHeight === 820 &&
+          reviewGeom.cells.length === 20;
+        if (previewCanvas && reviewGeom?.cells?.length && !custom20Geom) {
           reviewGeom = syncCalifacilOmrGeometryImageSize(
             reviewGeom,
             previewCanvas.width,
@@ -5217,63 +5220,6 @@ export default function CalificarPage() {
           <CardTitle className="text-base sm:text-lg">Examen y clave automática</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 sm:space-y-4">
-          {isCustom20Exam(user?.email, CUSTOM20_EXAM_TITLE) ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={examsLoading}
-              onClick={() => {
-                void (async () => {
-                  const existing = (exams as Exam[]).find((e) => e.title === CUSTOM20_EXAM_TITLE);
-                  if (existing) {
-                    setExamId(existing.id);
-                    toast.message('Ese examen ya existe. Quedó seleccionado.');
-                    return;
-                  }
-                  if (!user?.id) return;
-                  const { data: created, error } = await supabase
-                    .from('exams')
-                    .insert([{
-                      title: CUSTOM20_EXAM_TITLE,
-                      description: 'Hoja ZipGrade de 20. Clave de prueba: A en todos.',
-                      teacher_id: user.id,
-                      status: 'published',
-                    }])
-                    .select()
-                    .single();
-                  if (error || !created) {
-                    toast.error('No se pudo crear el examen de prueba.');
-                    return;
-                  }
-                  const questions = Array.from({ length: CUSTOM20_QUESTION_COUNT }, (_, i) => ({
-                    exam_id: created.id,
-                    text: `Reactivo ${i + 1}`,
-                    type: 'multiple_choice',
-                    options: [...CUSTOM20_OPTIONS],
-                    correct_answer: 'A',
-                    points: 1,
-                    sort_order: i,
-                  }));
-                  let qError = (await supabase.from('questions').insert(questions)).error;
-                  if (qError && isMissingSortOrderColumnError(qError.message)) {
-                    qError = (
-                      await supabase.from('questions').insert(questions.map(({ sort_order: _s, ...q }) => q))
-                    ).error;
-                  }
-                  if (qError) {
-                    toast.error('El examen se creó, pero no las 20 preguntas.');
-                    return;
-                  }
-                  await refreshExams();
-                  setExamId(created.id);
-                  toast.success('Examen de 20 creado. La clave es A en todos.');
-                })();
-              }}
-            >
-              Crear examen OMR 20 (clave A)
-            </Button>
-          ) : null}
-
           <div className="space-y-2">
             <Label>Examen</Label>
             <Select
