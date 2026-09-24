@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { createCanvas, loadImage, type Canvas } from '@napi-rs/canvas';
+import { createCanvas, loadImage, type Canvas, type Image } from '@napi-rs/canvas';
 import OpenAI from 'openai';
 import {
   parseGenericPdfTextFromLines,
@@ -108,13 +108,13 @@ function rotateCanvas(source: Canvas, degrees: -90 | 90): Canvas {
     ctx.translate(source.height, 0);
     ctx.rotate(Math.PI / 2);
   }
-  ctx.drawImage(source as unknown as CanvasImageSource, 0, 0);
+  ctx.drawImage(source, 0, 0);
   return out;
 }
 
 function cropCanvas(source: Canvas, x: number, y: number, w: number, h: number): Buffer {
   const out = createCanvas(Math.max(1, w), Math.max(1, h));
-  out.getContext('2d').drawImage(source as unknown as CanvasImageSource, x, y, w, h, 0, 0, w, h);
+  out.getContext('2d').drawImage(source, x, y, w, h, 0, 0, w, h);
   return out.toBuffer('image/jpeg', 90);
 }
 
@@ -123,7 +123,7 @@ async function uprightRosterCanvas(buffer: ArrayBuffer): Promise<Canvas> {
   const { jpeg } = await renderPdfPageToJpeg(buffer, 1, 2000);
   const image = await loadImage(jpeg);
   const canvas = createCanvas(image.width, image.height);
-  canvas.getContext('2d').drawImage(image as unknown as CanvasImageSource, 0, 0);
+  canvas.getContext('2d').drawImage(image as Image, 0, 0);
   const asIs = longDarkRuns(canvas);
   if (asIs.horizontal >= asIs.vertical) return canvas;
   const left = rotateCanvas(canvas, -90);
@@ -149,7 +149,7 @@ async function readSepListFromScan(buffer: ArrayBuffer): Promise<StudentImportRe
     const cw = Math.max(1, x1 - x0);
     const ch = Math.max(1, y1 - y0);
     const out = createCanvas(cw * 2, ch * 2);
-    out.getContext('2d').drawImage(page as unknown as CanvasImageSource, x0, y0, cw, ch, 0, 0, cw * 2, ch * 2);
+    out.getContext('2d').drawImage(page, x0, y0, cw, ch, 0, 0, cw * 2, ch * 2);
     return out.toBuffer('image/jpeg', 95);
   };
   const xCurp0 = Math.round(w * 0.05);

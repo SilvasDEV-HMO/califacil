@@ -31,7 +31,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { parseStudentImportFile } from '@/lib/studentImport';
+import { parseStudentImportFile, type StudentImportResult } from '@/lib/studentImport';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 
 export default function GroupsPage() {

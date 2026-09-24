@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { sortExamQuestions } from '@/lib/examQuestions';
 import { requireSessionUser } from '@/lib/supabaseRouteAuth';
 import { isMissingSortOrderColumnError } from '@/lib/examQuestions';
 
@@ -46,7 +47,7 @@ export async function POST(
 
     const { data: sourceQuestions, error: qErr } = await supabase
       .from('questions')
-      .select('text,type,options,correct_answer,illustration,points')
+      .select('text,type,options,correct_answer,illustration,points,sort_order,created_at')
       .eq('exam_id', examId)
       .order('created_at', { ascending: true });
 
@@ -55,8 +56,9 @@ export async function POST(
       return NextResponse.json({ error: 'No se pudieron copiar las preguntas' }, { status: 500 });
     }
 
-    if (sourceQuestions && sourceQuestions.length > 0) {
-      const rowsWithOrder = sourceQuestions.map((q, index) => ({
+    const orderedQuestions = sortExamQuestions(sourceQuestions ?? []);
+    if (orderedQuestions.length > 0) {
+      const rowsWithOrder = orderedQuestions.map((q, index) => ({
         exam_id: newExam.id,
         text: q.text,
         type: q.type,
@@ -66,7 +68,7 @@ export async function POST(
         points: q.points ?? 1,
         sort_order: index,
       }));
-      const rowsWithoutOrder = sourceQuestions.map((q) => ({
+      const rowsWithoutOrder = orderedQuestions.map((q) => ({
         exam_id: newExam.id,
         text: q.text,
         type: q.type,
