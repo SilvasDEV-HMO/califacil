@@ -521,15 +521,8 @@ export default function ExamResultsPage() {
         doc.text(`Resultados: ${exam.title}`, margin, 20);
 
         const rows = [...studentResults].sort(compareResultsByGroupShiftName);
-        const overall = summarizeResults(rows);
-        doc.setFontSize(10);
-        doc.text(
-          `Estudiantes: ${overall.count}  ·  Promedio: ${overall.average}%  ·  Aprobados: ${overall.approved}  ·  Reprobados: ${overall.failed}`,
-          margin,
-          30
-        );
 
-        let nextY = 40;
+        let nextY = 28;
         const section = (title: string) => {
           nextY += 8;
           if (nextY > 270) {
@@ -595,51 +588,32 @@ export default function ExamResultsPage() {
         }
         if (bucket.length > 0) flushGroup(parseRosterGroup(bucket[0]!.groupName));
 
-        const groupMap = new Map<string, StudentResult[]>();
-        const shiftMap = new Map<string, StudentResult[]>();
-        const schoolMap = new Map<string, StudentResult[]>();
+        const groupsBySchool = new Map<string, Map<string, StudentResult[]>>();
         for (const result of rows) {
           const slot = parseRosterGroup(result.groupName);
-          const groupKey = `${slot.schoolRank}|${slot.shiftRank}|${slot.grade}|${slot.letter}`;
-          const shiftKey = `${slot.schoolRank}|${slot.shiftRank}`;
-          const schoolKey = `${slot.schoolRank}`;
-          groupMap.set(groupKey, [...(groupMap.get(groupKey) ?? []), result]);
-          shiftMap.set(shiftKey, [...(shiftMap.get(shiftKey) ?? []), result]);
-          schoolMap.set(schoolKey, [...(schoolMap.get(schoolKey) ?? []), result]);
+          const schoolKey = String(slot.schoolRank);
+          const groupKey = `${slot.shiftRank}|${slot.grade}|${slot.letter}`;
+          const schoolGroups = groupsBySchool.get(schoolKey) ?? new Map<string, StudentResult[]>();
+          schoolGroups.set(groupKey, [...(schoolGroups.get(groupKey) ?? []), result]);
+          groupsBySchool.set(schoolKey, schoolGroups);
         }
 
-        section('Resultados por grupo');
-        table(
-          [['Escuela', 'Turno', 'Grupo', 'Estudiantes', 'Promedio', 'Aprobados', 'Reprobados']],
-          [...groupMap.values()].map((list) => {
-            const slot = parseRosterGroup(list[0]!.groupName);
-            const stats = summarizeResults(list);
-            return [slot.school, slot.shift, slot.group, String(stats.count), `${stats.average}%`, String(stats.approved), String(stats.failed)];
-          })
-        );
-
-        section('Resultados por turno');
-        table(
-          [['Escuela', 'Turno', 'Estudiantes', 'Promedio', 'Aprobados', 'Reprobados']],
-          [...shiftMap.values()].map((list) => {
-            const slot = parseRosterGroup(list[0]!.groupName);
-            const stats = summarizeResults(list);
-            return [slot.school, slot.shift, String(stats.count), `${stats.average}%`, String(stats.approved), String(stats.failed)];
-          })
-        );
-
-        section('Resultados por escuela');
-        table(
-          [['Escuela', 'Estudiantes', 'Promedio', 'Aprobados', 'Reprobados']],
-          [...schoolMap.values()].map((list) => {
-            const slot = parseRosterGroup(list[0]!.groupName);
-            const stats = summarizeResults(list);
-            return [slot.school, String(stats.count), `${stats.average}%`, String(stats.approved), String(stats.failed)];
-          })
-        );
+        for (const schoolGroups of groupsBySchool.values()) {
+          const first = [...schoolGroups.values()][0]?.[0];
+          if (!first) continue;
+          const school = parseRosterGroup(first.groupName).school;
+          section(`Promedio por grupo — escuela ${school}`);
+          table(
+            [['Grupo', 'Turno', 'Promedio']],
+            [...schoolGroups.values()].map((list) => {
+              const slot = parseRosterGroup(list[0]!.groupName);
+              return [slot.group, slot.shift, `${summarizeResults(list).average}%`];
+            })
+          );
+        }
 
         doc.save(`resultados_${base}.pdf`);
-        toast.success('PDF listo: alumnos por escuela, turno y grupo, y los resúmenes.');
+        toast.success('PDF listo: una tabla por grupo y el promedio de cada escuela.');
       });
     });
   };
