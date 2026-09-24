@@ -277,19 +277,15 @@ function buildQuestionAnalysisForAnswers(
 
 function buildGradeDistribution(results: StudentResult[]) {
   const distribution = [
-    { range: '90-100', count: 0, label: 'Excelente', color: '#22c55e' },
-    { range: '80-89', count: 0, label: 'Muy bien', color: '#3b82f6' },
-    { range: '70-79', count: 0, label: 'Bien', color: '#eab308' },
-    { range: '60-69', count: 0, label: 'Suficiente', color: '#f97316' },
-    { range: '0-59', count: 0, label: 'Necesita mejorar', color: '#ef4444' },
+    { range: '81-100', count: 0, label: 'Esperado', color: '#22c55e' },
+    { range: '51-80', count: 0, label: 'En desarrollo', color: '#f59e0b' },
+    { range: '0-50', count: 0, label: 'Requiere apoyo', color: '#ef4444' },
   ];
 
   results.forEach((result) => {
-    if (result.percentage >= 90) distribution[0].count++;
-    else if (result.percentage >= 80) distribution[1].count++;
-    else if (result.percentage >= 70) distribution[2].count++;
-    else if (result.percentage >= 60) distribution[3].count++;
-    else distribution[4].count++;
+    if (!Number.isFinite(result.percentage) || result.percentage <= 50) distribution[2].count++;
+    else if (result.percentage <= 80) distribution[1].count++;
+    else distribution[0].count++;
   });
 
   return distribution;
@@ -917,9 +913,12 @@ export default function ExamResultsPage() {
                             </span>
                           </td>
                           <td className="hidden py-3 px-4 text-center md:table-cell">
-                            <Badge className={result.percentage >= 60 
-                              ? 'bg-green-100 text-green-700' 
-                              : 'bg-red-100 text-red-700'
+                            <Badge className={
+                              !Number.isFinite(result.percentage) || result.percentage <= 50
+                                ? 'bg-red-100 text-red-700'
+                                : result.percentage <= 80
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-green-100 text-green-700'
                             }>
                               {getGradeLabel(result.percentage)}
                             </Badge>

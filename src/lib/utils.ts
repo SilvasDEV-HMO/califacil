@@ -174,17 +174,13 @@ export function isMultipleChoiceAnswerCorrect(
 }
 
 export function getGradeLabel(percentage: number): string {
-  if (percentage >= 90) return 'Excelente';
-  if (percentage >= 80) return 'Muy bien';
-  if (percentage >= 70) return 'Bien';
-  if (percentage >= 60) return 'Suficiente';
-  return 'Necesita mejorar';
+  if (!Number.isFinite(percentage) || percentage <= 50) return 'Requiere apoyo';
+  if (percentage <= 80) return 'En desarrollo';
+  return 'Esperado';
 }
 
 export function getGradeColor(percentage: number): string {
-  if (percentage >= 90) return 'text-green-600';
-  if (percentage >= 80) return 'text-orange-600';
-  if (percentage >= 70) return 'text-yellow-600';
-  if (percentage >= 60) return 'text-amber-700';
-  return 'text-red-600';
+  if (!Number.isFinite(percentage) || percentage <= 50) return 'text-red-600';
+  if (percentage <= 80) return 'text-amber-700';
+  return 'text-green-600';
 }
