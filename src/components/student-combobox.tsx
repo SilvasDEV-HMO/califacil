@@ -27,6 +27,7 @@ export type StudentComboboxProps = {
   noStudentsText?: string;
   autoOptionLabel?: string;
   autoOptionValue?: string;
+  compact?: boolean;
 };
 
 export function StudentCombobox({
@@ -41,6 +42,7 @@ export function StudentCombobox({
   noStudentsText = 'No hay alumnos registrados en el grupo de este examen. El maestro debe darlos de alta en Grupos.',
   autoOptionLabel,
   autoOptionValue,
+  compact = false,
 }: StudentComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const selected = students.find((s) => s.id === value);
@@ -53,7 +55,8 @@ export function StudentCombobox({
       if (!student) return 0;
       const q = search.trim().toLowerCase();
       if (!q) return 1;
-      return student.name.toLowerCase().includes(q) ? 1 : 0;
+      const curp = (student.control_number ?? '').toLowerCase();
+      return student.name.toLowerCase().includes(q) || curp.includes(q) ? 1 : 0;
     },
     [students]
   );
@@ -79,10 +82,16 @@ export function StudentCombobox({
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
-          className="h-11 w-full justify-between px-3 font-normal"
+          className={cn('w-full justify-between font-normal', compact ? 'h-8 px-2 text-xs' : 'h-11 px-3')}
         >
           <span className={cn('truncate text-left', !selected && !autoSelected && 'text-muted-foreground')}>
-            {autoSelected ? autoOptionLabel : selected ? selected.name : placeholder}
+            {autoSelected
+              ? autoOptionLabel
+              : selected
+                ? selected.control_number
+                  ? `${selected.control_number} · ${selected.name}`
+                  : selected.name
+                : placeholder}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
@@ -135,7 +144,16 @@ export function StudentCombobox({
                   }}
                 >
                   <Check className={cn('mr-2 h-4 w-4', value === s.id ? 'opacity-100' : 'opacity-0')} />
-                  {s.name}
+                  <span className="min-w-0 truncate">
+                    {s.control_number ? (
+                      <>
+                        <span className="font-mono">{s.control_number}</span>
+                        <span className="text-muted-foreground"> · {s.name}</span>
+                      </>
+                    ) : (
+                      s.name
+                    )}
+                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>

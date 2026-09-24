@@ -5081,7 +5081,7 @@ export default function CalificarPage() {
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
-              Identifica al alumno por la CURP escrita en la hoja. Elige en el selector y pulsa
+              Identifica al alumno por la CURP escrita en la hoja. Escribe las primeras letras de la CURP, elige la correcta y pulsa
               Guardar; no se guarda al elegir.
             </DialogDescription>
           </DialogHeader>
@@ -5119,24 +5119,18 @@ export default function CalificarPage() {
                         {row.ok ? (
                           row.studentName ?? '—'
                         ) : row.pendingStudent ? (
-                          <Select
+                          <StudentCombobox
+                            compact
+                            students={sortedStudents}
+                            value={row.selectedStudentId}
                             disabled={scanBusy}
-                            value={row.selectedStudentId || undefined}
+                            placeholder="Escribe la CURP…"
+                            searchPlaceholder="Primeras letras de la CURP"
+                            emptyText="Ninguna CURP coincide."
                             onValueChange={(id) => {
                               if (id) assignPendingBatchStudent(idx, id);
                             }}
-                          >
-                            <SelectTrigger className="h-8 min-w-[10rem] text-xs">
-                              <SelectValue placeholder="Elegir alumno…" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {sortedStudents.map((s) => (
-                                <SelectItem key={s.id} value={s.id}>
-                                  {s.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          />
                         ) : (
                           row.error ?? 'Pendiente'
                         )}
