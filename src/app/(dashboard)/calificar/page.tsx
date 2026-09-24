@@ -3671,6 +3671,10 @@ export default function CalificarPage() {
               if (gen !== gradeReadGenRef.current) return;
               const scanCanvas = downscaleCanvasForOmrScan(raw, PDF_OMR_RENDER_MAX_SIDE) ?? raw;
               if (isCustom20Exam(user?.email, questions)) {
+                if (p === 1) {
+                  const idCrop = cropCustom20HandwrittenId(scanCanvas);
+                  nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                }
                 const read = await finalizeCapturedSheet(scanCanvas, pdfPseudo(p), {
                   skipReviewUi: true,
                   silentBatch: true,
@@ -3737,14 +3741,19 @@ export default function CalificarPage() {
             if (gen !== gradeReadGenRef.current) return;
             const rawCanvas = prepareCalifacilScanInput(img, { useGuideCrop: false });
             if (rawCanvas) {
-              const canonical = prepareCanonicalCalifacilLetterCanvas(rawCanvas, {
-                fast: true,
-                forceWarp: true,
-              });
-              nameCropUrl = cropAnswerSheetNameSnippetDataUrl(
-                canonical?.canvas ?? rawCanvas,
-                420
-              );
+              if (isCustom20Exam(user?.email, questions)) {
+                const idCrop = cropCustom20HandwrittenId(rawCanvas);
+                nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+              } else {
+                const canonical = prepareCanonicalCalifacilLetterCanvas(rawCanvas, {
+                  fast: true,
+                  forceWarp: true,
+                });
+                nameCropUrl = cropAnswerSheetNameSnippetDataUrl(
+                  canonical?.canvas ?? rawCanvas,
+                  420
+                );
+              }
             }
             const read = await finalizeCapturedSheet(img, file, {
               skipReviewUi: true,
@@ -5081,7 +5090,7 @@ export default function CalificarPage() {
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
-              Identifica al alumno por el nombre escrito en la hoja. Elige en el selector y pulsa
+              Identifica al alumno por la CURP escrita en la hoja. Elige en el selector y pulsa
               Guardar; no se guarda al elegir.
             </DialogDescription>
           </DialogHeader>
@@ -5090,7 +5099,9 @@ export default function CalificarPage() {
               <table className="w-full text-left text-sm">
                 <thead className="sticky top-0 bg-gray-50">
                   <tr>
-                    <th className="px-2 py-1.5 font-medium">Nombre en la hoja</th>
+                    <th className="px-2 py-1.5 font-medium">
+                      {isCustom20Exam(user?.email, questions) ? 'CURP en la hoja' : 'Nombre en la hoja'}
+                    </th>
                     <th className="px-2 py-1.5 font-medium">Alumno</th>
                     <th className="px-2 py-1.5 font-medium">Nota</th>
                   </tr>
@@ -5105,7 +5116,7 @@ export default function CalificarPage() {
                             src={row.nameCropUrl}
                             alt={`Nombre escrito (${row.fileName})`}
                             title={row.fileName}
-                            className="h-10 max-w-[min(100%,18rem)] rounded border border-gray-200 bg-white object-contain object-left"
+                            className="h-12 max-w-[min(100%,22rem)] rounded border border-gray-200 bg-white object-contain object-left"
                           />
                         ) : (
                           <span className="max-w-[10rem] truncate text-xs text-gray-500" title={row.fileName}>
