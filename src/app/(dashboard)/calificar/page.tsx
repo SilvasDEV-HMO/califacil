@@ -5077,7 +5077,7 @@ export default function CalificarPage() {
           if (!open) setBatchSummary(null);
         }}
       >
-        <DialogContent className="max-h-[min(90vh,720px)] sm:max-w-2xl">
+        <DialogContent className="max-h-[min(92vh,860px)] sm:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
@@ -5107,7 +5107,7 @@ export default function CalificarPage() {
                             src={row.nameCropUrl}
                             alt={`Nombre escrito (${row.fileName})`}
                             title={row.fileName}
-                            className="h-16 max-w-[min(100%,22rem)] rounded border border-gray-200 bg-white object-contain object-left"
+                            className="h-28 w-[28rem] max-w-full rounded border border-gray-200 bg-white object-contain object-left"
                           />
                         ) : (
                           <span className="max-w-[10rem] truncate text-xs text-gray-500" title={row.fileName}>

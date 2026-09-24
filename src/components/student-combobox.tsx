@@ -12,7 +12,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { Student } from '@/types';
 
 export type StudentComboboxProps = {
@@ -45,6 +45,7 @@ export function StudentCombobox({
   compact = false,
 }: StudentComboboxProps) {
   const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState('');
   const selected = students.find((s) => s.id === value);
   const autoSelected =
     autoOptionValue !== undefined && autoOptionLabel !== undefined && value === autoOptionValue;
@@ -60,6 +61,77 @@ export function StudentCombobox({
     },
     [students]
   );
+
+  const q = query.trim().toLowerCase();
+  const compactMatches = students.filter((student) => {
+    if (!q) return true;
+    const curp = (student.control_number ?? '').toLowerCase();
+    return student.name.toLowerCase().includes(q) || curp.includes(q);
+  });
+
+  if (compact) {
+    const selectedLabel = selected?.control_number
+      ? `${selected.control_number} · ${selected.name}`
+      : selected?.name ?? '';
+    return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverAnchor asChild>
+          <input
+            id={id}
+            disabled={disabled}
+            value={open ? query : selectedLabel}
+            placeholder={placeholder}
+            autoComplete="off"
+            className="h-9 w-full min-w-[14rem] rounded-md border border-input bg-white px-2 text-xs outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-400/70"
+            onFocus={() => {
+              setQuery('');
+              setOpen(true);
+            }}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+          />
+        </PopoverAnchor>
+        <PopoverContent
+          className="z-[100] w-[var(--radix-popover-trigger-width)] min-w-[18rem] p-1"
+          align="start"
+          sideOffset={4}
+          onOpenAutoFocus={(event) => event.preventDefault()}
+        >
+          <ul className="max-h-52 overflow-y-auto">
+            {compactMatches.length === 0 ? (
+              <li className="px-2 py-3 text-sm text-muted-foreground">{emptyText}</li>
+            ) : (
+              compactMatches.slice(0, 12).map((student) => (
+                <li key={student.id}>
+                  <button
+                    type="button"
+                    className="flex w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-orange-50"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      onValueChange(student.id);
+                      setQuery('');
+                      setOpen(false);
+                    }}
+                  >
+                    {student.control_number ? (
+                      <>
+                        <span className="font-mono">{student.control_number}</span>
+                        <span className="text-muted-foreground"> · {student.name}</span>
+                      </>
+                    ) : (
+                      student.name
+                    )}
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+        </PopoverContent>
+      </Popover>
+    );
+  }
 
   if (students.length === 0) {
     return (
