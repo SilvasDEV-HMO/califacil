@@ -3949,6 +3949,7 @@ export default function CalificarPage() {
         await persistPendingBatchStudent(idx, row.selectedStudentId!);
       }
       toast.success('Resultados guardados.');
+      setBatchSummary(null);
     } catch {
       toast.error('No se pudieron guardar todas las hojas.');
     } finally {
