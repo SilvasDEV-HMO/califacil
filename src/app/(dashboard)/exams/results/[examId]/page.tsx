@@ -523,23 +523,24 @@ export default function ExamResultsPage() {
         const margin = 14;
         const base = sanitizeExportFilenameBase(exam.title);
 
-        doc.setFontSize(18);
-        doc.text(`Resultados: ${exam.title}`, margin, 20);
-
         const rows = [...studentResults].sort(compareResultsByGroupShiftName);
 
-        let nextY = 28;
+        let nextY = 20;
         const section = (title: string) => {
           nextY += 8;
-          if (nextY > 270) {
-            doc.addPage();
-            nextY = 20;
-          }
           doc.setFontSize(12);
           doc.setFont('helvetica', 'bold');
           doc.text(title, margin, nextY);
           doc.setFont('helvetica', 'normal');
           nextY += 4;
+        };
+        const beginPage = (heading: string) => {
+          doc.setFontSize(16);
+          doc.setFont('helvetica', 'bold');
+          doc.text(`Resultados: ${exam.title}`, margin, 20);
+          doc.setFont('helvetica', 'normal');
+          nextY = 24;
+          section(heading);
         };
         const table = (head: string[][], body: string[][]) => {
           (doc as any).autoTable({
@@ -553,10 +554,13 @@ export default function ExamResultsPage() {
           nextY = (doc as any).lastAutoTable.finalY + 6;
         };
 
-        let lastShift = '';
         let bucket: StudentResult[] = [];
+        let placedGroup = false;
         const flushGroup = (slot: RosterSlot | null) => {
           if (!slot || bucket.length === 0) return;
+          if (placedGroup) doc.addPage();
+          placedGroup = true;
+          beginPage(rosterHeading(slot));
           section(`Grupo ${slot.group}`);
           table(
             [['Estudiante', 'Puntaje', '%', 'Calificación']],
@@ -572,17 +576,11 @@ export default function ExamResultsPage() {
 
         for (const result of rows) {
           const slot = parseRosterGroup(result.groupName);
-          const schoolKey = `${slot.schoolRank}`;
-          const shiftKey = `${schoolKey}-${slot.shiftRank}`;
           if (bucket.length > 0) {
             const prev = parseRosterGroup(bucket[0]!.groupName);
             if (prev.group !== slot.group || prev.shift !== slot.shift || prev.school !== slot.school) {
               flushGroup(prev);
             }
-          }
-          if (shiftKey !== lastShift) {
-            section(rosterHeading(slot));
-            lastShift = shiftKey;
           }
           bucket.push(result);
         }
@@ -599,7 +597,8 @@ export default function ExamResultsPage() {
         }
 
         for (const [heading, headingGroups] of Array.from(groupsByHeading.entries())) {
-          section(`Promedio por grupo — ${heading}`);
+          doc.addPage();
+          beginPage(`Promedio por grupo — ${heading}`);
           table(
             [['Grupo', 'Promedio']],
             Array.from(headingGroups.values()).map((list) => {
