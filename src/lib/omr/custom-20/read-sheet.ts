@@ -86,13 +86,36 @@ function findCornerSquares(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] | null {
           const py = y + Math.round(((yy + 0.5) * side) / samples);
           const lum = luminance(data, (py * w + px) * 4);
           sum += lum;
-          if (lum < 90) dark++;
+          if (lum < 140) dark++;
         }
       }
       const mean = sum / (samples * samples);
       const fill = dark / (samples * samples);
-      if (mean < 95 && fill > 0.55) {
-        hits.push({ x: x + side / 2, y: y + side / 2, score: fill * (120 - mean) });
+      if (mean < 125 && fill > 0.4) {
+        const cx = x + side / 2;
+        const cy = y + side / 2;
+        const fillBox = (x0: number, y0: number, rw: number, rh: number) => {
+          let n = 0;
+          let tot = 0;
+          const stepPx = Math.max(1, Math.round(Math.min(rw, rh) / 6));
+          for (let py = y0; py < y0 + rh; py += stepPx) {
+            for (let px = x0; px < x0 + rw; px += stepPx) {
+              const ix = Math.round(px);
+              const iy = Math.round(py);
+              if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
+              tot++;
+              if (luminance(data, (iy * w + ix) * 4) < 155) n++;
+            }
+          }
+          return tot ? n / tot : 0;
+        };
+        const local = fillBox(cx - side / 2, cy - side / 2, side, side);
+        const wide = fillBox(cx - side * 1.6, cy - side / 2, side * 3.2, side);
+        const tall = fillBox(cx - side / 2, cy - side * 1.6, side, side * 3.2);
+        // Las marcas del encabezado son barras; los cuadros del bloque son compactos.
+        if (local < 0.28) continue;
+        if (wide > Math.max(0.55, local * 0.75) || tall > Math.max(0.55, local * 0.75)) continue;
+        hits.push({ x: cx, y: cy, score: fill * (120 - mean) });
       }
     }
   }
@@ -103,23 +126,30 @@ function findCornerSquares(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] | null {
   for (const hit of hits) {
     if (picked.some((p) => Math.hypot(p.x - hit.x, p.y - hit.y) < side * 2.2)) continue;
     picked.push(hit);
-    if (picked.length >= 8) break;
+    if (picked.length >= 24) break;
   }
 
-  const solid = picked.filter((p) => p.y > h * 0.25 && p.y < h * 0.95 && p.x > w * 0.12 && p.x < w * 0.9);
-  if (solid.length < 3) return null;
+  const solid = picked.filter((p) => p.y > h * 0.2 && p.y < h * 0.96 && p.x > w * 0.08 && p.x < w * 0.92);
+  const lefts = solid.filter((p) => p.x < w * 0.42);
+  const rights = solid.filter((p) => p.x > w * 0.58);
+  if (lefts.length < 1 || rights.length < 1) return null;
 
-  const tl = solid.reduce((a, b) => (a.x + a.y < b.x + b.y ? a : b));
-  const rest = solid.filter((p) => p !== tl);
-  const tr = rest.reduce((a, b) => (a.x - a.y > b.x - b.y ? a : b));
-  const bl = rest.filter((p) => p !== tr).reduce((a, b) => (b.y - b.x > a.y - a.x ? b : a));
+  const tl = lefts.reduce((a, b) => (a.y < b.y ? a : b));
+  const bl = lefts.reduce((a, b) => (a.y > b.y ? a : b));
+  const alignedRight = rights.filter((p) => Math.abs(p.y - tl.y) < h * 0.05);
+  const tr = (alignedRight.length ? alignedRight : rights).reduce((a, b) => (a.y < b.y ? a : b));
   const inferred: Pt = { x: tr.x + (bl.x - tl.x), y: tr.y + (bl.y - tl.y) };
-  const brHit = rest.find(
-    (p) => p !== tr && p !== bl && Math.hypot(p.x - inferred.x, p.y - inferred.y) < side * 4
-  );
+  const brHit = rights
+    .filter((p) => p !== tr && Math.abs(p.x - tr.x) < w * 0.08 && p.y > tr.y + h * 0.12)
+    .reduce<(typeof rights)[number] | null>((best, p) => {
+      if (!best) return p;
+      return Math.hypot(p.x - inferred.x, p.y - inferred.y) < Math.hypot(best.x - inferred.x, best.y - inferred.y)
+        ? p
+        : best;
+    }, null);
   const br = brHit ?? inferred;
   if (tr.x - tl.x < w * 0.25) return null;
-  if (bl.y - tl.y < h * 0.2) return null;
+  if (Math.max(bl.y, br.y) - Math.min(tl.y, tr.y) < h * 0.2) return null;
   return [tl, tr, br, bl];
 }
 
@@ -244,78 +274,7 @@ export function isCustom20Exam(
   });
 }
 
-/**
- * Elige la franja con la línea manuscrita (CURP).
- * El borde de abajo del recorte alto queda junto a los cuadros, donde está el rótulo NOMBRE.
- */
-function sliceHandwrittenLine(strip: HTMLCanvasElement): HTMLCanvasElement | null {
-  const ctx = strip.getContext('2d', { willReadFrequently: true });
-  if (!ctx || typeof document === 'undefined') return null;
-  const w = strip.width;
-  const h = strip.height;
-  const data = ctx.getImageData(0, 0, w, h).data;
-  const bins = 10;
-  const rowInk = new Float64Array(h);
-  const rowCov = new Float64Array(h);
-  for (let y = 0; y < h; y++) {
-    const counts = new Array<number>(bins).fill(0);
-    for (let x = 0; x < w; x++) {
-      if (luminance(data, (y * w + x) * 4) < 145) counts[Math.min(bins - 1, Math.floor((x / w) * bins))]!++;
-    }
-    let ink = 0;
-    let covered = 0;
-    for (const n of counts) {
-      ink += n;
-      if (n > w / bins / 28) covered++;
-    }
-    rowInk[y] = ink / w;
-    rowCov[y] = covered / bins;
-  }
-
-  const win = Math.max(36, Math.round(h * 0.28));
-  const nameMargin = Math.round(h * 0.16);
-  let bestY = -1;
-  let bestScore = 0;
-  const yStartMax = Math.max(0, h - win - nameMargin);
-  for (let y = 0; y <= yStartMax; y++) {
-    let ink = 0;
-    let cov = 0;
-    for (let i = 0; i < win; i++) {
-      ink += rowInk[y + i]!;
-      cov += rowCov[y + i]!;
-    }
-    ink /= win;
-    cov /= win;
-    if (ink < 0.012 || ink > 0.42 || cov < 0.28) continue;
-    const closeness = 1 - y / Math.max(1, yStartMax);
-    const score = cov * (0.55 + 0.45 * closeness);
-    if (score > bestScore) {
-      bestScore = score;
-      bestY = y;
-    }
-  }
-  if (bestY < 0) return null;
-
-  let y0 = bestY;
-  let y1 = bestY + win;
-  while (y0 < y1 - 24 && rowInk[y0]! < 0.01 && rowCov[y0]! < 0.15) y0++;
-  while (y1 > y0 + 24 && rowInk[y1 - 1]! < 0.01 && rowCov[y1 - 1]! < 0.15) y1--;
-  const padY = 6;
-  y0 = Math.max(0, y0 - padY);
-  y1 = Math.min(h, y1 + padY);
-
-  const out = document.createElement('canvas');
-  out.width = w;
-  out.height = Math.max(48, y1 - y0);
-  const outCtx = out.getContext('2d');
-  if (!outCtx) return null;
-  outCtx.fillStyle = '#fff';
-  outCtx.fillRect(0, 0, out.width, out.height);
-  outCtx.drawImage(strip, 0, y0, w, y1 - y0, 0, 0, w, y1 - y0);
-  return out;
-}
-
-/** Franja manuscrita encima de los cuadros (CURP), en la foto original. */
+/** Franja manuscrita justo encima de los cuadros (CURP), en la foto original. */
 export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   const quad = findCornerSquares(canvas);
   if (!quad || typeof document === 'undefined') return null;
@@ -326,11 +285,11 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
   const downY = bl.y - tl.y;
   const edgeX = tr.x - tl.x;
   const edgeY = tr.y - tl.y;
-  const pad = 0.12;
+  const pad = 0.22;
   const left = { x: tl.x - edgeX * pad, y: tl.y - edgeY * pad };
   const right = { x: tr.x + edgeX * pad, y: tr.y + edgeY * pad };
-  const top = 0.34;
-  const bot = 0.02;
+  const top = 0.145;
+  const bot = 0.055;
   const src: [Pt, Pt, Pt, Pt] = [
     { x: left.x - downX * top, y: left.y - downY * top },
     { x: right.x - downX * top, y: right.y - downY * top },
@@ -338,7 +297,7 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
     { x: left.x - downX * bot, y: left.y - downY * bot },
   ];
   const outW = 720;
-  const outH = 260;
+  const outH = 72;
   const dst: [Pt, Pt, Pt, Pt] = [
     { x: 0, y: 0 },
     { x: outW, y: 0 },
@@ -347,9 +306,7 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
   ];
   const h = computeHomographySrcToDst(src, dst);
   if (!h) return null;
-  const strip = warpCanvasWithHomography(canvas, h, outW, outH);
-  if (!strip) return null;
-  return sliceHandwrittenLine(strip) ?? strip;
+  return warpCanvasWithHomography(canvas, h, outW, outH);
 }
 
 export function warpCustom20Canvas(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
