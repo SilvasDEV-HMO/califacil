@@ -239,14 +239,21 @@ export function useExamResults(examId: string | undefined) {
     
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('answers')
-        .select('*')
-        .eq('exam_id', examId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setAnswers(data || []);
+      const pageSize = 1000;
+      const all: Answer[] = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from('answers')
+          .select('*')
+          .eq('exam_id', examId)
+          .order('created_at', { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        const batch = data || [];
+        all.push(...batch);
+        if (batch.length < pageSize) break;
+      }
+      setAnswers(all);
     } catch (err: any) {
       setError(err.message);
     } finally {

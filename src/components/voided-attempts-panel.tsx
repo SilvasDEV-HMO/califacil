@@ -173,13 +173,7 @@ export function VoidedAttemptsPanel({
               </Button>
             </div>
           ) : voidedAttempts.length === 0 ? (
-            <div className="space-y-2 py-6 text-center text-sm text-gray-500">
-              <p>No hay exámenes anulados registrados.</p>
-              <p className="text-xs text-gray-400">
-                Si un alumno vio «Intento anulado» y no aparece aquí, ejecuta las migraciones de Supabase
-                (20260606110000 y 20260619150000) y agrega SUPABASE_SERVICE_ROLE_KEY en .env.local.
-              </p>
-            </div>
+            <p className="py-6 text-center text-sm text-gray-500">No hay exámenes anulados registrados.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

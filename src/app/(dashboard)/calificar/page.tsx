@@ -3914,14 +3914,20 @@ export default function CalificarPage() {
   useEffect(() => {
     if (!batchSummary || !examId) return;
     let cancelled = false;
-    void supabase
-      .from('answers')
-      .select('student_id')
-      .eq('exam_id', examId)
-      .then(({ data }) => {
-        if (cancelled) return;
-        setStudentsAlreadyGraded(new Set((data ?? []).map((row) => String(row.student_id))));
-      });
+    void (async () => {
+      const pageSize = 1000;
+      const ids = new Set<string>();
+      for (let from = 0; ; from += pageSize) {
+        const { data } = await supabase
+          .from('answers')
+          .select('student_id')
+          .eq('exam_id', examId)
+          .range(from, from + pageSize - 1);
+        for (const row of data ?? []) ids.add(String(row.student_id));
+        if (!data || data.length < pageSize || cancelled) break;
+      }
+      if (!cancelled) setStudentsAlreadyGraded(ids);
+    })();
     return () => {
       cancelled = true;
     };
