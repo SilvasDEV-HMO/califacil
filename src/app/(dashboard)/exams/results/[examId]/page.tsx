@@ -607,14 +607,14 @@ export default function ExamResultsPage() {
           const everyone = lists.flat();
           const overall = summarizeResults(everyone);
           table(
-            [['Grupo', 'Alumnos', 'Promedio']],
+            [['Grupo', 'Alumnos', 'Promedio', 'Calificación']],
             [
               ...lists.map((list) => {
                 const slot = parseRosterGroup(list[0]!.groupName);
                 const stats = summarizeResults(list);
-                return [slot.group, String(stats.count), `${stats.average}%`];
+                return [slot.group, String(stats.count), `${stats.average}%`, getGradeLabel(Number(stats.average))];
               }),
-              ['Todos', String(overall.count), `${overall.average}%`],
+              ['Todos', String(overall.count), `${overall.average}%`, getGradeLabel(Number(overall.average))],
             ]
           );
         }
