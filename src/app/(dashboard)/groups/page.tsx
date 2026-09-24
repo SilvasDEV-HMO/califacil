@@ -236,6 +236,7 @@ function StudentsManager({
   );
   const [isDeletingStudent, setIsDeletingStudent] = useState(false);
   const [importPreview, setImportPreview] = useState<StudentImportResult | null>(null);
+  const [isReadingList, setIsReadingList] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
 
   const handleAddStudent = async () => {
@@ -264,6 +265,8 @@ function StudentsManager({
     event.target.value = '';
     if (!file) return;
 
+    const isPdf = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+    if (isPdf) setIsReadingList(true);
     try {
       const parsed = await parseStudentImportFile(file);
       if (parsed.students.length === 0) {
@@ -278,6 +281,8 @@ function StudentsManager({
       toast.error('Error al procesar el archivo', {
         description: toSpanishAuthMessage(msg) || 'Revisa el archivo e inténtalo de nuevo.',
       });
+    } finally {
+      setIsReadingList(false);
     }
   };
 
@@ -402,15 +407,16 @@ function StudentsManager({
                 Descargar plantilla
               </a>
             </Button>
-            <Label htmlFor="studentImportUpload" className="cursor-pointer">
+            <Label htmlFor="studentImportUpload" className={isReadingList ? 'pointer-events-none opacity-60' : 'cursor-pointer'}>
               <div className="flex items-center gap-2 rounded-md border border-orange-200 bg-white px-3 py-1.5 text-sm text-orange-700 hover:bg-orange-50">
-                <Upload className="h-4 w-4" />
+                {isReadingList ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                 Subir lista completada (CSV/Excel/PDF)
               </div>
             </Label>
             <input
               id="studentImportUpload"
               type="file"
+              disabled={isReadingList}
               accept=".csv,.xlsx,.xls,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
               onChange={handleFileUpload}
@@ -523,6 +529,25 @@ function StudentsManager({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={isReadingList}>
+        <DialogContent
+          className="max-w-sm"
+          showCloseButton={false}
+          onPointerDownOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
+              Espera un momento... estoy leyendo la lista
+            </DialogTitle>
+            <DialogDescription>
+              Estoy leyendo los nombres y las CURP del PDF. En un momento podrás confirmarlos.
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!importPreview} onOpenChange={(open) => !open && !isImporting && setImportPreview(null)}>
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden sm:max-w-3xl">

@@ -5122,7 +5122,7 @@ export default function CalificarPage() {
                           <StudentCombobox
                             compact
                             students={sortedStudents}
-                            value={row.selectedStudentId}
+                            value={row.selectedStudentId ?? ''}
                             disabled={scanBusy}
                             placeholder="Escribe la CURP…"
                             searchPlaceholder="Primeras letras de la CURP"
