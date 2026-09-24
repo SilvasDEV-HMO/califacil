@@ -47,45 +47,63 @@ export async function POST(
 
     const { data: sourceQuestions, error: qErr } = await supabase
       .from('questions')
-      .select('text,type,options,correct_answer,illustration,points,sort_order,created_at')
-      .eq('exam_id', examId)
-      .order('created_at', { ascending: true });
+      .select('*')
+      .eq('exam_id', examId);
 
     if (qErr) {
       await supabase.from('exams').delete().eq('id', newExam.id);
-      return NextResponse.json({ error: 'No se pudieron copiar las preguntas' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'No se pudieron copiar las preguntas', message: qErr.message },
+        { status: 500 }
+      );
     }
 
     const orderedQuestions = sortExamQuestions(sourceQuestions ?? []);
     if (orderedQuestions.length > 0) {
-      const rowsWithOrder = orderedQuestions.map((q, index) => ({
-        exam_id: newExam.id,
-        text: q.text,
-        type: q.type,
-        options: q.options,
-        correct_answer: q.correct_answer,
-        illustration: q.illustration,
-        points: q.points ?? 1,
-        sort_order: index,
-      }));
-      const rowsWithoutOrder = orderedQuestions.map((q) => ({
-        exam_id: newExam.id,
-        text: q.text,
-        type: q.type,
-        options: q.options,
-        correct_answer: q.correct_answer,
-        illustration: q.illustration,
-        points: q.points ?? 1,
-      }));
-      let qInsertErr = (
-        await supabase.from('questions').insert(rowsWithOrder)
-      ).error;
-      if (qInsertErr && isMissingSortOrderColumnError(qInsertErr.message)) {
-        qInsertErr = (await supabase.from('questions').insert(rowsWithoutOrder)).error;
+      const buildRows = (flags: { sort: boolean; points: boolean; illustration: boolean }) =>
+        orderedQuestions.map((q, index) => {
+          const row = q as Record<string, unknown>;
+          const type = row.type === 'open_answer' ? 'open_answer' : 'multiple_choice';
+          const base: Record<string, unknown> = {
+            exam_id: newExam.id,
+            text: String(row.text ?? '').trim() || '(sin texto)',
+            type,
+            options: type === 'multiple_choice' ? row.options ?? null : null,
+            correct_answer:
+              row.correct_answer != null && String(row.correct_answer).trim() !== ''
+                ? String(row.correct_answer)
+                : null,
+          };
+          if (flags.illustration) {
+            base.illustration =
+              row.illustration != null && String(row.illustration).trim() !== ''
+                ? String(row.illustration)
+                : null;
+          }
+          if (flags.points) {
+            const points = Number(row.points);
+            base.points = Number.isFinite(points) && points > 0 ? points : 1;
+          }
+          if (flags.sort) base.sort_order = index;
+          return base;
+        });
+
+      const flags = { sort: true, points: true, illustration: true };
+      let qInsertErr = (await supabase.from('questions').insert(buildRows(flags))).error;
+      for (let attempt = 0; qInsertErr && attempt < 4; attempt += 1) {
+        const message = qInsertErr.message ?? '';
+        if (flags.sort && (isMissingSortOrderColumnError(message) || /sort_order/i.test(message))) flags.sort = false;
+        else if (flags.points && /points/i.test(message)) flags.points = false;
+        else if (flags.illustration) flags.illustration = false;
+        else break;
+        qInsertErr = (await supabase.from('questions').insert(buildRows(flags))).error;
       }
       if (qInsertErr) {
         await supabase.from('exams').delete().eq('id', newExam.id);
-        return NextResponse.json({ error: 'No se pudieron copiar las preguntas' }, { status: 500 });
+        return NextResponse.json(
+          { error: 'No se pudieron copiar las preguntas', message: qInsertErr.message },
+          { status: 500 }
+        );
       }
     }
 

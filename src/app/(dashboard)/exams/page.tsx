@@ -595,9 +595,13 @@ function ExamCard({
         method: 'POST',
         headers: await dashboardAuthJsonHeaders(),
       });
-      const payload = (await response.json().catch(() => ({}))) as { examId?: string; error?: string };
+      const payload = (await response.json().catch(() => ({}))) as {
+        examId?: string;
+        error?: string;
+        message?: string;
+      };
       if (!response.ok || !payload.examId) {
-        toast.error(payload.error || 'No se pudo duplicar el examen');
+        toast.error(payload.error || 'No se pudo duplicar el examen', { description: payload.message });
         return;
       }
       toast.success('Examen duplicado');
