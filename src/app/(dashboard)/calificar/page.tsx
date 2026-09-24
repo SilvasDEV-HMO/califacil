@@ -3910,6 +3910,14 @@ export default function CalificarPage() {
     });
   };
 
+  const discardBatchRow = (rowIndex: number) => {
+    setBatchSummary((prev) => {
+      if (!prev) return prev;
+      const next = prev.filter((_, index) => index !== rowIndex);
+      return next.length > 0 ? next : null;
+    });
+  };
+
   const assignPendingBatchStudent = (rowIndex: number, studentId: string) => {
     setBatchSummary((prev) => {
       if (!prev) return prev;
@@ -5082,7 +5090,7 @@ export default function CalificarPage() {
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
               Identifica al alumno por la CURP escrita en la hoja. Escribe las primeras letras de la CURP, elige la correcta y pulsa
-              Guardar; no se guarda al elegir.
+              Guardar. Si una hoja no se leyó, pulsa Quitar para no incluirla.
             </DialogDescription>
           </DialogHeader>
           {batchSummary && batchSummary.length > 0 ? (
@@ -5095,6 +5103,9 @@ export default function CalificarPage() {
                     </th>
                     <th className="px-2 py-1.5 font-medium">Alumno</th>
                     <th className="px-2 py-1.5 font-medium">Nota</th>
+                    <th className="px-2 py-1.5 font-medium">
+                      <span className="sr-only">Quitar</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -5137,6 +5148,20 @@ export default function CalificarPage() {
                       </td>
                       <td className="px-2 py-1.5 tabular-nums">
                         {typeof row.pct === 'number' ? `${row.pct}%` : '—'}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        {!row.ok ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-red-600 hover:bg-red-50 hover:text-red-700"
+                            disabled={scanBusy}
+                            onClick={() => discardBatchRow(idx)}
+                          >
+                            Quitar
+                          </Button>
+                        ) : null}
                       </td>
                     </tr>
                   ))}
