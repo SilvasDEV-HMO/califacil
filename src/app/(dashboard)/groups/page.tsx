@@ -31,9 +31,8 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { parseStudentImportFile, type StudentImportResult } from '@/lib/studentImport';
+import { parseStudentImportFile } from '@/lib/studentImport';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
-import { supabase } from '@/lib/supabase';
 
 export default function GroupsPage() {
   const { user } = useAuth();
@@ -61,52 +60,6 @@ export default function GroupsPage() {
       setNewGroupName('');
       setIsCreateDialogOpen(false);
     }
-  };
-
-  const placeSchoolList = async (
-    result: StudentImportResult
-  ): Promise<{ added: number; skipped: number; groupName: string } | { error: string }> => {
-    const label = result.groupName?.trim();
-    if (!user?.id || result.source !== 'sep_list' || !label) {
-      return { error: 'La lista no trae escuela, grupo y turno.' };
-    }
-    let group = groups.find((g) => g.name.trim() === label) ?? null;
-    if (!group) {
-      group = await createGroup(label);
-    }
-    if (!group) return { error: 'No se pudo crear el grupo de la escuela.' };
-
-    const { data: existing, error: existingError } = await supabase
-      .from('students')
-      .select('name, control_number')
-      .eq('group_id', group.id);
-    if (existingError) return { error: existingError.message };
-
-    const known = new Set(
-      (existing ?? []).flatMap((row) => [
-        row.name.trim().toLowerCase(),
-        (row.control_number ?? '').trim().toUpperCase(),
-      ])
-    );
-    const inserts: { group_id: string; name: string; control_number: string }[] = [];
-    let skipped = 0;
-    for (const student of result.students) {
-      const name = student.name.trim();
-      const curp = student.controlNumber.trim().toUpperCase();
-      if (known.has(name.toLowerCase()) || known.has(curp)) {
-        skipped++;
-        continue;
-      }
-      known.add(name.toLowerCase());
-      known.add(curp);
-      inserts.push({ group_id: group.id, name, control_number: curp });
-    }
-    if (inserts.length > 0) {
-      const { error } = await supabase.from('students').insert(inserts);
-      if (error) return { error: error.message };
-    }
-    setSelectedGroup(group.id);
-    return { added: inserts.length, skipped, groupName: label };
   };
 
   const handleDeleteGroup = async (groupId: string) => {
@@ -226,7 +179,6 @@ export default function GroupsPage() {
               <StudentsManager
                 groupId={selectedGroup}
                 groupName={groups.find(g => g.id === selectedGroup)?.name || ''}
-                onPlaceSchoolList={placeSchoolList}
               />
             </div>
           )}
@@ -270,15 +222,11 @@ export default function GroupsPage() {
 function StudentsManager({
   groupId,
   groupName,
-  onPlaceSchoolList,
 }: {
   groupId: string;
   groupName: string;
-  onPlaceSchoolList: (
-    result: StudentImportResult
-  ) => Promise<{ added: number; skipped: number; groupName: string } | { error: string }>;
 }) {
-  const { students, loading, addStudent, addStudentsBatch, deleteStudent, refreshStudents, error } =
+  const { students, loading, addStudent, addStudentsBatch, deleteStudent, error } =
     useStudents(groupId);
   const [newStudentName, setNewStudentName] = useState('');
   const [isAdding, setIsAdding] = useState(false);
@@ -337,28 +285,6 @@ function StudentsManager({
     if (!importPreview) return;
     setIsImporting(true);
     try {
-      if (importPreview.source === 'sep_list') {
-        const placed = await onPlaceSchoolList(importPreview);
-        if ('error' in placed) {
-          toast.error('Error al importar alumnos', {
-            description: toSpanishAuthMessage(placed.error),
-          });
-          return;
-        }
-        if (placed.added === 0 && placed.skipped > 0) {
-          toast.error('No se importó ningún alumno: todos ya estaban en el grupo.');
-          return;
-        }
-        toast.success(
-          placed.skipped > 0
-            ? `${placed.added} estudiantes en ${placed.groupName} (${placed.skipped} ya estaban).`
-            : `${placed.added} estudiantes en ${placed.groupName}.`
-        );
-        if (placed.groupName === groupName.trim()) await refreshStudents();
-        setImportPreview(null);
-        return;
-      }
-
       const { added, skipped, error: importError, warning } = await addStudentsBatch(
         importPreview.students.map((student) => ({
           name: student.name,
@@ -466,8 +392,8 @@ function StudentsManager({
         {/* Plantilla + importación */}
         <div className="flex flex-col gap-2 rounded-lg border border-orange-100 bg-orange-50/50 p-3">
           <p className="text-xs text-gray-700 sm:text-sm">
-            <span className="font-medium text-orange-900">Lista de alumnos:</span> plantilla CSV/Excel o PDF
-            de lista de asistencia ITSON (extrae grupo, número de control y nombre).
+            <span className="font-medium text-orange-900">Lista de alumnos:</span> plantilla CSV/Excel, PDF
+            de asistencia ITSON o lista escolar escaneada (nombre y CURP).
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" className="border-orange-200 bg-white" asChild>
@@ -531,7 +457,10 @@ function StudentsManager({
                   <div className="min-w-0 flex-1">
                     <p className="line-clamp-2 break-words font-medium leading-snug">{student.name}</p>
                     {student.control_number ? (
-                      <p className="truncate text-xs text-gray-500">Control: {student.control_number}</p>
+                      <p className="truncate text-xs text-gray-500">
+                        {/^[A-Z]{4}\d{6}[HM][A-Z0-9]{8}$/i.test(student.control_number) ? 'CURP' : 'Control'}:{' '}
+                        {student.control_number}
+                      </p>
                     ) : null}
                   </div>
                 </div>
@@ -601,7 +530,7 @@ function StudentsManager({
             <DialogTitle>Vista previa de importación</DialogTitle>
             <DialogDescription>
               {importPreview?.source === 'sep_list'
-                ? 'Lista escolar. Se guardará en el grupo de esa escuela.'
+                ? `Lista escolar. Los alumnos se guardan en «${groupName}», con su nombre y CURP.`
                 : importPreview?.source === 'itson_pdf'
                   ? 'Lista de asistencia ITSON detectada.'
                   : 'Revisa los alumnos antes de importarlos al grupo.'}
