@@ -73,27 +73,55 @@ interface StudentResult {
   submittedAt: string;
 }
 
+type RosterSlot = {
+  school: string;
+  schoolRank: number;
+  shift: string;
+  shiftRank: number;
+  group: string;
+  grade: number;
+  letter: string;
+};
+
+function parseRosterGroup(groupName: string): RosterSlot {
+  const text = groupName.toUpperCase().trim();
+  const match = text.match(/^(\d+)\s+(\d{1,2})\s*[-]?\s*([A-Z])\s+([VMN])\s*$/);
+  const shift = match?.[4] ?? '';
+  const shiftRank = shift === 'V' ? 0 : shift === 'M' ? 1 : shift === 'N' ? 2 : 3;
+  const shiftLabel =
+    shift === 'V' ? 'Vespertino' : shift === 'M' ? 'Matutino' : shift === 'N' ? 'Nocturno' : 'Sin turno';
+  return {
+    school: match ? match[1]! : 'Sin escuela',
+    schoolRank: match ? Number(match[1]) : 9999,
+    shift: shiftLabel,
+    shiftRank,
+    group: match ? `${match[2]}${match[3]}` : groupName || 'Sin grupo',
+    grade: match ? Number(match[2]) : 999,
+    letter: match?.[3] ?? 'Z',
+  };
+}
+
 /** Escuela (60), luego turno V y después M, luego grupo 1A, 1B… y al final el apellido. */
 function compareResultsByGroupShiftName(a: StudentResult, b: StudentResult): number {
-  const parse = (groupName: string) => {
-    const text = groupName.toUpperCase().trim();
-    const match = text.match(/^(\d+)\s+(\d{1,2})\s*[-]?\s*([A-Z])\s+([VMN])\s*$/);
-    const shift = match?.[4];
-    const shiftRank = shift === 'V' ? 0 : shift === 'M' ? 1 : shift === 'N' ? 2 : 3;
-    return {
-      school: match ? Number(match[1]) : 9999,
-      grade: match ? Number(match[2]) : 999,
-      letter: match?.[3] ?? 'Z',
-      shiftRank,
-    };
-  };
-  const ga = parse(a.groupName);
-  const gb = parse(b.groupName);
-  if (ga.school !== gb.school) return ga.school - gb.school;
+  const ga = parseRosterGroup(a.groupName);
+  const gb = parseRosterGroup(b.groupName);
+  if (ga.schoolRank !== gb.schoolRank) return ga.schoolRank - gb.schoolRank;
   if (ga.shiftRank !== gb.shiftRank) return ga.shiftRank - gb.shiftRank;
   if (ga.grade !== gb.grade) return ga.grade - gb.grade;
   if (ga.letter !== gb.letter) return ga.letter.localeCompare(gb.letter);
   return a.studentName.localeCompare(b.studentName, 'es', { sensitivity: 'base' });
+}
+
+function summarizeResults(rows: StudentResult[]) {
+  const count = rows.length;
+  const average = count ? rows.reduce((sum, row) => sum + row.percentage, 0) / count : 0;
+  const approved = rows.filter((row) => row.percentage >= 60).length;
+  return {
+    count,
+    average: average.toFixed(1),
+    approved,
+    failed: count - approved,
+  };
 }
 
 interface QuestionAnalysis {
@@ -492,161 +520,126 @@ export default function ExamResultsPage() {
         doc.setFontSize(18);
         doc.text(`Resultados: ${exam.title}`, margin, 20);
 
+        const rows = [...studentResults].sort(compareResultsByGroupShiftName);
+        const overall = summarizeResults(rows);
         doc.setFontSize(10);
-        const approved = filteredStudentResults.filter((r) => r.percentage >= 60).length;
-        const failed = filteredStudentResults.filter((r) => r.percentage < 60).length;
-        const avg =
-          filteredStudentResults.length > 0
-            ? (
-                filteredStudentResults.reduce((sum, r) => sum + r.percentage, 0) / filteredStudentResults.length
-              ).toFixed(1)
-            : '0';
-
         doc.text(
-          `Estudiantes: ${filteredStudentResults.length}  ·  Promedio: ${avg}%  ·  Aprobados: ${approved}  ·  Reprobados: ${failed}`,
+          `Estudiantes: ${overall.count}  ·  Promedio: ${overall.average}%  ·  Aprobados: ${overall.approved}  ·  Reprobados: ${overall.failed}`,
           margin,
           30
         );
 
-        let nextY = 44;
-
+        let nextY = 40;
         const section = (title: string) => {
           nextY += 8;
           if (nextY > 270) {
             doc.addPage();
             nextY = 20;
           }
-          doc.setFontSize(11);
+          doc.setFontSize(12);
           doc.setFont('helvetica', 'bold');
           doc.text(title, margin, nextY);
           doc.setFont('helvetica', 'normal');
-          doc.setFontSize(9);
-          nextY += 5;
+          nextY += 4;
         };
-
-        section('Estudiantes — resultados globales');
-        (doc as any).autoTable({
-          head: [['Estudiante', 'Grupo', 'Puntaje', '%', 'Calificación', 'Fecha']],
-          body: filteredStudentResults.map((result) => [
-            result.studentName,
-            result.groupName,
-            `${result.totalScore}/${result.maxScore}`,
-            `${result.percentage}%`,
-            getGradeLabel(result.percentage),
-            formatDate(result.submittedAt),
-          ]),
-          startY: nextY,
-          margin: { left: margin, right: margin },
-          styles: { fontSize: 8, cellPadding: 2 },
-        });
-        nextY = (doc as any).lastAutoTable.finalY + 10;
-
-        section('Distribución de calificaciones');
-        (doc as any).autoTable({
-          head: [['Rango %', 'Etiqueta', 'Estudiantes']],
-          body: gradeDistribution.map((d) => [d.range, d.label, String(d.count)]),
-          startY: nextY,
-          margin: { left: margin, right: margin },
-          styles: { fontSize: 8, cellPadding: 2 },
-        });
-        nextY = (doc as any).lastAutoTable.finalY + 10;
-
-        section('Reactivos (análisis por pregunta)');
-        (doc as any).autoTable({
-          head: [['#', 'Resumen pregunta', 'OK', 'Mal', 'Blanco', 'N', '% aciertos']],
-          body: questionAnalysis.map((a, i) => {
-            const shortQ =
-              a.question.text.length > 90 ? `${a.question.text.slice(0, 90)}…` : a.question.text;
-            return [
-              String(i + 1),
-              shortQ,
-              String(a.correctAnswers),
-              String(a.incorrectAnswers),
-              String(a.blankAnswers),
-              String(a.totalAnswers),
-              `${a.percentageCorrect}%`,
-            ];
-          }),
-          startY: nextY,
-          margin: { left: margin, right: margin },
-          styles: { fontSize: 7, cellPadding: 1.5 },
-          columnStyles: {
-            0: { cellWidth: 10 },
-            1: { cellWidth: 72 },
-          },
-        });
-        nextY = (doc as any).lastAutoTable.finalY + 10;
-
-        const hasDistractors = questionAnalysis.some((a) => a.optionCounts.length > 0);
-        if (hasDistractors) {
-          section('Distractores (opción múltiple)');
-          const distrBody: string[][] = [];
-          questionAnalysis.forEach((a, qi) => {
-            for (const oc of a.optionCounts) {
-              const pct = a.totalAnswers ? Math.round((oc.count / a.totalAnswers) * 100) : 0;
-              const label =
-                oc.label.length > 55 ? `${oc.label.slice(0, 55)}…` : oc.label;
-              distrBody.push([
-                String(qi + 1),
-                label,
-                String(oc.count),
-                `${pct}%`,
-                oc.isCorrectOption ? 'Sí' : 'No',
-              ]);
-            }
-          });
+        const table = (head: string[][], body: string[][]) => {
           (doc as any).autoTable({
-            head: [['Reactivo', 'Opción elegida', 'Cant.', '% total', '¿Correcta?']],
-            body: distrBody,
+            head,
+            body,
             startY: nextY,
             margin: { left: margin, right: margin },
-            styles: { fontSize: 7, cellPadding: 1.5 },
+            styles: { fontSize: 8, cellPadding: 2 },
+            headStyles: { fillColor: [234, 88, 12] },
           });
-          nextY = (doc as any).lastAutoTable.finalY + 10;
+          nextY = (doc as any).lastAutoTable.finalY + 6;
+        };
+
+        let lastSchool = '';
+        let lastShift = '';
+        let bucket: StudentResult[] = [];
+        const flushGroup = (slot: RosterSlot | null) => {
+          if (!slot || bucket.length === 0) return;
+          section(`Grupo ${slot.group}`);
+          table(
+            [['Estudiante', 'Puntaje', '%', 'Calificación']],
+            bucket.map((result) => [
+              result.studentName,
+              `${result.totalScore}/${result.maxScore}`,
+              `${result.percentage}%`,
+              getGradeLabel(result.percentage),
+            ])
+          );
+          bucket = [];
+        };
+
+        for (const result of rows) {
+          const slot = parseRosterGroup(result.groupName);
+          const schoolKey = `${slot.schoolRank}`;
+          const shiftKey = `${schoolKey}-${slot.shiftRank}`;
+          if (bucket.length > 0) {
+            const prev = parseRosterGroup(bucket[0]!.groupName);
+            if (prev.group !== slot.group || prev.shift !== slot.shift || prev.school !== slot.school) {
+              flushGroup(prev);
+            }
+          }
+          if (schoolKey !== lastSchool) {
+            section(`Escuela ${slot.school}`);
+            lastSchool = schoolKey;
+            lastShift = '';
+          }
+          if (shiftKey !== lastShift) {
+            section(`Turno ${slot.shift}`);
+            lastShift = shiftKey;
+          }
+          bucket.push(result);
+        }
+        if (bucket.length > 0) flushGroup(parseRosterGroup(bucket[0]!.groupName));
+
+        const groupMap = new Map<string, StudentResult[]>();
+        const shiftMap = new Map<string, StudentResult[]>();
+        const schoolMap = new Map<string, StudentResult[]>();
+        for (const result of rows) {
+          const slot = parseRosterGroup(result.groupName);
+          const groupKey = `${slot.schoolRank}|${slot.shiftRank}|${slot.grade}|${slot.letter}`;
+          const shiftKey = `${slot.schoolRank}|${slot.shiftRank}`;
+          const schoolKey = `${slot.schoolRank}`;
+          groupMap.set(groupKey, [...(groupMap.get(groupKey) ?? []), result]);
+          shiftMap.set(shiftKey, [...(shiftMap.get(shiftKey) ?? []), result]);
+          schoolMap.set(schoolKey, [...(schoolMap.get(schoolKey) ?? []), result]);
         }
 
-        section('Detalle por estudiante y pregunta');
-        const detalleBody: string[][] = [];
-        for (const result of filteredStudentResults) {
-          for (const row of buildStudentQuestionBreakdownRows(result, exam.questions)) {
-            const estado =
-              row.isCorrect === true
-                ? 'Correcta'
-                : row.isCorrect === false
-                  ? 'Incorrecta'
-                  : 'No eval.';
-            const enun =
-              row.questionText.length > 60 ? `${row.questionText.slice(0, 60)}…` : row.questionText;
-            const sa = row.studentAnswer || '—';
-            const ca = row.correctAnswer || '—';
-            detalleBody.push([
-              result.studentName,
-              String(row.questionNumber),
-              enun,
-              sa.length > 40 ? `${sa.slice(0, 40)}…` : sa,
-              ca.length > 40 ? `${ca.slice(0, 40)}…` : ca,
-              estado,
-            ]);
-          }
-        }
-        (doc as any).autoTable({
-          head: [['Estudiante', '#', 'Pregunta (extracto)', 'Resp. alumno', 'Correcta', 'Estado']],
-          body: detalleBody,
-          startY: nextY,
-          margin: { left: margin, right: margin },
-          styles: { fontSize: 6, cellPadding: 1 },
-          columnStyles: {
-            0: { cellWidth: 28 },
-            1: { cellWidth: 8 },
-            2: { cellWidth: 38 },
-            3: { cellWidth: 22 },
-            4: { cellWidth: 22 },
-            5: { cellWidth: 18 },
-          },
-        });
+        section('Resultados por grupo');
+        table(
+          [['Escuela', 'Turno', 'Grupo', 'Estudiantes', 'Promedio', 'Aprobados', 'Reprobados']],
+          [...groupMap.values()].map((list) => {
+            const slot = parseRosterGroup(list[0]!.groupName);
+            const stats = summarizeResults(list);
+            return [slot.school, slot.shift, slot.group, String(stats.count), `${stats.average}%`, String(stats.approved), String(stats.failed)];
+          })
+        );
+
+        section('Resultados por turno');
+        table(
+          [['Escuela', 'Turno', 'Estudiantes', 'Promedio', 'Aprobados', 'Reprobados']],
+          [...shiftMap.values()].map((list) => {
+            const slot = parseRosterGroup(list[0]!.groupName);
+            const stats = summarizeResults(list);
+            return [slot.school, slot.shift, String(stats.count), `${stats.average}%`, String(stats.approved), String(stats.failed)];
+          })
+        );
+
+        section('Resultados por escuela');
+        table(
+          [['Escuela', 'Estudiantes', 'Promedio', 'Aprobados', 'Reprobados']],
+          [...schoolMap.values()].map((list) => {
+            const slot = parseRosterGroup(list[0]!.groupName);
+            const stats = summarizeResults(list);
+            return [slot.school, String(stats.count), `${stats.average}%`, String(stats.approved), String(stats.failed)];
+          })
+        );
 
         doc.save(`resultados_${base}.pdf`);
-        toast.success('Resultados exportados a PDF (todas las secciones)');
+        toast.success('PDF listo: alumnos por escuela, turno y grupo, y los resúmenes.');
       });
     });
   };
