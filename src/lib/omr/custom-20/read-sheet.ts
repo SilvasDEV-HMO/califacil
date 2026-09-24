@@ -244,7 +244,78 @@ export function isCustom20Exam(
   });
 }
 
-/** Franja manuscrita justo encima de los cuadros (CURP), en la foto original. */
+/**
+ * Elige la franja con la línea manuscrita (CURP).
+ * El borde de abajo del recorte alto queda junto a los cuadros, donde está el rótulo NOMBRE.
+ */
+function sliceHandwrittenLine(strip: HTMLCanvasElement): HTMLCanvasElement | null {
+  const ctx = strip.getContext('2d', { willReadFrequently: true });
+  if (!ctx || typeof document === 'undefined') return null;
+  const w = strip.width;
+  const h = strip.height;
+  const data = ctx.getImageData(0, 0, w, h).data;
+  const bins = 10;
+  const rowInk = new Float64Array(h);
+  const rowCov = new Float64Array(h);
+  for (let y = 0; y < h; y++) {
+    const counts = new Array<number>(bins).fill(0);
+    for (let x = 0; x < w; x++) {
+      if (luminance(data, (y * w + x) * 4) < 145) counts[Math.min(bins - 1, Math.floor((x / w) * bins))]!++;
+    }
+    let ink = 0;
+    let covered = 0;
+    for (const n of counts) {
+      ink += n;
+      if (n > w / bins / 28) covered++;
+    }
+    rowInk[y] = ink / w;
+    rowCov[y] = covered / bins;
+  }
+
+  const win = Math.max(36, Math.round(h * 0.28));
+  const nameMargin = Math.round(h * 0.16);
+  let bestY = -1;
+  let bestScore = 0;
+  const yStartMax = Math.max(0, h - win - nameMargin);
+  for (let y = 0; y <= yStartMax; y++) {
+    let ink = 0;
+    let cov = 0;
+    for (let i = 0; i < win; i++) {
+      ink += rowInk[y + i]!;
+      cov += rowCov[y + i]!;
+    }
+    ink /= win;
+    cov /= win;
+    if (ink < 0.012 || ink > 0.42 || cov < 0.28) continue;
+    const closeness = 1 - y / Math.max(1, yStartMax);
+    const score = cov * (0.55 + 0.45 * closeness);
+    if (score > bestScore) {
+      bestScore = score;
+      bestY = y;
+    }
+  }
+  if (bestY < 0) return null;
+
+  let y0 = bestY;
+  let y1 = bestY + win;
+  while (y0 < y1 - 24 && rowInk[y0]! < 0.01 && rowCov[y0]! < 0.15) y0++;
+  while (y1 > y0 + 24 && rowInk[y1 - 1]! < 0.01 && rowCov[y1 - 1]! < 0.15) y1--;
+  const padY = 6;
+  y0 = Math.max(0, y0 - padY);
+  y1 = Math.min(h, y1 + padY);
+
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = Math.max(48, y1 - y0);
+  const outCtx = out.getContext('2d');
+  if (!outCtx) return null;
+  outCtx.fillStyle = '#fff';
+  outCtx.fillRect(0, 0, out.width, out.height);
+  outCtx.drawImage(strip, 0, y0, w, y1 - y0, 0, 0, w, y1 - y0);
+  return out;
+}
+
+/** Franja manuscrita encima de los cuadros (CURP), en la foto original. */
 export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   const quad = findCornerSquares(canvas);
   if (!quad || typeof document === 'undefined') return null;
@@ -255,11 +326,11 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
   const downY = bl.y - tl.y;
   const edgeX = tr.x - tl.x;
   const edgeY = tr.y - tl.y;
-  const pad = 0.18;
+  const pad = 0.12;
   const left = { x: tl.x - edgeX * pad, y: tl.y - edgeY * pad };
   const right = { x: tr.x + edgeX * pad, y: tr.y + edgeY * pad };
-  const top = 0.125;
-  const bot = 0.058;
+  const top = 0.34;
+  const bot = 0.02;
   const src: [Pt, Pt, Pt, Pt] = [
     { x: left.x - downX * top, y: left.y - downY * top },
     { x: right.x - downX * top, y: right.y - downY * top },
@@ -267,7 +338,7 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
     { x: left.x - downX * bot, y: left.y - downY * bot },
   ];
   const outW = 720;
-  const outH = 80;
+  const outH = 260;
   const dst: [Pt, Pt, Pt, Pt] = [
     { x: 0, y: 0 },
     { x: outW, y: 0 },
@@ -276,7 +347,9 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
   ];
   const h = computeHomographySrcToDst(src, dst);
   if (!h) return null;
-  return warpCanvasWithHomography(canvas, h, outW, outH);
+  const strip = warpCanvasWithHomography(canvas, h, outW, outH);
+  if (!strip) return null;
+  return sliceHandwrittenLine(strip) ?? strip;
 }
 
 export function warpCustom20Canvas(canvas: HTMLCanvasElement): HTMLCanvasElement | null {

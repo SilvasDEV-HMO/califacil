@@ -4684,28 +4684,19 @@ export default function CalificarPage() {
   triggerMobileSheetCaptureRef.current = triggerMobileSheetCapture;
 
   useEffect(() => {
-    if (!scanBusy) return;
+    if (!scanBusy || !useLiveCameraUi) return;
     const timeout = window.setTimeout(() => {
-      if (mobileCaptureBusyRef.current) {
-        mobileCaptureBusyRef.current = false;
-        mobileCaptureBusySinceRef.current = 0;
-        autoCaptureTriggeredRef.current = false;
-        gradeReadGenRef.current += 1;
-        gradeReadAbortRef.current?.abort();
-        gradeReadAbortRef.current = null;
-        setScanBusy(false);
-        toast.error('La captura tardó demasiado. Pulsa Capturar de nuevo.');
-        setLiveStatus('Tiempo agotado. Pulsa Capturar de nuevo.');
-        return;
-      }
-      // Desktop JPG/PDF: cancelar lectura colgada en «Leyendo…».
+      if (!mobileCaptureBusyRef.current) return;
+      mobileCaptureBusyRef.current = false;
+      mobileCaptureBusySinceRef.current = 0;
+      autoCaptureTriggeredRef.current = false;
       gradeReadGenRef.current += 1;
       gradeReadAbortRef.current?.abort();
       gradeReadAbortRef.current = null;
       setScanBusy(false);
-      setLiveStatus('');
-      toast.error('La lectura tardó demasiado. Prueba con un PDF o una foto más nítida.');
-    }, useLiveCameraUi ? 45000 : 60000);
+      toast.error('La captura tardó demasiado. Pulsa Capturar de nuevo.');
+      setLiveStatus('Tiempo agotado. Pulsa Capturar de nuevo.');
+    }, 45000);
     return () => window.clearTimeout(timeout);
   }, [scanBusy, useLiveCameraUi]);
 
@@ -5116,7 +5107,7 @@ export default function CalificarPage() {
                             src={row.nameCropUrl}
                             alt={`Nombre escrito (${row.fileName})`}
                             title={row.fileName}
-                            className="h-12 max-w-[min(100%,22rem)] rounded border border-gray-200 bg-white object-contain object-left"
+                            className="h-16 max-w-[min(100%,22rem)] rounded border border-gray-200 bg-white object-contain object-left"
                           />
                         ) : (
                           <span className="max-w-[10rem] truncate text-xs text-gray-500" title={row.fileName}>
