@@ -598,11 +598,11 @@ export default function ExamResultsPage() {
           groupsByHeading.set(heading, headingGroups);
         }
 
-        for (const [heading, headingGroups] of groupsByHeading) {
+        for (const [heading, headingGroups] of Array.from(groupsByHeading.entries())) {
           section(`Promedio por grupo — ${heading}`);
           table(
             [['Grupo', 'Promedio']],
-            [...headingGroups.values()].map((list) => {
+            Array.from(headingGroups.values()).map((list) => {
               const slot = parseRosterGroup(list[0]!.groupName);
               return [slot.group, `${summarizeResults(list).average}%`];
             })
