@@ -101,6 +101,12 @@ function parseRosterGroup(groupName: string): RosterSlot {
   };
 }
 
+function rosterHeading(slot: RosterSlot): string {
+  const school =
+    slot.school === 'Sin escuela' ? 'Sin escuela' : `ESCUELA SECUNDARIA TECNICA ${slot.school}`;
+  return `${school} — TURNO ${slot.shift.toUpperCase()}`;
+}
+
 /** Escuela (60), luego turno V y después M, luego grupo 1A, 1B… y al final el apellido. */
 function compareResultsByGroupShiftName(a: StudentResult, b: StudentResult): number {
   const ga = parseRosterGroup(a.groupName);
@@ -547,7 +553,6 @@ export default function ExamResultsPage() {
           nextY = (doc as any).lastAutoTable.finalY + 6;
         };
 
-        let lastSchool = '';
         let lastShift = '';
         let bucket: StudentResult[] = [];
         const flushGroup = (slot: RosterSlot | null) => {
@@ -575,39 +580,31 @@ export default function ExamResultsPage() {
               flushGroup(prev);
             }
           }
-          if (schoolKey !== lastSchool) {
-            section(`Escuela ${slot.school}`);
-            lastSchool = schoolKey;
-            lastShift = '';
-          }
           if (shiftKey !== lastShift) {
-            section(`Turno ${slot.shift}`);
+            section(rosterHeading(slot));
             lastShift = shiftKey;
           }
           bucket.push(result);
         }
         if (bucket.length > 0) flushGroup(parseRosterGroup(bucket[0]!.groupName));
 
-        const groupsBySchool = new Map<string, Map<string, StudentResult[]>>();
+        const groupsByHeading = new Map<string, Map<string, StudentResult[]>>();
         for (const result of rows) {
           const slot = parseRosterGroup(result.groupName);
-          const schoolKey = String(slot.schoolRank);
-          const groupKey = `${slot.shiftRank}|${slot.grade}|${slot.letter}`;
-          const schoolGroups = groupsBySchool.get(schoolKey) ?? new Map<string, StudentResult[]>();
-          schoolGroups.set(groupKey, [...(schoolGroups.get(groupKey) ?? []), result]);
-          groupsBySchool.set(schoolKey, schoolGroups);
+          const heading = rosterHeading(slot);
+          const groupKey = `${slot.grade}|${slot.letter}`;
+          const headingGroups = groupsByHeading.get(heading) ?? new Map<string, StudentResult[]>();
+          headingGroups.set(groupKey, [...(headingGroups.get(groupKey) ?? []), result]);
+          groupsByHeading.set(heading, headingGroups);
         }
 
-        for (const schoolGroups of groupsBySchool.values()) {
-          const first = [...schoolGroups.values()][0]?.[0];
-          if (!first) continue;
-          const school = parseRosterGroup(first.groupName).school;
-          section(`Promedio por grupo — escuela ${school}`);
+        for (const [heading, headingGroups] of groupsByHeading) {
+          section(`Promedio por grupo — ${heading}`);
           table(
-            [['Grupo', 'Turno', 'Promedio']],
-            [...schoolGroups.values()].map((list) => {
+            [['Grupo', 'Promedio']],
+            [...headingGroups.values()].map((list) => {
               const slot = parseRosterGroup(list[0]!.groupName);
-              return [slot.group, slot.shift, `${summarizeResults(list).average}%`];
+              return [slot.group, `${summarizeResults(list).average}%`];
             })
           );
         }
