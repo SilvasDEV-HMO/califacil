@@ -563,14 +563,6 @@ function StudentsManager({
           </DialogHeader>
           {importPreview ? (
             <div className="space-y-3 overflow-hidden">
-              {importPreview.source === 'sep_list' ? (
-                <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-900">
-                  <span className="font-medium">Escuela {importPreview.cct}</span>
-                  {' · '}grupo {importPreview.grupo}
-                  {' · '}turno {importPreview.turno}
-                  <span className="mt-1 block text-orange-800">Grupo: {importPreview.groupName}</span>
-                </div>
-              ) : null}
               {importPreview.groupName && importPreview.source !== 'sep_list' ? (
                 <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm">
                   <span className="font-medium text-orange-900">Grupo en PDF:</span>{' '}
