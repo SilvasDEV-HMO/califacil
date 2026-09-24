@@ -600,10 +600,11 @@ export default function ExamResultsPage() {
           doc.addPage();
           beginPage(`Promedio por grupo — ${heading}`);
           table(
-            [['Grupo', 'Promedio']],
+            [['Alumnos', 'Grupo', 'Promedio']],
             Array.from(headingGroups.values()).map((list) => {
               const slot = parseRosterGroup(list[0]!.groupName);
-              return [slot.group, `${summarizeResults(list).average}%`];
+              const stats = summarizeResults(list);
+              return [String(stats.count), slot.group, `${stats.average}%`];
             })
           );
         }
