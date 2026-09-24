@@ -599,13 +599,19 @@ export default function ExamResultsPage() {
         for (const [heading, headingGroups] of Array.from(groupsByHeading.entries())) {
           doc.addPage();
           beginPage(`Promedio por grupo — ${heading}`);
+          const lists = Array.from(headingGroups.values());
+          const everyone = lists.flat();
+          const overall = summarizeResults(everyone);
           table(
             [['Grupo', 'Alumnos', 'Promedio']],
-            Array.from(headingGroups.values()).map((list) => {
-              const slot = parseRosterGroup(list[0]!.groupName);
-              const stats = summarizeResults(list);
-              return [slot.group, String(stats.count), `${stats.average}%`];
-            })
+            [
+              ...lists.map((list) => {
+                const slot = parseRosterGroup(list[0]!.groupName);
+                const stats = summarizeResults(list);
+                return [slot.group, String(stats.count), `${stats.average}%`];
+              }),
+              ['Todos', String(overall.count), `${overall.average}%`],
+            ]
           );
         }
 
