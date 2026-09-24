@@ -562,14 +562,18 @@ export default function ExamResultsPage() {
           placedGroup = true;
           beginPage(rosterHeading(slot));
           section(`Grupo ${slot.group}`);
+          const stats = summarizeResults(bucket);
           table(
             [['Estudiante', 'Puntaje', '%', 'Calificación']],
-            bucket.map((result) => [
-              result.studentName,
-              `${result.totalScore}/${result.maxScore}`,
-              `${result.percentage}%`,
-              getGradeLabel(result.percentage),
-            ])
+            [
+              ...bucket.map((result) => [
+                result.studentName,
+                `${result.totalScore}/${result.maxScore}`,
+                `${result.percentage}%`,
+                getGradeLabel(result.percentage),
+              ]),
+              ['Todos', `${stats.count} alumnos`, `${stats.average}%`, getGradeLabel(Number(stats.average))],
+            ]
           );
           bucket = [];
         };
