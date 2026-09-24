@@ -736,6 +736,7 @@ export default function CalificarPage() {
   const [folderFileChooser, setFolderFileChooser] = useState<File[] | null>(null);
   const [folderFileChosen, setFolderFileChosen] = useState<Record<number, boolean>>({});
   const [batchSummary, setBatchSummary] = useState<BatchGradeItem[] | null>(null);
+  const [studentsAlreadyGraded, setStudentsAlreadyGraded] = useState<Set<string>>(new Set());
   const pdfInputRef = useRef<HTMLInputElement>(null);
   /** Cancela lecturas desktop JPG/PDF tardías (timeout / nueva subida). */
   const gradeReadAbortRef = useRef<AbortController | null>(null);
@@ -3910,6 +3911,22 @@ export default function CalificarPage() {
     });
   };
 
+  useEffect(() => {
+    if (!batchSummary || !examId) return;
+    let cancelled = false;
+    void supabase
+      .from('answers')
+      .select('student_id')
+      .eq('exam_id', examId)
+      .then(({ data }) => {
+        if (cancelled) return;
+        setStudentsAlreadyGraded(new Set((data ?? []).map((row) => String(row.student_id))));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [batchSummary, examId]);
+
   const discardBatchRow = (rowIndex: number) => {
     setBatchSummary((prev) => {
       if (!prev) return prev;
@@ -3919,6 +3936,17 @@ export default function CalificarPage() {
   };
 
   const assignPendingBatchStudent = (rowIndex: number, studentId: string) => {
+    if (studentsAlreadyGraded.has(studentId)) {
+      toast.error('Esa CURP ya tiene un examen en este grupo. Solo puede haber uno por alumno.');
+      return;
+    }
+    const takenInBatch = (batchSummary ?? []).some(
+      (row, index) => index !== rowIndex && row.selectedStudentId === studentId
+    );
+    if (takenInBatch) {
+      toast.error('Esa CURP ya está en otra hoja. Solo puede haber un examen por alumno.');
+      return;
+    }
     setBatchSummary((prev) => {
       if (!prev) return prev;
       const next = [...prev];
@@ -3941,6 +3969,16 @@ export default function CalificarPage() {
     const missing = pending.filter(({ row }) => !row.selectedStudentId);
     if (missing.length > 0) {
       toast.error('Elige un alumno en cada hoja pendiente antes de guardar.');
+      return;
+    }
+    const chosenIds = pending.map(({ row }) => row.selectedStudentId!);
+    if (new Set(chosenIds).size !== chosenIds.length) {
+      toast.error('La misma CURP está en más de una hoja. Quita la repetida.');
+      return;
+    }
+    const already = chosenIds.filter((id) => studentsAlreadyGraded.has(id));
+    if (already.length > 0) {
+      toast.error('Una de esas CURP ya tiene un examen guardado. Quita esa hoja.');
       return;
     }
     try {
@@ -5133,12 +5171,19 @@ export default function CalificarPage() {
                         ) : row.pendingStudent ? (
                           <StudentCombobox
                             compact
-                            students={sortedStudents}
+                            students={sortedStudents.filter((student) => {
+                              if (student.id === row.selectedStudentId) return true;
+                              if (studentsAlreadyGraded.has(student.id)) return false;
+                              return !batchSummary.some(
+                                (other, otherIndex) =>
+                                  otherIndex !== idx && other.selectedStudentId === student.id
+                              );
+                            })}
                             value={row.selectedStudentId ?? ''}
                             disabled={scanBusy}
                             placeholder="Escribe la CURP…"
                             searchPlaceholder="Primeras letras de la CURP"
-                            emptyText="Ninguna CURP coincide."
+                            emptyText="Esa CURP ya tiene un examen o no coincide."
                             onValueChange={(id) => {
                               if (id) assignPendingBatchStudent(idx, id);
                             }}

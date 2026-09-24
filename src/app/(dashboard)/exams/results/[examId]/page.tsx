@@ -73,6 +73,29 @@ interface StudentResult {
   submittedAt: string;
 }
 
+/** Escuela (60), luego turno V y después M, luego grupo 1A, 1B… y al final el apellido. */
+function compareResultsByGroupShiftName(a: StudentResult, b: StudentResult): number {
+  const parse = (groupName: string) => {
+    const text = groupName.toUpperCase().trim();
+    const match = text.match(/^(\d+)\s+(\d{1,2})\s*[-]?\s*([A-Z])\s+([VMN])\s*$/);
+    const shift = match?.[4];
+    const shiftRank = shift === 'V' ? 0 : shift === 'M' ? 1 : shift === 'N' ? 2 : 3;
+    return {
+      school: match ? Number(match[1]) : 9999,
+      grade: match ? Number(match[2]) : 999,
+      letter: match?.[3] ?? 'Z',
+      shiftRank,
+    };
+  };
+  const ga = parse(a.groupName);
+  const gb = parse(b.groupName);
+  if (ga.school !== gb.school) return ga.school - gb.school;
+  if (ga.shiftRank !== gb.shiftRank) return ga.shiftRank - gb.shiftRank;
+  if (ga.grade !== gb.grade) return ga.grade - gb.grade;
+  if (ga.letter !== gb.letter) return ga.letter.localeCompare(gb.letter);
+  return a.studentName.localeCompare(b.studentName, 'es', { sensitivity: 'base' });
+}
+
 interface QuestionAnalysis {
   question: Question;
   totalAnswers: number;
@@ -324,7 +347,7 @@ export default function ExamResultsPage() {
         };
       });
 
-      setStudentResults(results.sort((a, b) => b.percentage - a.percentage));
+      setStudentResults(results.sort(compareResultsByGroupShiftName));
     };
 
     const uniqueIds = Array.from(new Set(answers.map((a) => a.student_id)));
