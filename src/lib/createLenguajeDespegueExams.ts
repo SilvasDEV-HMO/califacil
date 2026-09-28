@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isMissingSortOrderColumnError } from '@/lib/examQuestions';
 
 const SCHOOLS = ['06', '60', '72'] as const;
 
@@ -70,13 +71,21 @@ export async function createLenguajeDespegueExams(
     const questions = LENGUAJE_KEY.map((letter, index) => ({
       exam_id: exam.id,
       text: `Reactivo ${index + 1}`,
-      type: 'multiple_choice',
+      type: 'multiple_choice' as const,
       options: ['A', 'B', 'C', 'D'],
       correct_answer: letter,
       points: 1,
       sort_order: index,
     }));
-    const { error: questionsError } = await supabase.from('questions').insert(questions);
+    let { error: questionsError } = await supabase.from('questions').insert(questions);
+    if (questionsError && isMissingSortOrderColumnError(questionsError.message)) {
+      const withoutOrder = questions.map(({ sort_order: _sort, ...row }) => row);
+      questionsError = (await supabase.from('questions').insert(withoutOrder)).error;
+    }
+    if (questionsError && /points/i.test(questionsError.message)) {
+      const withoutPoints = questions.map(({ sort_order: _sort, points: _points, ...row }) => row);
+      questionsError = (await supabase.from('questions').insert(withoutPoints)).error;
+    }
     if (questionsError) {
       await supabase.from('exams').delete().eq('id', exam.id);
       return { created, skipped, error: questionsError.message };
