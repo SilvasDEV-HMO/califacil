@@ -57,6 +57,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
+import { DESPEGUE_ADMIN_EMAIL } from '@/lib/omr/despegueSheet';
+import { createLenguajeDespegueExams } from '@/lib/createLenguajeDespegueExams';
 
 function folderMoveOptions(
   folders: ExamFolder[],
@@ -82,7 +84,7 @@ export default function ExamsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
-  const { exams, loading: examsLoading, deleteExam, updateExam } = useExams(user?.id);
+  const { exams, loading: examsLoading, deleteExam, updateExam, refreshExams } = useExams(user?.id);
   const {
     folders,
     loading: foldersLoading,
@@ -98,6 +100,32 @@ export default function ExamsPage() {
   const [folderDialogName, setFolderDialogName] = useState('');
   const [editingFolder, setEditingFolder] = useState<ExamFolder | null>(null);
   const [folderSaving, setFolderSaving] = useState(false);
+  const [creatingLenguaje, setCreatingLenguaje] = useState(false);
+  const isDespegueAdmin = (user?.email ?? '').trim().toLowerCase() === DESPEGUE_ADMIN_EMAIL;
+
+  const handleCreateLenguajeExams = async () => {
+    if (!user?.id || creatingLenguaje) return;
+    setCreatingLenguaje(true);
+    try {
+      const result = await createLenguajeDespegueExams(supabase, user.id);
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      await refreshExams();
+      if (result.created.length === 0) {
+        toast.message('Los tres exámenes de lenguaje ya estaban creados.');
+        return;
+      }
+      toast.success(
+        result.skipped.length > 0
+          ? `Listos: ${result.created.length}. Ya existían ${result.skipped.length}.`
+          : 'Quedaron publicados los tres exámenes de lenguaje.'
+      );
+    } finally {
+      setCreatingLenguaje(false);
+    }
+  };
 
   useEffect(() => {
     const status = searchParams.get('status');
@@ -239,6 +267,17 @@ export default function ExamsPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+          {isDespegueAdmin ? (
+            <Button
+              variant="outline"
+              className="h-9 w-full sm:h-10 sm:w-auto"
+              disabled={creatingLenguaje}
+              onClick={() => void handleCreateLenguajeExams()}
+            >
+              {creatingLenguaje ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Exámenes de lenguaje
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             className="h-9 w-full sm:h-10 sm:w-auto"

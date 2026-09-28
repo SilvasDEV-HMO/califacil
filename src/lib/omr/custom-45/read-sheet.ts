@@ -11,6 +11,8 @@ import type { CalifacilOmrScanGeometry, OmrNormRect } from '@/lib/omrScan';
 import { despegueSheetKind } from '@/lib/omr/despegueSheet';
 
 export const LENGUAJE_QUESTION_COUNT = 45;
+/** Los exámenes de lenguaje califican los primeros 30 reactivos de esa hoja. */
+export const LENGUAJE_EXAM_QUESTIONS = 30;
 export const LENGUAJE_OPTIONS = ['A', 'B', 'C', 'D'] as const;
 
 const WARP_W = 720;
@@ -211,7 +213,7 @@ export function isLenguaje45Exam(
 ): boolean {
   if (despegueSheetKind(email, title) !== 'lenguaje') return false;
   const list = questions ?? [];
-  if (list.length !== LENGUAJE_QUESTION_COUNT) return false;
+  if (list.length !== LENGUAJE_EXAM_QUESTIONS) return false;
   return list.every((q) => {
     if (q.type && q.type !== 'multiple_choice') return false;
     const opts = (q.options ?? []).map((o) => String(o).trim().toUpperCase());
