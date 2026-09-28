@@ -615,6 +615,57 @@ export default function ExamResultsPage() {
           );
         }
 
+        const distribution = buildGradeDistribution(rows);
+        doc.addPage();
+        beginPage('Distribución de Calificaciones');
+        doc.setFontSize(9);
+        doc.setTextColor(100);
+        doc.text('Visualización de cómo se distribuyen las calificaciones', margin, nextY + 2);
+        doc.setTextColor(0);
+
+        const pageW = doc.internal.pageSize.getWidth();
+        const plotLeft = margin + 14;
+        const plotRight = pageW - margin;
+        const plotTop = nextY + 14;
+        const plotBottom = plotTop + 95;
+        const plotW = plotRight - plotLeft;
+        const plotH = plotBottom - plotTop;
+        const peak = Math.max(1, ...distribution.map((d) => d.count));
+        const step = peak <= 20 ? 5 : peak <= 50 ? 10 : 20;
+        const axisMax = Math.max(step, Math.ceil(peak / step) * step);
+
+        doc.setDrawColor(220);
+        doc.setFontSize(8);
+        doc.setTextColor(120);
+        for (let tick = 0; tick <= axisMax; tick += step) {
+          const y = plotBottom - (tick / axisMax) * plotH;
+          doc.setDrawColor(230);
+          doc.line(plotLeft, y, plotRight, y);
+          doc.text(String(tick), plotLeft - 2, y + 1, { align: 'right' });
+        }
+        doc.setDrawColor(180);
+        doc.line(plotLeft, plotTop, plotLeft, plotBottom);
+        doc.line(plotLeft, plotBottom, plotRight, plotBottom);
+
+        const slotW = plotW / distribution.length;
+        const barW = slotW * 0.55;
+        distribution.forEach((item, index) => {
+          const barH = (item.count / axisMax) * plotH;
+          const x = plotLeft + index * slotW + (slotW - barW) / 2;
+          const y = plotBottom - barH;
+          const rgb = item.color === '#22c55e' ? [34, 197, 94] : item.color === '#f59e0b' ? [245, 158, 11] : [239, 68, 68];
+          doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+          if (barH > 0) doc.rect(x, y, barW, barH, 'F');
+          doc.setTextColor(80);
+          doc.setFontSize(9);
+          doc.text(item.label, plotLeft + index * slotW + slotW / 2, plotBottom + 7, { align: 'center' });
+          doc.setFontSize(8);
+          doc.text(String(item.count), plotLeft + index * slotW + slotW / 2, Math.max(plotTop + 4, y - 2), {
+            align: 'center',
+          });
+        });
+        doc.setTextColor(0);
+
         doc.save(`resultados_${base}.pdf`);
         toast.success('PDF listo: una tabla por grupo y el promedio de cada escuela.');
       });
