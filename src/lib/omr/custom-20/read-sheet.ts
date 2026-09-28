@@ -71,7 +71,7 @@ function findCornerSquares(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] | null {
   const h = canvas.height;
   if (w < 200 || h < 200) return null;
   const data = ctx.getImageData(0, 0, w, h).data;
-  const side = Math.max(8, Math.round(Math.min(w, h) * 0.018));
+  const side = Math.max(6, Math.round(Math.min(w, h) * 0.012));
   const step = Math.max(2, Math.round(side / 3));
   const hits: { x: number; y: number; score: number }[] = [];
 
@@ -126,7 +126,7 @@ function findCornerSquares(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] | null {
   for (const hit of hits) {
     if (picked.some((p) => Math.hypot(p.x - hit.x, p.y - hit.y) < side * 2.2)) continue;
     picked.push(hit);
-    if (picked.length >= 24) break;
+    if (picked.length >= 40) break;
   }
 
   const solid = picked.filter((p) => p.y > h * 0.12 && p.y < h * 0.97 && p.x > w * 0.04 && p.x < w * 0.96);
@@ -139,9 +139,9 @@ function chooseCornerQuad(
   w: number,
   h: number
 ): [Pt, Pt, Pt, Pt] | null {
-  if (solid.length < 3) return null;
+  if (solid.length < 4) return null;
   let best: { quad: [Pt, Pt, Pt, Pt]; area: number } | null = null;
-  const top = [...solid].sort((a, b) => b.score - a.score).slice(0, 16);
+  const top = [...solid].sort((a, b) => b.score - a.score).slice(0, 24);
   for (let i = 0; i < top.length; i++) {
     for (let j = i + 1; j < top.length; j++) {
       const a = top[i]!;
@@ -151,52 +151,27 @@ function chooseCornerQuad(
       if (dx < w * 0.28 || dy > h * 0.08) continue;
       const left = a.x < b.x ? a : b;
       const right = a.x < b.x ? b : a;
-      const bl =
-        solid
-          .filter((p) => p !== left && p !== right && p.y > left.y + h * 0.18 && Math.abs(p.x - left.x) < w * 0.1)
-          .sort((p, q) => q.y - p.y)[0] ?? null;
-      const br =
-        solid
-          .filter((p) => p !== left && p !== right && p !== bl && p.y > right.y + h * 0.18 && Math.abs(p.x - right.x) < w * 0.1)
-          .sort((p, q) => q.y - p.y)[0] ?? null;
-      const brPt: Pt = br ?? { x: right.x + ((bl?.x ?? left.x) - left.x), y: right.y + ((bl?.y ?? left.y + h * 0.45) - left.y) };
-      const blPt: Pt = bl ?? { x: left.x + (brPt.x - right.x), y: left.y + (brPt.y - right.y) };
+      const topEdge = Math.min(left.y, right.y);
+      if (topEdge < h * 0.32 || topEdge > h * 0.62) continue;
+      const bl = solid
+        .filter((p) => p !== left && p !== right && p.y > left.y + h * 0.18 && Math.abs(p.x - left.x) < w * 0.1)
+        .sort((p, q) => q.y - p.y)[0];
+      const br = solid
+        .filter((p) => p !== left && p !== right && p !== bl && p.y > right.y + h * 0.18 && Math.abs(p.x - right.x) < w * 0.1)
+        .sort((p, q) => q.y - p.y)[0];
+      if (!bl || !br) continue;
       const width = right.x - left.x;
-      const height = Math.max(blPt.y, brPt.y) - Math.min(left.y, right.y);
-      if (width < w * 0.3 || height < h * 0.22) continue;
+      const height = Math.max(bl.y, br.y) - topEdge;
+      if (width < w * 0.3 || height < h * 0.15) continue;
       const ratio = height / width;
-      if (ratio < 0.7 || ratio > 2.2) continue;
+      if (ratio < 0.55 || ratio > 2.2) continue;
       const area = width * height;
       if (!best || area > best.area) {
-        best = { quad: [left, right, brPt, blPt], area };
+        best = { quad: [left, right, br, bl], area };
       }
     }
   }
-  if (best) return best.quad;
-
-  const lefts = solid.filter((p) => p.x < w * 0.42);
-  const rights = solid.filter((p) => p.x > w * 0.58);
-  if (lefts.length < 1 || rights.length < 1) return null;
-  const tl = lefts.reduce((a, b) => (a.y < b.y ? a : b));
-  const bl = lefts.reduce((a, b) => (a.y > b.y ? a : b));
-  const alignedRight = rights.filter((p) => Math.abs(p.y - tl.y) < h * 0.05);
-  const tr = (alignedRight.length ? alignedRight : rights).reduce((a, b) => (a.y < b.y ? a : b));
-  const inferred: Pt = { x: tr.x + (bl.x - tl.x), y: tr.y + (bl.y - tl.y) };
-  const brHit = rights
-    .filter((p) => p !== tr && Math.abs(p.x - tr.x) < w * 0.08 && p.y > tr.y + h * 0.12)
-    .reduce<(typeof rights)[number] | null>((bestHit, p) => {
-      if (!bestHit) return p;
-      return Math.hypot(p.x - inferred.x, p.y - inferred.y) < Math.hypot(bestHit.x - inferred.x, bestHit.y - inferred.y)
-        ? p
-        : bestHit;
-    }, null);
-  const br = brHit ?? inferred;
-  const width = tr.x - tl.x;
-  const height = Math.max(bl.y, br.y) - Math.min(tl.y, tr.y);
-  if (width < w * 0.3 || height < h * 0.22) return null;
-  const ratio = height / Math.max(1, width);
-  if (ratio < 0.7 || ratio > 2.2) return null;
-  return [tl, tr, br, bl];
+  return best?.quad ?? null;
 }
 
 function warpToTemplate(canvas: HTMLCanvasElement, quad: [Pt, Pt, Pt, Pt]): HTMLCanvasElement | null {
@@ -320,80 +295,6 @@ export function isCustom20Exam(
   });
 }
 
-function rowInk(data: Uint8ClampedArray, w: number, y: number): { coverage: number; rule: boolean } {
-  const bins = 12;
-  const counts = new Array<number>(bins).fill(0);
-  let run = 0;
-  let longest = 0;
-  const x0 = Math.round(w * 0.18);
-  const x1 = Math.round(w * 0.82);
-  for (let x = x0; x < x1; x++) {
-    const dark = luminance(data, (y * w + x) * 4) < 145;
-    if (dark) {
-      run++;
-      longest = Math.max(longest, run);
-      const bin = Math.min(bins - 1, Math.floor(((x / w - 0.18) / 0.64) * bins));
-      counts[bin]!++;
-    } else {
-      run = 0;
-    }
-  }
-  let covered = 0;
-  for (const n of counts) if (n > 2) covered++;
-  return { coverage: covered / bins, rule: longest > (x1 - x0) * 0.42 };
-}
-
-/**
- * La CURP va escrita encima de NOMBRE, y más abajo están los cuadros de
- * apellidos, grupo y escuela. Se queda con la línea ancha justo arriba
- * del primer recuadro, no con ESCUELA.
- */
-function sliceCurpLine(strip: HTMLCanvasElement): HTMLCanvasElement | null {
-  const ctx = strip.getContext('2d', { willReadFrequently: true });
-  if (!ctx || typeof document === 'undefined') return null;
-  const w = strip.width;
-  const h = strip.height;
-  const data = ctx.getImageData(0, 0, w, h).data;
-  const rowCov = new Float64Array(h);
-  let firstRule = -1;
-  for (let y = 0; y < h; y++) {
-    const ink = rowInk(data, w, y);
-    rowCov[y] = ink.coverage;
-    if (firstRule < 0 && ink.rule && y > h * 0.2) firstRule = y;
-  }
-  const win = 28;
-  let yLine = -1;
-  const searchFrom = firstRule > win ? firstRule - 6 : h - win;
-  for (let y = searchFrom; y >= 0; y--) {
-    let cov = 0;
-    const n = Math.min(win, h - y);
-    for (let i = 0; i < n; i++) cov += rowCov[y + i]!;
-    cov /= n;
-    if (cov >= 0.32) {
-      yLine = y;
-      break;
-    }
-  }
-  if (yLine < 0) return null;
-  let y0 = yLine;
-  let y1 = Math.min(h, yLine + win);
-  while (y0 > 0 && rowCov[y0 - 1]! > 0.18) y0--;
-  while (y1 < h && rowCov[y1]! > 0.18 && (firstRule < 0 || y1 < firstRule - 4)) y1++;
-  if (firstRule > 0) y1 = Math.min(y1, firstRule - 2);
-  y0 = Math.max(0, y0 - 6);
-  y1 = Math.min(h, y1 + 6);
-  if (y1 <= y0 + 8) return null;
-  const out = document.createElement('canvas');
-  out.width = w;
-  out.height = Math.max(48, y1 - y0);
-  const outCtx = out.getContext('2d');
-  if (!outCtx) return null;
-  outCtx.fillStyle = '#fff';
-  outCtx.fillRect(0, 0, out.width, out.height);
-  outCtx.drawImage(strip, 0, y0, w, y1 - y0, 0, 0, w, y1 - y0);
-  return out;
-}
-
 function rotateCanvas(canvas: HTMLCanvasElement, degrees: 90 | 180 | 270): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
   const out = document.createElement('canvas');
@@ -417,44 +318,40 @@ function canvasWithCorners(canvas: HTMLCanvasElement): HTMLCanvasElement | null 
   return null;
 }
 
-/** Franja manuscrita encima de los cuadros (CURP), en la foto original. */
+/**
+ * Franja fija de la CURP, igual en todas las hojas de este formato.
+ * Queda una altura de bloque por encima de los cuadros de las respuestas,
+ * que es donde se escribe la CURP, encima de NOMBRE.
+ */
 export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   const oriented = canvasWithCorners(canvas);
-  if (!oriented) return null;
+  if (!oriented || typeof document === 'undefined') return null;
   const quad = findCornerSquares(oriented);
-  if (!quad || typeof document === 'undefined') return null;
+  if (!quad) return null;
   const tl = quad[0];
   const tr = quad[1];
   const bl = quad[3];
   const downX = bl.x - tl.x;
   const downY = bl.y - tl.y;
-  const edgeX = tr.x - tl.x;
-  const edgeY = tr.y - tl.y;
-  const pad = 0.02;
-  const left = { x: tl.x - edgeX * pad, y: tl.y - edgeY * pad };
-  const right = { x: tr.x + edgeX * pad, y: tr.y + edgeY * pad };
-  const top = 0.82;
-  const bot = 0.02;
+  const top = 1.22;
+  const bot = 1.0;
   const src: [Pt, Pt, Pt, Pt] = [
-    { x: left.x - downX * top, y: left.y - downY * top },
-    { x: right.x - downX * top, y: right.y - downY * top },
-    { x: right.x - downX * bot, y: right.y - downY * bot },
-    { x: left.x - downX * bot, y: left.y - downY * bot },
+    { x: tl.x - downX * top, y: tl.y - downY * top },
+    { x: tr.x - downX * top, y: tr.y - downY * top },
+    { x: tr.x - downX * bot, y: tr.y - downY * bot },
+    { x: tl.x - downX * bot, y: tl.y - downY * bot },
   ];
-  const outW = 860;
-  const outH = 640;
+  const outW = 900;
+  const outH = 220;
   const dst: [Pt, Pt, Pt, Pt] = [
     { x: 0, y: 0 },
     { x: outW, y: 0 },
     { x: outW, y: outH },
     { x: 0, y: outH },
   ];
-  canvas = oriented;
   const h = computeHomographySrcToDst(src, dst);
   if (!h) return null;
-  const strip = warpCanvasWithHomography(canvas, h, outW, outH);
-  if (!strip) return null;
-  return sliceCurpLine(strip);
+  return warpCanvasWithHomography(oriented, h, outW, outH);
 }
 
 export function warpCustom20Canvas(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
