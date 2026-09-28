@@ -613,21 +613,26 @@ export default function ExamResultsPage() {
               ['Todos', String(overall.count), `${overall.average}%`, getGradeLabel(Number(overall.average))],
             ]
           );
-        }
 
-        const distribution = buildGradeDistribution(rows);
-        doc.addPage();
-        beginPage('Distribución de Calificaciones');
-        doc.setFontSize(9);
-        doc.setTextColor(100);
-        doc.text('Visualización de cómo se distribuyen las calificaciones', margin, nextY + 2);
-        doc.setTextColor(0);
+          const distribution = buildGradeDistribution(everyone);
+          nextY += 6;
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(0);
+          doc.text('Distribución de Calificaciones', margin, nextY);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(9);
+          doc.setTextColor(100);
+          doc.text('Visualización de cómo se distribuyen las calificaciones', margin, nextY + 5);
+          doc.setTextColor(0);
+          nextY += 8;
 
         const pageW = doc.internal.pageSize.getWidth();
+        const pageH = doc.internal.pageSize.getHeight();
         const plotLeft = margin + 14;
         const plotRight = pageW - margin;
-        const plotTop = nextY + 14;
-        const plotBottom = plotTop + 95;
+        const plotTop = nextY + 10;
+        const plotBottom = Math.min(plotTop + 78, pageH - 18);
         const plotW = plotRight - plotLeft;
         const plotH = plotBottom - plotTop;
         const peak = Math.max(1, ...distribution.map((d) => d.count));
@@ -665,6 +670,7 @@ export default function ExamResultsPage() {
           });
         });
         doc.setTextColor(0);
+        }
 
         doc.save(`resultados_${base}.pdf`);
         toast.success('PDF listo: una tabla por grupo y el promedio de cada escuela.');

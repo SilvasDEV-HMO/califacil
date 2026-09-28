@@ -152,14 +152,10 @@ async function readSepListFromScan(buffer: ArrayBuffer): Promise<StudentImportRe
     out.getContext('2d').drawImage(page, x0, y0, cw, ch, 0, 0, cw * 2, ch * 2);
     return out.toBuffer('image/jpeg', 95);
   };
-  const xCurp0 = Math.round(w * 0.05);
-  const xCurp1 = Math.round(w * 0.30);
-  const xName0 = Math.round(w * 0.22);
-  const xName1 = Math.round(w * 0.52);
-  const upperCurp = zoom(xCurp0, xCurp1, bodyTop, mid + Math.round(h * 0.03));
-  const lowerCurp = zoom(xCurp0, xCurp1, mid - Math.round(h * 0.02), bodyTop + bodyH);
-  const upperName = zoom(xName0, xName1, bodyTop, mid + Math.round(h * 0.03));
-  const lowerName = zoom(xName0, xName1, mid - Math.round(h * 0.02), bodyTop + bodyH);
+  const x0 = Math.round(w * 0.02);
+  const x1 = Math.round(w * 0.98);
+  const upperRows = zoom(x0, x1, bodyTop, mid + Math.round(h * 0.03));
+  const lowerRows = zoom(x0, x1, mid - Math.round(h * 0.02), bodyTop + bodyH);
 
   const openai = new OpenAI({ apiKey });
   const imagePart = (jpeg: Buffer) => ({
@@ -175,20 +171,18 @@ async function readSepListFromScan(buffer: ArrayBuffer): Promise<StudentImportRe
       {
         role: 'system',
         content:
-          'Transcribes a Sonora attendance list. JSON only: {cct, grupo, turno, alumnos:[{nombre, curp}]}. cct like 26DST0060E. grupo like 1-A. turno is V, M or N. CURP is exactly 18 characters in the CURP column. nombre is the full name in the name column, with spaces instead of slashes. Copy every printed row. Do not invent rows or characters.',
+          'Transcribes a Sonora attendance list. JSON only: {cct, grupo, turno, alumnos:[{nombre, curp}]}. cct like 26DST0060E. grupo like 1-A. turno is V, M or N. Each row has the student name and, in the CURP column on the same row, an 18-character CURP. Copy that CURP exactly. nombre is the full name, with spaces instead of slashes. Copy every printed row. Do not invent rows or characters. Do not move a CURP to a different name.',
       },
       {
         role: 'user',
         content: [
           {
             type: 'text',
-            text: 'Image 1 is the header. Images 2 and 3 are the CURP column, top then bottom. Images 4 and 5 are the names in the same row order. Pair row by row. Every CURP has 18 characters; do not drop the last letter or digit.',
+            text: 'Image 1 is the header. Images 2 and 3 are the student rows, top half then bottom half. On each row the CURP is the 18-character code in the CURP column, beside that row’s name. Keep each CURP with its own name. Do not drop the last character.',
           },
           imagePart(header),
-          imagePart(upperCurp),
-          imagePart(lowerCurp),
-          imagePart(upperName),
-          imagePart(lowerName),
+          imagePart(upperRows),
+          imagePart(lowerRows),
         ],
       },
     ],
@@ -202,7 +196,7 @@ async function readSepListFromScan(buffer: ArrayBuffer): Promise<StudentImportRe
   }
   if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { alumnos?: unknown }).alumnos)) {
     const body = parsed as { alumnos: { nombre?: unknown; curp?: unknown }[] };
-    const curpRe = /^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$/;
+    const curpRe = /^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$/; // solo para detectar si el nombre y la CURP vienen invertidos
     body.alumnos = body.alumnos.map((row) => {
       let nombre = String(row?.nombre ?? '').replace(/\s*\/\s*/g, ' ').replace(/\s+/g, ' ').trim();
       let curp = String(row?.curp ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');

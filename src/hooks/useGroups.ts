@@ -144,26 +144,60 @@ export function useStudents(groupId: string | undefined) {
       return { added: [], skipped: 0, error: 'No hay un grupo seleccionado.' };
     }
 
-    const existingKeys = new Set(students.map((s) => normalizeAnswerText(s.name)));
+    const existingByName = new Map(students.map((s) => [normalizeAnswerText(s.name), s]));
     const batchKeys = new Set<string>();
     const inserts: { group_id: string; name: string; control_number?: string | null }[] = [];
+    const curpUpdates: { id: string; control_number: string }[] = [];
     let skipped = 0;
 
     for (const entry of entries) {
       const trimmed = entry.name.trim();
       if (!trimmed) continue;
       const key = normalizeAnswerText(trimmed);
-      if (existingKeys.has(key) || batchKeys.has(key)) {
+      const control = entry.controlNumber?.trim() || null;
+      const existing = existingByName.get(key);
+      if (existing) {
+        if (control && control !== (existing.control_number ?? '').trim()) {
+          curpUpdates.push({ id: existing.id, control_number: control });
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+      if (batchKeys.has(key)) {
         skipped++;
         continue;
       }
       batchKeys.add(key);
-      const control = entry.controlNumber?.trim() || null;
       inserts.push({
         group_id: groupId,
         name: trimmed,
         ...(control ? { control_number: control } : {}),
       });
+    }
+
+    if (inserts.length === 0 && curpUpdates.length === 0) {
+      return { added: [], skipped, error: null };
+    }
+
+    for (const update of curpUpdates) {
+      const { error: updateError } = await supabase
+        .from('students')
+        .update({ control_number: update.control_number })
+        .eq('id', update.id);
+      if (updateError) {
+        return { added: [], skipped, error: updateError.message };
+      }
+    }
+    if (curpUpdates.length > 0) {
+      const nextControl = new Map(curpUpdates.map((row) => [row.id, row.control_number]));
+      setStudents((prev) =>
+        prev.map((student) =>
+          nextControl.has(student.id)
+            ? { ...student, control_number: nextControl.get(student.id) }
+            : student
+        )
+      );
     }
 
     if (inserts.length === 0) {

@@ -49,6 +49,21 @@ const CCT_RE = /^\d{2}[A-Z]{3}\d{4}[A-Z]$/;
 const GRUPO_RE = /^\d{1,2}-[A-Z]$/;
 const TURNO_RE = /^[VMN]$/;
 const CURP_RE = /^[A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d$/;
+const CURP_ALPHABET = '0123456789ABCDEFGHIJKLMNÑOPQRSTUVWXYZ';
+
+/** El último dígito de la CURP es un verificador. Descarta lecturas inventadas. */
+export function isValidCurp(value: string): boolean {
+  const curp = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!CURP_RE.test(curp)) return false;
+  let sum = 0;
+  for (let i = 0; i < 17; i++) {
+    const valueOf = CURP_ALPHABET.indexOf(curp[i]!);
+    if (valueOf < 0) return false;
+    sum += valueOf * (18 - i);
+  }
+  const expected = (10 - (sum % 10)) % 10;
+  return curp.endsWith(String(expected));
+}
 
 export function schoolGroupLabel(cct: string, grupo: string, turno: string): string {
   return `${cct} · ${grupo} · ${turno}`;
@@ -83,7 +98,7 @@ export function parseSepSchoolList(raw: unknown): StudentImportResult | null {
     const curp = String(item.curp ?? '')
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, '');
-    if (!name || !CURP_RE.test(curp) || seen.has(curp)) continue;
+    if (!name || !isValidCurp(curp) || seen.has(curp)) continue;
     seen.add(curp);
     students.push({ rowNumber: students.length + 1, controlNumber: curp, name });
   }
