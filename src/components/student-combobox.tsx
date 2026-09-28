@@ -15,6 +15,31 @@ import {
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { Student } from '@/types';
 
+function searchKey(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function studentMatchesQuery(student: Student, search: string): boolean {
+  const q = searchKey(search);
+  if (!q) return true;
+  const curp = searchKey(student.control_number ?? '');
+  const name = searchKey(student.name);
+  return curp.includes(q) || name.includes(q);
+}
+
+function curpSearchRank(student: Student, search: string): number {
+  const q = searchKey(search);
+  if (!q) return 1;
+  const curp = searchKey(student.control_number ?? '');
+  if (curp.startsWith(q)) return 0;
+  if (curp.includes(q)) return 1;
+  return 2;
+}
+
 export type StudentComboboxProps = {
   students: Student[];
   value: string;
@@ -54,20 +79,15 @@ export function StudentCombobox({
     (itemValue: string, search: string) => {
       const student = students.find((s) => s.id === itemValue);
       if (!student) return 0;
-      const q = search.trim().toLowerCase();
-      if (!q) return 1;
-      const curp = (student.control_number ?? '').toLowerCase();
-      return student.name.toLowerCase().includes(q) || curp.includes(q) ? 1 : 0;
+      return studentMatchesQuery(student, search) ? 1 : 0;
     },
     [students]
   );
 
   const q = query.trim().toLowerCase();
-  const compactMatches = students.filter((student) => {
-    if (!q) return true;
-    const curp = (student.control_number ?? '').toLowerCase();
-    return student.name.toLowerCase().includes(q) || curp.includes(q);
-  });
+  const compactMatches = students
+    .filter((student) => studentMatchesQuery(student, q))
+    .sort((a, b) => curpSearchRank(a, q) - curpSearchRank(b, q) || a.name.localeCompare(b.name, 'es'));
 
   if (compact) {
     const selectedLabel = selected?.control_number
@@ -103,7 +123,7 @@ export function StudentCombobox({
             {compactMatches.length === 0 ? (
               <li className="px-2 py-3 text-sm text-muted-foreground">{emptyText}</li>
             ) : (
-              compactMatches.slice(0, 12).map((student) => (
+              compactMatches.slice(0, 40).map((student) => (
                 <li key={student.id}>
                   <button
                     type="button"

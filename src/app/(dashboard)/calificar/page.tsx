@@ -2049,11 +2049,19 @@ export default function CalificarPage() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('students')
-        .select('*')
-        .in('group_id', examGroupIds);
-      if (!cancelled && !error) setStudents(data || []);
+      const pageSize = 1000;
+      const loaded: Student[] = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from('students')
+          .select('*')
+          .in('group_id', examGroupIds)
+          .range(from, from + pageSize - 1);
+        if (cancelled || error) break;
+        loaded.push(...((data || []) as Student[]));
+        if (!data || data.length < pageSize) break;
+      }
+      if (!cancelled) setStudents(loaded);
     })();
     return () => {
       cancelled = true;
@@ -5179,7 +5187,6 @@ export default function CalificarPage() {
                             compact
                             students={sortedStudents.filter((student) => {
                               if (student.id === row.selectedStudentId) return true;
-                              if (studentsAlreadyGraded.has(student.id)) return false;
                               return !batchSummary.some(
                                 (other, otherIndex) =>
                                   otherIndex !== idx && other.selectedStudentId === student.id

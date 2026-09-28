@@ -122,18 +122,61 @@ function findCornerSquares(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] | null {
   if (hits.length < 3) return null;
 
   hits.sort((a, b) => b.score - a.score);
-  const picked: { x: number; y: number }[] = [];
+  const picked: { x: number; y: number; score: number }[] = [];
   for (const hit of hits) {
     if (picked.some((p) => Math.hypot(p.x - hit.x, p.y - hit.y) < side * 2.2)) continue;
     picked.push(hit);
     if (picked.length >= 24) break;
   }
 
-  const solid = picked.filter((p) => p.y > h * 0.2 && p.y < h * 0.96 && p.x > w * 0.08 && p.x < w * 0.92);
+  const solid = picked.filter((p) => p.y > h * 0.12 && p.y < h * 0.97 && p.x > w * 0.04 && p.x < w * 0.96);
+  const quad = chooseCornerQuad(solid, w, h);
+  return quad;
+}
+
+function chooseCornerQuad(
+  solid: { x: number; y: number; score: number }[],
+  w: number,
+  h: number
+): [Pt, Pt, Pt, Pt] | null {
+  if (solid.length < 3) return null;
+  let best: { quad: [Pt, Pt, Pt, Pt]; area: number } | null = null;
+  const top = [...solid].sort((a, b) => b.score - a.score).slice(0, 16);
+  for (let i = 0; i < top.length; i++) {
+    for (let j = i + 1; j < top.length; j++) {
+      const a = top[i]!;
+      const b = top[j]!;
+      const dx = Math.abs(a.x - b.x);
+      const dy = Math.abs(a.y - b.y);
+      if (dx < w * 0.28 || dy > h * 0.08) continue;
+      const left = a.x < b.x ? a : b;
+      const right = a.x < b.x ? b : a;
+      const bl =
+        solid
+          .filter((p) => p !== left && p !== right && p.y > left.y + h * 0.18 && Math.abs(p.x - left.x) < w * 0.1)
+          .sort((p, q) => q.y - p.y)[0] ?? null;
+      const br =
+        solid
+          .filter((p) => p !== left && p !== right && p !== bl && p.y > right.y + h * 0.18 && Math.abs(p.x - right.x) < w * 0.1)
+          .sort((p, q) => q.y - p.y)[0] ?? null;
+      const brPt: Pt = br ?? { x: right.x + ((bl?.x ?? left.x) - left.x), y: right.y + ((bl?.y ?? left.y + h * 0.45) - left.y) };
+      const blPt: Pt = bl ?? { x: left.x + (brPt.x - right.x), y: left.y + (brPt.y - right.y) };
+      const width = right.x - left.x;
+      const height = Math.max(blPt.y, brPt.y) - Math.min(left.y, right.y);
+      if (width < w * 0.3 || height < h * 0.22) continue;
+      const ratio = height / width;
+      if (ratio < 0.7 || ratio > 2.2) continue;
+      const area = width * height;
+      if (!best || area > best.area) {
+        best = { quad: [left, right, brPt, blPt], area };
+      }
+    }
+  }
+  if (best) return best.quad;
+
   const lefts = solid.filter((p) => p.x < w * 0.42);
   const rights = solid.filter((p) => p.x > w * 0.58);
   if (lefts.length < 1 || rights.length < 1) return null;
-
   const tl = lefts.reduce((a, b) => (a.y < b.y ? a : b));
   const bl = lefts.reduce((a, b) => (a.y > b.y ? a : b));
   const alignedRight = rights.filter((p) => Math.abs(p.y - tl.y) < h * 0.05);
@@ -141,15 +184,18 @@ function findCornerSquares(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] | null {
   const inferred: Pt = { x: tr.x + (bl.x - tl.x), y: tr.y + (bl.y - tl.y) };
   const brHit = rights
     .filter((p) => p !== tr && Math.abs(p.x - tr.x) < w * 0.08 && p.y > tr.y + h * 0.12)
-    .reduce<(typeof rights)[number] | null>((best, p) => {
-      if (!best) return p;
-      return Math.hypot(p.x - inferred.x, p.y - inferred.y) < Math.hypot(best.x - inferred.x, best.y - inferred.y)
+    .reduce<(typeof rights)[number] | null>((bestHit, p) => {
+      if (!bestHit) return p;
+      return Math.hypot(p.x - inferred.x, p.y - inferred.y) < Math.hypot(bestHit.x - inferred.x, bestHit.y - inferred.y)
         ? p
-        : best;
+        : bestHit;
     }, null);
   const br = brHit ?? inferred;
-  if (tr.x - tl.x < w * 0.25) return null;
-  if (Math.max(bl.y, br.y) - Math.min(tl.y, tr.y) < h * 0.2) return null;
+  const width = tr.x - tl.x;
+  const height = Math.max(bl.y, br.y) - Math.min(tl.y, tr.y);
+  if (width < w * 0.3 || height < h * 0.22) return null;
+  const ratio = height / Math.max(1, width);
+  if (ratio < 0.7 || ratio > 2.2) return null;
   return [tl, tr, br, bl];
 }
 
@@ -328,9 +374,34 @@ function sliceCurpLine(strip: HTMLCanvasElement): HTMLCanvasElement | null {
   return out;
 }
 
+function rotateCanvas(canvas: HTMLCanvasElement, degrees: 90 | 180 | 270): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const out = document.createElement('canvas');
+  const swap = degrees === 90 || degrees === 270;
+  out.width = swap ? canvas.height : canvas.width;
+  out.height = swap ? canvas.width : canvas.height;
+  const ctx = out.getContext('2d');
+  if (!ctx) return null;
+  ctx.translate(out.width / 2, out.height / 2);
+  ctx.rotate((degrees * Math.PI) / 180);
+  ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+  return out;
+}
+
+function canvasWithCorners(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  if (findCornerSquares(canvas)) return canvas;
+  for (const degrees of [180, 90, 270] as const) {
+    const rotated = rotateCanvas(canvas, degrees);
+    if (rotated && findCornerSquares(rotated)) return rotated;
+  }
+  return null;
+}
+
 /** Franja manuscrita encima de los cuadros (CURP), en la foto original. */
 export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
-  const quad = findCornerSquares(canvas);
+  const oriented = canvasWithCorners(canvas);
+  if (!oriented) return null;
+  const quad = findCornerSquares(oriented);
   if (!quad || typeof document === 'undefined') return null;
   const tl = quad[0];
   const tr = quad[1];
@@ -358,6 +429,7 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
     { x: outW, y: outH },
     { x: 0, y: outH },
   ];
+  canvas = oriented;
   const h = computeHomographySrcToDst(src, dst);
   if (!h) return null;
   const strip = warpCanvasWithHomography(canvas, h, outW, outH);
@@ -366,9 +438,11 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
 }
 
 export function warpCustom20Canvas(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
-  const quad = findCornerSquares(canvas);
+  const oriented = canvasWithCorners(canvas);
+  if (!oriented) return null;
+  const quad = findCornerSquares(oriented);
   if (!quad) return null;
-  return warpToTemplate(canvas, quad);
+  return warpToTemplate(oriented, quad);
 }
 
 /** Lee la hoja. Devuelve null si no encuentra los cuadros de referencia. */
