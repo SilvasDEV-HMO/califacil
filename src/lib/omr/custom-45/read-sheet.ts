@@ -192,9 +192,9 @@ export function readLenguajeAnswerSheet(canvas: HTMLCanvasElement): LenguajeRead
 export function cropLenguajeHandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   if (typeof document === 'undefined' || !isAlignedScanPage(canvas)) return null;
   const x = Math.round(canvas.width * 0.12);
-  const y = Math.round(canvas.height * 0.012);
+  const y = 0;
   const cw = Math.round(canvas.width * 0.76);
-  const ch = Math.round(canvas.height * 0.066);
+  const ch = Math.round(canvas.height * 0.07);
   const out = document.createElement('canvas');
   out.width = Math.max(1, cw);
   out.height = Math.max(1, ch);
