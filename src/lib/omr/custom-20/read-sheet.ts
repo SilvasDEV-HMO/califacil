@@ -327,15 +327,15 @@ function isAlignedScanPage(canvas: HTMLCanvasElement): boolean {
 }
 
 /**
- * En los PDF del escáner la CURP cae siempre entre el 25.5% y el 30.8% de la altura.
- * Medido sobre las 17 hojas de 1A M TEC 06.
+ * En los PDF del escáner la CURP cae siempre entre el 17.5% y el 25% de la altura.
+ * Medido sobre las hojas de 1A M TEC 06.
  */
 function cropAlignedScanCurp(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   if (typeof document === 'undefined' || !isAlignedScanPage(canvas)) return null;
   const x = Math.round(canvas.width * 0.22);
-  const y = Math.round(canvas.height * 0.255);
+  const y = Math.round(canvas.height * 0.175);
   const cw = Math.round(canvas.width * 0.6);
-  const ch = Math.round(canvas.height * 0.053);
+  const ch = Math.round(canvas.height * 0.075);
   const out = document.createElement('canvas');
   out.width = Math.max(1, cw);
   out.height = Math.max(1, ch);
