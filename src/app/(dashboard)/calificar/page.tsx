@@ -46,6 +46,12 @@ import {
   readCustom20AnswerSheet,
 } from '@/lib/omr/custom-20/read-sheet';
 import {
+  cropLenguajeHandwrittenId,
+  isLenguaje45Exam,
+  LENGUAJE_OPTIONS,
+  readLenguajeAnswerSheet,
+} from '@/lib/omr/custom-45/read-sheet';
+import {
   autoOrientCalifacilSheet,
   califacilImageToJpegDataUrl,
   califacilMobileAnswerSheetGuideInViewportPx,
@@ -844,9 +850,14 @@ export default function CalificarPage() {
   const sheets = useMemo(
     () =>
       omrQuestions.length > 0
-        ? chunkQuestions(omrQuestions, CALIFACIL_PRINT_MAX_QUESTIONS)
+        ? chunkQuestions(
+            omrQuestions,
+            isLenguaje45Exam(user?.email, exam?.title, questions)
+              ? omrQuestions.length
+              : CALIFACIL_PRINT_MAX_QUESTIONS
+          )
         : [],
-    [omrQuestions]
+    [omrQuestions, user?.email, exam?.title, questions]
   );
   const totalSheets = sheets.length;
   const currentChunk = useMemo(() => sheets[sheetIndex] ?? [], [sheets, sheetIndex]);
@@ -1443,30 +1454,39 @@ export default function CalificarPage() {
 
       let classifiedUploadKind: DesktopUploadKind | undefined;
 
-      if (isCustom20Exam(user?.email, questions)) {
+      const mateSheet = isCustom20Exam(user?.email, exam?.title, questions);
+      const lenguajeSheet = isLenguaje45Exam(user?.email, exam?.title, questions);
+      if (mateSheet || lenguajeSheet) {
         const rawCanvas =
           source instanceof HTMLCanvasElement
             ? source
             : prepareCalifacilScanInput(source, { useGuideCrop: false });
-        const customRead = rawCanvas ? readCustom20AnswerSheet(rawCanvas) : null;
+        const customRead = rawCanvas
+          ? mateSheet
+            ? readCustom20AnswerSheet(rawCanvas)
+            : readLenguajeAnswerSheet(rawCanvas)
+          : null;
         if (!rawCanvas || !customRead) {
           notify.error(
-            'No se encontraron los cuadros negros de la hoja de 20. Sube la hoja completa.'
+            'No se encontraron los cuadros negros de la hoja. Sube la hoja completa.'
           );
           return { success: false };
         }
         gradeSource = customRead.warped;
         gradeDisplaySource = customRead.warped;
-        const idCrop = cropCustom20HandwrittenId(rawCanvas);
+        const idCrop = mateSheet
+          ? cropCustom20HandwrittenId(rawCanvas)
+          : cropLenguajeHandwrittenId(rawCanvas);
         setHandwrittenCurpUrl(idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null);
         gradePreWarped = true;
         gradeSkipSheetValidation = true;
+        const optionList = mateSheet ? CUSTOM20_OPTIONS : LENGUAJE_OPTIONS;
         gradeReadingOverride = buildCalifacilOmrReadingOverride(
           {
             picks: customRead.picks,
             rows: customRead.rows.map((row) => ({
               pick: row.answer
-                ? CUSTOM20_OPTIONS.indexOf(row.answer as (typeof CUSTOM20_OPTIONS)[number])
+                ? optionList.indexOf(row.answer as (typeof optionList)[number])
                 : null,
               ambiguous: row.ambiguous,
               inkFractions: row.bubbles.map((b) => b.fill),
@@ -2016,7 +2036,7 @@ export default function CalificarPage() {
         studentId: gradeStudentId || null,
       };
     },
-    [exam, examId, isMobile, useLiveCameraUi, mapRawToDraft, omrCols, omrRowCount, chunkQuestionOffset, runFastWarpedScan, selectedStudentId, setPreviewFromSource, sheets, sortedStudents, supportsCalifacil, user?.email, questions]
+    [exam, examId, isMobile, useLiveCameraUi, mapRawToDraft, omrCols, omrRowCount, chunkQuestionOffset, runFastWarpedScan, selectedStudentId, setPreviewFromSource, sheets, sortedStudents, supportsCalifacil, user?.email, questions, exam?.title]
   );
 
   finalizeCapturedSheetRef.current = finalizeCapturedSheet;
@@ -2241,7 +2261,10 @@ export default function CalificarPage() {
     async (rawCanvas: HTMLCanvasElement, pageNumber: number) => {
       const scanCanvas =
         downscaleCanvasForOmrScan(rawCanvas, PDF_OMR_RENDER_MAX_SIDE) ?? rawCanvas;
-      if (isCustom20Exam(user?.email, questions)) {
+      if (
+        isCustom20Exam(user?.email, exam?.title, questions) ||
+        isLenguaje45Exam(user?.email, exam?.title, questions)
+      ) {
         const pseudoFile = pdfPaginaPseudoFile(pageNumber);
         flushSync(() => setLiveStatus('Leyendo examen…'));
         await yieldForSpinnerPaint();
@@ -2271,7 +2294,7 @@ export default function CalificarPage() {
         warpAlignment: canonical.alignment,
       });
     },
-    [finalizeCapturedSheet, questions, user?.email]
+    [finalizeCapturedSheet, questions, user?.email, exam?.title]
   );
 
   const resetFlow = useCallback(() => {
@@ -3679,9 +3702,14 @@ export default function CalificarPage() {
                       .canvas;
               if (gen !== gradeReadGenRef.current) return;
               const scanCanvas = downscaleCanvasForOmrScan(raw, PDF_OMR_RENDER_MAX_SIDE) ?? raw;
-              if (isCustom20Exam(user?.email, questions)) {
+              if (
+                isCustom20Exam(user?.email, exam?.title, questions) ||
+                isLenguaje45Exam(user?.email, exam?.title, questions)
+              ) {
                 if (p === 1) {
-                  const idCrop = cropCustom20HandwrittenId(scanCanvas);
+                  const idCrop = isLenguaje45Exam(user?.email, exam?.title, questions)
+                    ? cropLenguajeHandwrittenId(scanCanvas)
+                    : cropCustom20HandwrittenId(scanCanvas);
                   nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
                 }
                 const read = await finalizeCapturedSheet(scanCanvas, pdfPseudo(p), {
@@ -3750,8 +3778,13 @@ export default function CalificarPage() {
             if (gen !== gradeReadGenRef.current) return;
             const rawCanvas = prepareCalifacilScanInput(img, { useGuideCrop: false });
             if (rawCanvas) {
-              if (isCustom20Exam(user?.email, questions)) {
-                const idCrop = cropCustom20HandwrittenId(rawCanvas);
+              if (
+                isCustom20Exam(user?.email, exam?.title, questions) ||
+                isLenguaje45Exam(user?.email, exam?.title, questions)
+              ) {
+                const idCrop = isLenguaje45Exam(user?.email, exam?.title, questions)
+                  ? cropLenguajeHandwrittenId(rawCanvas)
+                  : cropCustom20HandwrittenId(rawCanvas);
                 nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
               } else {
                 const canonical = prepareCanonicalCalifacilLetterCanvas(rawCanvas, {
@@ -5152,7 +5185,10 @@ export default function CalificarPage() {
                 <thead className="sticky top-0 bg-gray-50">
                   <tr>
                     <th className="px-2 py-1.5 font-medium">
-                      {isCustom20Exam(user?.email, questions) ? 'CURP en la hoja' : 'Nombre en la hoja'}
+                      {isCustom20Exam(user?.email, exam?.title, questions) ||
+                      isLenguaje45Exam(user?.email, exam?.title, questions)
+                        ? 'CURP en la hoja'
+                        : 'Nombre en la hoja'}
                     </th>
                     <th className="px-2 py-1.5 font-medium">Alumno</th>
                     <th className="px-2 py-1.5 font-medium">Nota</th>
@@ -5920,7 +5956,9 @@ export default function CalificarPage() {
                     </div>
                   </div>
                 )}
-                {handwrittenCurpUrl && isCustom20Exam(user?.email, questions) ? (
+                {handwrittenCurpUrl &&
+                (isCustom20Exam(user?.email, exam?.title, questions) ||
+                  isLenguaje45Exam(user?.email, exam?.title, questions)) ? (
                   <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
                     <p className="text-xs font-medium text-sky-950">CURP escrita en la hoja</p>
                     {/* eslint-disable-next-line @next/next/no-img-element */}

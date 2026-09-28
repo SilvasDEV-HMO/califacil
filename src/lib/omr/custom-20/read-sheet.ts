@@ -9,6 +9,7 @@ import {
   type HomographyPoint,
 } from '@/lib/omr/homography';
 import type { CalifacilOmrScanGeometry, OmrNormRect } from '@/lib/omrScan';
+import { despegueSheetKind } from '@/lib/omr/despegueSheet';
 
 export const CUSTOM20_ADMIN_EMAIL = 'admin@califacil.com';
 export const CUSTOM20_EXAM_TITLE = 'OMR hoja 20 (prueba)';
@@ -280,12 +281,13 @@ function readGrid(warped: HTMLCanvasElement): Custom20Read {
   };
 }
 
-/** Admin con un examen de exactamente 20 reactivos A–D. No depende del título. */
+/** Admin y título de Matemáticas Despegue, con 20 reactivos A–D. */
 export function isCustom20Exam(
   email: string | null | undefined,
+  title: string | null | undefined,
   questions: { type?: string | null; options?: string[] | null }[] | null | undefined
 ): boolean {
-  if ((email ?? '').trim().toLowerCase() !== CUSTOM20_ADMIN_EMAIL) return false;
+  if (despegueSheetKind(email, title) !== 'matematicas') return false;
   const list = questions ?? [];
   if (list.length !== CUSTOM20_QUESTION_COUNT) return false;
   return list.every((q) => {
