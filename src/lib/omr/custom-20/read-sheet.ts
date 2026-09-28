@@ -318,12 +318,54 @@ function canvasWithCorners(canvas: HTMLCanvasElement): HTMLCanvasElement | null 
   return null;
 }
 
+/** Hoja de este escáner: vertical y con la CURP siempre en la misma franja. */
+function isAlignedScanPage(canvas: HTMLCanvasElement): boolean {
+  const aspect = canvas.height / Math.max(1, canvas.width);
+  return aspect > 1.45 && aspect < 1.85;
+}
+
+/**
+ * En los PDF del escáner la CURP cae siempre entre el 25.5% y el 30.8% de la altura.
+ * Medido sobre las 17 hojas de 1A M TEC 06.
+ */
+function cropAlignedScanCurp(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  if (typeof document === 'undefined' || !isAlignedScanPage(canvas)) return null;
+  const x = Math.round(canvas.width * 0.22);
+  const y = Math.round(canvas.height * 0.255);
+  const cw = Math.round(canvas.width * 0.6);
+  const ch = Math.round(canvas.height * 0.053);
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, cw);
+  out.height = Math.max(1, ch);
+  const ctx = out.getContext('2d');
+  if (!ctx) return null;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(canvas, x, y, cw, ch, 0, 0, cw, ch);
+  return out;
+}
+
+/** Esquinas del bloque de respuestas cuando el escáner deja la hoja en el mismo lugar. */
+function alignedScanAnswerQuad(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] | null {
+  if (!isAlignedScanPage(canvas)) return null;
+  const w = canvas.width;
+  const h = canvas.height;
+  return [
+    { x: w * 0.276, y: h * 0.507 },
+    { x: w * 0.75, y: h * 0.507 },
+    { x: w * 0.744, y: h * 0.703 },
+    { x: w * 0.271, y: h * 0.703 },
+  ];
+}
+
 /**
  * Franja fija de la CURP, igual en todas las hojas de este formato.
  * Queda una altura de bloque por encima de los cuadros de las respuestas,
  * que es donde se escribe la CURP, encima de NOMBRE.
  */
 export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  const aligned = cropAlignedScanCurp(canvas);
+  if (aligned) return aligned;
   const oriented = canvasWithCorners(canvas);
   if (!oriented || typeof document === 'undefined') return null;
   const quad = findCornerSquares(oriented);
@@ -333,8 +375,8 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
   const bl = quad[3];
   const downX = bl.x - tl.x;
   const downY = bl.y - tl.y;
-  const top = 1.22;
-  const bot = 1.0;
+  const top = 1.28;
+  const bot = 1.08;
   const src: [Pt, Pt, Pt, Pt] = [
     { x: tl.x - downX * top, y: tl.y - downY * top },
     { x: tr.x - downX * top, y: tr.y - downY * top },
@@ -355,8 +397,12 @@ export function cropCustom20HandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
 }
 
 export function warpCustom20Canvas(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  const detected = findCornerSquares(canvas);
+  if (detected) return warpToTemplate(canvas, detected);
+  const fixed = alignedScanAnswerQuad(canvas);
+  if (fixed) return warpToTemplate(canvas, fixed);
   const oriented = canvasWithCorners(canvas);
-  if (!oriented) return null;
+  if (!oriented || oriented === canvas) return null;
   const quad = findCornerSquares(oriented);
   if (!quad) return null;
   return warpToTemplate(oriented, quad);
