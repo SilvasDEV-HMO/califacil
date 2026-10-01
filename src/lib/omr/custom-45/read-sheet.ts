@@ -23,10 +23,10 @@ const PAGE = { left: 0.1, right: 0.82, top: 0.24, bottom: 0.7 } as const;
 
 /** Centros dentro de ese rectángulo (0–1). Medidos en la hoja de lenguaje de ejemplo. */
 const GRID = {
-  colA: [0.16, 0.354, 0.694],
+  colA: [0.167, 0.432, 0.697],
   optPitch: 0.0514,
-  row0: 0.039,
-  rowPitch: 0.0565,
+  row0: 0,
+  rowPitch: 0.0643,
   radius: 0.012,
 } as const;
 
@@ -171,26 +171,142 @@ function fixedQuad(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] {
   ];
 }
 
+/**
+ * Esquinas del formato en la hoja matutina que ya califica bien.
+ * Las hojas chicas o chuecas se enderezan hasta caer aquí.
+ */
+const REFERENCE_FORM: [Pt, Pt, Pt, Pt] = [
+  { x: 0.121, y: 0.133 },
+  { x: 0.769, y: 0.133 },
+  { x: 0.773, y: 0.675 },
+  { x: 0.126, y: 0.677 },
+];
+
+function findLenguajeFormQuad(canvas: HTMLCanvasElement): [Pt, Pt, Pt, Pt] | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w < 200 || h < 200) return null;
+  const data = ctx.getImageData(0, 0, w, h).data;
+  const points: Pt[] = [];
+
+  for (const frac of [0.01, 0.015]) {
+    const side = Math.max(5, Math.round(Math.min(w, h) * frac));
+    const step = Math.max(2, Math.round(side / 2));
+    const hits: Pt[] = [];
+    for (let y = 0; y < h - side; y += step) {
+      for (let x = 0; x < w - side; x += step) {
+        let dark = 0;
+        let total = 0;
+        for (let yy = 0; yy < side; yy += Math.max(1, Math.round(side / 4))) {
+          for (let xx = 0; xx < side; xx += Math.max(1, Math.round(side / 4))) {
+            total++;
+            if (luminance(data, ((y + yy) * w + (x + xx)) * 4) < 90) dark++;
+          }
+        }
+        if (!total || dark / total < 0.55) continue;
+        const cx = x + side / 2;
+        const cy = y + side / 2;
+        const fill = (x0: number, y0: number, rw: number, rh: number) => {
+          let n = 0;
+          let tot = 0;
+          const jump = Math.max(1, Math.round(Math.min(rw, rh) / 5));
+          for (let py = y0; py < y0 + rh; py += jump) {
+            for (let px = x0; px < x0 + rw; px += jump) {
+              const ix = Math.round(px);
+              const iy = Math.round(py);
+              if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
+              tot++;
+              if (luminance(data, (iy * w + ix) * 4) < 90) n++;
+            }
+          }
+          return tot ? n / tot : 0;
+        };
+        if (fill(cx - side * 2, cy - side / 2, side * 4, side) > 0.7) continue;
+        if (fill(cx - side / 2, cy - side * 2, side, side * 4) > 0.7) continue;
+        hits.push({ x: cx, y: cy });
+      }
+    }
+    const clustered: { x: number; y: number; n: number }[] = [];
+    for (const hit of hits) {
+      const near = clustered.find((c) => Math.hypot(c.x - hit.x, c.y - hit.y) < side * 3.2);
+      if (near) {
+        near.x = (near.x * near.n + hit.x) / (near.n + 1);
+        near.y = (near.y * near.n + hit.y) / (near.n + 1);
+        near.n += 1;
+      } else {
+        clustered.push({ x: hit.x, y: hit.y, n: 1 });
+      }
+    }
+    for (const mark of clustered) {
+      if (mark.n < 2) continue;
+      if (points.some((p) => Math.hypot(p.x - mark.x, p.y - mark.y) < Math.min(w, h) * 0.02)) continue;
+      points.push({ x: mark.x, y: mark.y });
+    }
+  }
+
+  let best: { area: number; quad: [Pt, Pt, Pt, Pt] } | null = null;
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const a = points[i]!;
+      const b = points[j]!;
+      if (Math.abs(a.y - b.y) > h * 0.08 || Math.abs(a.x - b.x) < w * 0.22) continue;
+      const left = a.x < b.x ? a : b;
+      const right = a.x < b.x ? b : a;
+      const top = Math.min(left.y, right.y);
+      if (top > h * 0.55) continue;
+      for (const p of points) {
+        for (const q of points) {
+          if (Math.abs(p.y - q.y) > h * 0.08) continue;
+          if (Math.min(p.y, q.y) < top + h * 0.22) continue;
+          const bl = p.x < q.x ? p : q;
+          const br = p.x < q.x ? q : p;
+          if (Math.abs(bl.x - left.x) > w * 0.12 || Math.abs(br.x - right.x) > w * 0.12) continue;
+          const width = right.x - left.x;
+          const height = (bl.y + br.y) / 2 - top;
+          const area = width * height;
+          if (!best || area > best.area) best = { area, quad: [left, right, br, bl] };
+        }
+      }
+    }
+  }
+  return best?.quad ?? null;
+}
+
+function warpFormToReference(canvas: HTMLCanvasElement, quad: [Pt, Pt, Pt, Pt]): HTMLCanvasElement | null {
+  const dst = REFERENCE_FORM.map((point) => ({
+    x: point.x * canvas.width,
+    y: point.y * canvas.height,
+  })) as [Pt, Pt, Pt, Pt];
+  const homography = computeHomographySrcToDst(quad, dst);
+  if (!homography) return null;
+  return warpCanvasWithHomography(canvas, homography, canvas.width, canvas.height);
+}
+
 export function readLenguajeAnswerSheet(canvas: HTMLCanvasElement): LenguajeRead | null {
   if (canvas.width < 200 || canvas.height < 200) return null;
+  const quad = findLenguajeFormQuad(canvas);
+  if (quad) {
+    const warped = warpFormToReference(canvas, quad);
+    if (warped) return readGrid(warped, true);
+  }
   if (isAlignedScanPage(canvas)) return readGrid(canvas, true);
-  const quad = fixedQuad(canvas);
+  const fallback = fixedQuad(canvas);
   const dst: [Pt, Pt, Pt, Pt] = [
     { x: 0, y: 0 },
     { x: WARP_W, y: 0 },
     { x: WARP_W, y: WARP_H },
     { x: 0, y: WARP_H },
   ];
-  const homography = computeHomographySrcToDst(quad, dst);
+  const homography = computeHomographySrcToDst(fallback, dst);
   if (!homography) return null;
   const warped = warpCanvasWithHomography(canvas, homography, WARP_W, WARP_H);
   if (!warped) return null;
   return readGrid(warped, false);
 }
 
-/** CURP escrita arriba de Nombre, en la misma franja de todas las hojas escaneadas. */
-export function cropLenguajeHandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
-  if (typeof document === 'undefined' || !isAlignedScanPage(canvas)) return null;
+function cropFixedCurpBand(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   const x = Math.round(canvas.width * 0.08);
   const y = Math.round(canvas.height * 0.042);
   const cw = Math.round(canvas.width * 0.78);
@@ -204,6 +320,18 @@ export function cropLenguajeHandwrittenId(canvas: HTMLCanvasElement): HTMLCanvas
   ctx.fillRect(0, 0, out.width, out.height);
   ctx.drawImage(canvas, x, y, cw, ch, 0, 0, cw, ch);
   return out;
+}
+
+/** CURP encima de Nombre. Si la hoja viene chica o chueca, primero se endereza. */
+export function cropLenguajeHandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const quad = findLenguajeFormQuad(canvas);
+  if (quad) {
+    const warped = warpFormToReference(canvas, quad);
+    if (warped) return cropFixedCurpBand(warped);
+  }
+  if (!isAlignedScanPage(canvas)) return null;
+  return cropFixedCurpBand(canvas);
 }
 
 export function isLenguaje45Exam(
