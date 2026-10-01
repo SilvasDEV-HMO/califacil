@@ -174,7 +174,8 @@ export function parseSepAttendanceListText(text: string): StudentImportResult | 
     /(\d+)\s+([A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d)\s+((?:[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑ.'-]*\s*\/\s*){2}.+?)(?=\s+\d+\s+[A-Z]{4}\d{6}|\s+Firma|\s+Bimestre|$)/g;
   const students: ImportedStudent[] = [];
   const seen = new Set<string>();
-  for (const match of compact.matchAll(rowRe)) {
+  let match: RegExpExecArray | null;
+  while ((match = rowRe.exec(compact)) !== null) {
     const curp = match[2]!.toUpperCase();
     const name = match[3]!.replace(/\s*\/\s*/g, ' ').replace(/\s+/g, ' ').trim();
     if (!name || !isValidCurp(curp) || seen.has(curp)) continue;
