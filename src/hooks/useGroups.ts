@@ -263,3 +263,51 @@ export function useStudents(groupId: string | undefined) {
     refreshStudents: fetchStudents,
   };
 }
+
+/** Importa alumnos en un grupo que puede no ser el que está abierto. */
+export async function insertStudentsInGroup(
+  groupId: string,
+  entries: Array<{ name: string; controlNumber?: string | null }>
+): Promise<{ added: number; skipped: number; error: string | null }> {
+  const { data: existingData, error: existingError } = await supabase
+    .from('students')
+    .select('id,name,control_number')
+    .eq('group_id', groupId);
+  if (existingError) return { added: 0, skipped: 0, error: existingError.message };
+
+  const existingByName = new Map(
+    (existingData || []).map((student) => [normalizeAnswerText(student.name), student])
+  );
+  const batchKeys = new Set<string>();
+  const inserts: { group_id: string; name: string; control_number?: string | null }[] = [];
+  let skipped = 0;
+
+  for (const entry of entries) {
+    const trimmed = entry.name.trim();
+    if (!trimmed) continue;
+    const key = normalizeAnswerText(trimmed);
+    if (existingByName.has(key) || batchKeys.has(key)) {
+      skipped++;
+      continue;
+    }
+    batchKeys.add(key);
+    const control = entry.controlNumber?.trim() || null;
+    inserts.push({
+      group_id: groupId,
+      name: trimmed,
+      ...(control ? { control_number: control } : {}),
+    });
+  }
+
+  if (inserts.length === 0) return { added: 0, skipped, error: null };
+
+  let { error } = await supabase.from('students').insert(inserts);
+  if (error?.message?.includes('control_number')) {
+    const retry = await supabase
+      .from('students')
+      .insert(inserts.map(({ group_id, name }) => ({ group_id, name })));
+    error = retry.error;
+  }
+  if (error) return { added: 0, skipped, error: error.message };
+  return { added: inserts.length, skipped, error: null };
+}

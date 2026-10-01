@@ -155,6 +155,43 @@ function looksLikePersonName(value: string): boolean {
   return true;
 }
 
+/**
+ * Lista de asistencia de la escuela (CCT, GRUPO, TURNO, CURP y nombre con diagonales).
+ * El grupo queda como «06 1A V».
+ */
+export function parseSepAttendanceListText(text: string): StudentImportResult | null {
+  if (!/lista de asistencia/i.test(text) || !/CURP/i.test(text)) return null;
+  const cct = (text.match(/CCT:\s*([0-9A-Z]+)/i)?.[1] ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const grupoMatch = text.match(/GRUPO:\s*(\d+)\s*-\s*([A-Z])/i);
+  const turno = (text.match(/TURNO:\s*([VMN])/i)?.[1] ?? '').toUpperCase();
+  if (!CCT_RE.test(cct) || !grupoMatch || !TURNO_RE.test(turno)) return null;
+  const grado = grupoMatch[1]!;
+  const letra = grupoMatch[2]!.toUpperCase();
+  const grupo = `${grado}-${letra}`;
+  const schoolNumber = String(Number.parseInt(cct.slice(5, 9), 10)).padStart(2, '0');
+  const compact = text.replace(/\s+/g, ' ');
+  const rowRe =
+    /(\d+)\s+([A-Z]{4}\d{6}[HM][A-Z]{5}[A-Z0-9]\d)\s+((?:[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑ.'-]*\s*\/\s*){2}.+?)(?=\s+\d+\s+[A-Z]{4}\d{6}|\s+Firma|\s+Bimestre|$)/g;
+  const students: ImportedStudent[] = [];
+  const seen = new Set<string>();
+  for (const match of compact.matchAll(rowRe)) {
+    const curp = match[2]!.toUpperCase();
+    const name = match[3]!.replace(/\s*\/\s*/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!name || !isValidCurp(curp) || seen.has(curp)) continue;
+    seen.add(curp);
+    students.push({ rowNumber: students.length + 1, controlNumber: curp, name });
+  }
+  if (students.length === 0) return null;
+  return {
+    groupName: `${schoolNumber} ${grado}${letra} ${turno}`,
+    students,
+    source: 'sep_list',
+    cct,
+    grupo,
+    turno,
+  };
+}
+
 /** Lista de asistencia ITSON / INC (GRUPO, CONTROL, NOMBRE DEL ALUMNO, CARRERA). */
 export function parseItsonAttendanceListText(text: string): StudentImportResult | null {
   const groupMatch = text.match(/GRUPO:\s*([A-Z0-9]+)/i);

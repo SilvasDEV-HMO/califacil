@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { useGroups, useStudents } from '@/hooks/useGroups';
+import { insertStudentsInGroup, useGroups, useStudents } from '@/hooks/useGroups';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -179,6 +179,9 @@ export default function GroupsPage() {
               <StudentsManager
                 groupId={selectedGroup}
                 groupName={groups.find(g => g.id === selectedGroup)?.name || ''}
+                groups={groups}
+                createGroup={createGroup}
+                onOpenGroup={setSelectedGroup}
               />
             </div>
           )}
@@ -222,9 +225,15 @@ export default function GroupsPage() {
 function StudentsManager({
   groupId,
   groupName,
+  groups,
+  createGroup,
+  onOpenGroup,
 }: {
   groupId: string;
   groupName: string;
+  groups: { id: string; name: string }[];
+  createGroup: (name: string) => Promise<{ id: string; name: string } | null>;
+  onOpenGroup: (groupId: string) => void;
 }) {
   const { students, loading, addStudent, addStudentsBatch, deleteStudent, error } =
     useStudents(groupId);
@@ -290,12 +299,39 @@ function StudentsManager({
     if (!importPreview) return;
     setIsImporting(true);
     try {
-      const { added, skipped, error: importError, warning } = await addStudentsBatch(
-        importPreview.students.map((student) => ({
-          name: student.name,
-          controlNumber: student.controlNumber || null,
-        }))
-      );
+      const rosterName = importPreview.groupName?.trim() ?? '';
+      const entries = importPreview.students.map((student) => ({
+        name: student.name,
+        controlNumber: student.controlNumber || null,
+      }));
+      let addedCount = 0;
+      let skipped = 0;
+      let importError: string | null = null;
+      let warning: string | undefined;
+      const sameGroup =
+        !rosterName || rosterName.toUpperCase() === groupName.trim().toUpperCase();
+
+      if (sameGroup) {
+        const result = await addStudentsBatch(entries);
+        addedCount = result.added.length;
+        skipped = result.skipped;
+        importError = result.error;
+        warning = result.warning;
+      } else {
+        const existing = groups.find((group) => group.name.trim().toUpperCase() === rosterName.toUpperCase());
+        const target = existing ?? (await createGroup(rosterName));
+        if (!target) {
+          toast.error('No se pudo crear el grupo', {
+            description: rosterName,
+          });
+          return;
+        }
+        const result = await insertStudentsInGroup(target.id, entries);
+        addedCount = result.added;
+        skipped = result.skipped;
+        importError = result.error;
+        if (!importError) onOpenGroup(target.id);
+      }
 
       if (importError) {
         toast.error('Error al importar alumnos', {
@@ -304,24 +340,21 @@ function StudentsManager({
         return;
       }
 
-      if (added.length === 0 && skipped > 0) {
+      if (addedCount === 0 && skipped > 0) {
         toast.error('No se importó ningún alumno: todos ya estaban en el grupo o repetidos en el archivo.');
         return;
       }
 
-      if (added.length === 0) {
+      if (addedCount === 0) {
         toast.error('No se importó ningún alumno. Revisa el archivo e inténtalo de nuevo.');
         return;
       }
 
-      const groupNote =
-        importPreview.groupName && importPreview.groupName !== groupName.trim().toUpperCase()
-          ? ` Grupo en PDF: ${importPreview.groupName}.`
-          : '';
+      const groupNote = rosterName ? ` Grupo: ${rosterName}.` : '';
       toast.success(
         skipped > 0
-          ? `${added.length} estudiantes importados (${skipped} omitidos por duplicado).${groupNote}`
-          : `${added.length} estudiantes importados.${groupNote}`
+          ? `${addedCount} estudiantes importados (${skipped} omitidos por duplicado).${groupNote}`
+          : `${addedCount} estudiantes importados.${groupNote}`
       );
       if (warning) {
         toast.warning('Importación parcial', { description: warning });
@@ -555,7 +588,7 @@ function StudentsManager({
             <DialogTitle>Vista previa de importación</DialogTitle>
             <DialogDescription>
               {importPreview?.source === 'sep_list'
-                ? `Lista escolar. Los alumnos se guardan en «${groupName}», con su nombre y CURP.`
+                ? `Lista escolar. Se crea o se usa el grupo «${importPreview.groupName ?? groupName}» y se guardan el nombre y la CURP.`
                 : importPreview?.source === 'itson_pdf'
                   ? 'Lista de asistencia ITSON detectada.'
                   : 'Revisa los alumnos antes de importarlos al grupo.'}

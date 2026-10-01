@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import {
   parseGenericPdfTextFromLines,
   parseItsonAttendanceListText,
+  parseSepAttendanceListText,
   parseSepSchoolList,
   type StudentImportResult,
 } from '@/lib/studentImportCore';
@@ -219,6 +220,9 @@ async function readSepListFromScan(buffer: ArrayBuffer): Promise<StudentImportRe
 export async function parseStudentImportFromPdfBuffer(buffer: ArrayBuffer): Promise<StudentImportResult> {
   const text = (await extractPdfTextFromBuffer(buffer)).trim();
   if (!text) return readSepListFromScan(buffer);
+
+  const sepList = parseSepAttendanceListText(text);
+  if (sepList) return sepList;
 
   const itson = parseItsonAttendanceListText(text);
   if (itson) return itson;
