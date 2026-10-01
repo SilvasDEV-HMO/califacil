@@ -49,12 +49,20 @@ export async function fetchTeacherExamAverageSummaries(
 
   const examIds = exams.map((e) => e.id);
 
-  const { data: answersData, error: answersError } = await supabase
-    .from('answers')
-    .select('exam_id,student_id,score')
-    .in('exam_id', examIds);
-  if (answersError) throw answersError;
-  const answers = (answersData || []) as StudentAnswerRow[];
+  const answers: StudentAnswerRow[] = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data: answersData, error: answersError } = await supabase
+      .from('answers')
+      .select('exam_id,student_id,score')
+      .in('exam_id', examIds)
+      .order('id', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (answersError) throw answersError;
+    const batch = (answersData || []) as StudentAnswerRow[];
+    answers.push(...batch);
+    if (batch.length < pageSize) break;
+  }
 
   const { data: questionsData, error: questionsError } = await supabase
     .from('questions')
@@ -69,14 +77,18 @@ export async function fetchTeacherExamAverageSummaries(
   }
 
   const studentIds = Array.from(new Set(answers.map((a) => a.student_id)));
-  let studentsById = new Map<string, StudentRow>();
-  if (studentIds.length > 0) {
+  const studentsById = new Map<string, StudentRow>();
+  const idChunk = 200;
+  for (let i = 0; i < studentIds.length; i += idChunk) {
+    const slice = studentIds.slice(i, i + idChunk);
     const { data: studentsData, error: studentsError } = await supabase
       .from('students')
       .select('id,name,group_id')
-      .in('id', studentIds);
+      .in('id', slice);
     if (studentsError) throw studentsError;
-    studentsById = new Map((studentsData || []).map((s) => [s.id, s as StudentRow]));
+    for (const student of studentsData || []) {
+      studentsById.set(student.id, student as StudentRow);
+    }
   }
 
   const { data: assignmentData, error: assignmentError } = await supabase
