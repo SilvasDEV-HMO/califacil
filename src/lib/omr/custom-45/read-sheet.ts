@@ -322,9 +322,69 @@ function cropFixedCurpBand(canvas: HTMLCanvasElement): HTMLCanvasElement | null 
   return out;
 }
 
+/** Primera línea de tinta azul, arriba del formato. En la escuela 72 la CURP va en pluma. */
+function firstBlueBand(
+  canvas: HTMLCanvasElement,
+  yStart: number,
+  yEnd: number
+): { y: number; height: number } | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const w = canvas.width;
+  const h = canvas.height;
+  const y0 = Math.max(0, Math.round(h * yStart));
+  const y1 = Math.min(h, Math.round(h * yEnd));
+  const x0 = Math.round(w * 0.18);
+  const x1 = Math.round(w * 0.88);
+  if (y1 <= y0 || x1 <= x0) return null;
+  const width = x1 - x0;
+  const data = ctx.getImageData(x0, y0, width, y1 - y0).data;
+  const minCount = Math.max(4, Math.round((width / 2) * 0.012));
+  let run = -1;
+  for (let y = 0; y <= y1 - y0; y++) {
+    let count = 0;
+    if (y < y1 - y0) {
+      for (let x = 0; x < width; x += 2) {
+        const i = (y * width + x) * 4;
+        const r = data[i]!;
+        const g = data[i + 1]!;
+        const b = data[i + 2]!;
+        if (b > r + 20 && b > g + 8 && b < 200) count++;
+      }
+    }
+    const on = count >= minCount;
+    if (on && run < 0) run = y;
+    if (!on && run >= 0) {
+      if (y - run >= 4) {
+        const pad = Math.round(h * 0.006);
+        const top = Math.max(0, y0 + run - pad);
+        const bottom = Math.min(h, y0 + y + pad);
+        return { y: top, height: Math.max(1, bottom - top) };
+      }
+      run = -1;
+    }
+  }
+  return null;
+}
+
 /** CURP encima de Nombre. Si la hoja viene chica o chueca, primero se endereza. */
 export function cropLenguajeHandwrittenId(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
+  const blue = firstBlueBand(canvas, 0.02, 0.12);
+  if (blue) {
+    const x = Math.round(canvas.width * 0.12);
+    const cw = Math.round(canvas.width * 0.76);
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, cw);
+    out.height = Math.max(1, blue.height);
+    const ctx = out.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(canvas, x, blue.y, cw, blue.height, 0, 0, cw, blue.height);
+      return out;
+    }
+  }
   const quad = findLenguajeFormQuad(canvas);
   if (quad) {
     const warped = warpFormToReference(canvas, quad);

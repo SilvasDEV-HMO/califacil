@@ -165,7 +165,7 @@ function chooseCornerQuad(
       const height = Math.max(bl.y, br.y) - topEdge;
       if (width < w * 0.3 || height < h * 0.15) continue;
       const ratio = height / width;
-      if (ratio < 0.55 || ratio > 2.2) continue;
+      if (ratio < 0.4 || ratio > 2.2) continue;
       const area = width * height;
       if (!best || area > best.area) {
         best = { quad: [left, right, br, bl], area };
@@ -330,12 +330,55 @@ function isAlignedScanPage(canvas: HTMLCanvasElement): boolean {
  * En los PDF del escáner la CURP queda justo encima de NOMBRE,
  * entre el 26.2% y el 29.8% de la altura. Medido en 1A M TEC 06.
  */
-function cropAlignedScanCurp(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
-  if (typeof document === 'undefined' || !isAlignedScanPage(canvas)) return null;
-  const x = Math.round(canvas.width * 0.2);
-  const y = Math.round(canvas.height * 0.262);
-  const cw = Math.round(canvas.width * 0.64);
-  const ch = Math.round(canvas.height * 0.036);
+/** Primera línea de tinta azul. En la escuela 72 la CURP va en pluma y más arriba. */
+function firstBlueBand(
+  canvas: HTMLCanvasElement,
+  yStart: number,
+  yEnd: number
+): { y: number; height: number } | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const w = canvas.width;
+  const h = canvas.height;
+  const y0 = Math.max(0, Math.round(h * yStart));
+  const y1 = Math.min(h, Math.round(h * yEnd));
+  const x0 = Math.round(w * 0.18);
+  const x1 = Math.round(w * 0.88);
+  if (y1 <= y0 || x1 <= x0) return null;
+  const width = x1 - x0;
+  const data = ctx.getImageData(x0, y0, width, y1 - y0).data;
+  const minCount = Math.max(4, Math.round((width / 2) * 0.012));
+  let run = -1;
+  let band: { y: number; height: number } | null = null;
+  for (let y = 0; y <= y1 - y0; y++) {
+    let count = 0;
+    if (y < y1 - y0) {
+      for (let x = 0; x < width; x += 2) {
+        const i = (y * width + x) * 4;
+        const r = data[i]!;
+        const g = data[i + 1]!;
+        const b = data[i + 2]!;
+        if (b > r + 20 && b > g + 8 && b < 200) count++;
+      }
+    }
+    const on = count >= minCount;
+    if (on && run < 0) run = y;
+    if (!on && run >= 0) {
+      if (y - run >= 4) {
+        band = { y: y0 + run, height: y - run };
+        break;
+      }
+      run = -1;
+    }
+  }
+  if (!band) return null;
+  const pad = Math.round(h * 0.006);
+  const y = Math.max(0, band.y - pad);
+  const bottom = Math.min(h, band.y + band.height + pad);
+  return { y, height: Math.max(1, bottom - y) };
+}
+
+function cropBand(canvas: HTMLCanvasElement, x: number, y: number, cw: number, ch: number): HTMLCanvasElement | null {
   const out = document.createElement('canvas');
   out.width = Math.max(1, cw);
   out.height = Math.max(1, ch);
@@ -345,6 +388,17 @@ function cropAlignedScanCurp(canvas: HTMLCanvasElement): HTMLCanvasElement | nul
   ctx.fillRect(0, 0, out.width, out.height);
   ctx.drawImage(canvas, x, y, cw, ch, 0, 0, cw, ch);
   return out;
+}
+
+function cropAlignedScanCurp(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  if (typeof document === 'undefined' || !isAlignedScanPage(canvas)) return null;
+  const x = Math.round(canvas.width * 0.16);
+  const cw = Math.round(canvas.width * 0.7);
+  const blue = firstBlueBand(canvas, 0.2, 0.33);
+  if (blue) return cropBand(canvas, x, blue.y, cw, blue.height);
+  const y = Math.round(canvas.height * 0.262);
+  const ch = Math.round(canvas.height * 0.036);
+  return cropBand(canvas, x, y, cw, ch);
 }
 
 /** Esquinas del bloque de respuestas cuando el escáner deja la hoja en el mismo lugar. */
