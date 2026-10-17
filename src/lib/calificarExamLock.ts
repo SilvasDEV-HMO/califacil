@@ -153,23 +153,19 @@ async function listCalificarCompletedExamIdsClientSide(): Promise<string[]> {
   }
   if (!answerRows.length) return [];
 
-  const gradedByExam = new Map<string, Set<string>>();
-  const studentIds = new Set<string>();
+  const gradedByExam: Record<string, Record<string, true>> = {};
+  const studentIdSeen: Record<string, true> = {};
   for (const row of answerRows) {
-    const examId = row.exam_id as string;
-    const studentId = row.student_id as string;
+    const examId = row.exam_id;
+    const studentId = row.student_id;
     if (!examId || !studentId) continue;
-    studentIds.add(studentId);
-    let set = gradedByExam.get(examId);
-    if (!set) {
-      set = new Set();
-      gradedByExam.set(examId, set);
-    }
-    set.add(studentId);
+    studentIdSeen[studentId] = true;
+    if (!gradedByExam[examId]) gradedByExam[examId] = {};
+    gradedByExam[examId][studentId] = true;
   }
-  if (studentIds.size === 0) return [];
+  const studentIdList = Object.keys(studentIdSeen);
+  if (studentIdList.length === 0) return [];
 
-  const studentIdList = [...studentIds];
   const gradedStudents: { id: string; group_id: string | null }[] = [];
   for (let i = 0; i < studentIdList.length; i += chunkSize) {
     const chunk = studentIdList.slice(i, i + chunkSize);
@@ -187,52 +183,55 @@ async function listCalificarCompletedExamIdsClientSide(): Promise<string[]> {
   }
   if (!gradedStudents.length) return [];
 
-  const groupByStudent = new Map<string, string>();
+  const groupByStudent: Record<string, string> = {};
   for (const s of gradedStudents) {
     if (!s.group_id) continue;
-    groupByStudent.set(s.id, s.group_id);
+    groupByStudent[s.id] = s.group_id;
   }
-  const activeGroupsByExam = new Map<string, Set<string>>();
-  for (const [examId, graded] of gradedByExam) {
-    const groups = new Set<string>();
-    for (const sid of graded) {
-      const gid = groupByStudent.get(sid);
-      if (gid) groups.add(gid);
-    }
-    if (groups.size > 0) activeGroupsByExam.set(examId, groups);
-  }
-  if (activeGroupsByExam.size === 0) return [];
 
-  const allActiveGroupIds = [
-    ...new Set([...activeGroupsByExam.values()].flatMap((g) => [...g])),
-  ];
+  const activeGroupsByExam: Record<string, string[]> = {};
+  const allActiveGroupSeen: Record<string, true> = {};
+  for (const examId of Object.keys(gradedByExam)) {
+    const graded = gradedByExam[examId];
+    const groupSeen: Record<string, true> = {};
+    for (const sid of Object.keys(graded)) {
+      const gid = groupByStudent[sid];
+      if (gid) groupSeen[gid] = true;
+    }
+    const groups = Object.keys(groupSeen);
+    if (groups.length === 0) continue;
+    activeGroupsByExam[examId] = groups;
+    for (const gid of groups) allActiveGroupSeen[gid] = true;
+  }
+  const allActiveGroupIds = Object.keys(allActiveGroupSeen);
+  if (allActiveGroupIds.length === 0) return [];
+
   const { data: roster, error: rosterError } = await supabase
     .from('students')
     .select('id, group_id')
     .in('group_id', allActiveGroupIds);
   if (rosterError || !roster?.length) return [];
 
-  const rosterByGroup = new Map<string, string[]>();
+  const rosterByGroup: Record<string, string[]> = {};
   for (const s of roster) {
     const gid = s.group_id as string;
     const sid = s.id as string;
-    const list = rosterByGroup.get(gid) ?? [];
-    list.push(sid);
-    rosterByGroup.set(gid, list);
+    if (!rosterByGroup[gid]) rosterByGroup[gid] = [];
+    rosterByGroup[gid].push(sid);
   }
 
   const completed: string[] = [];
-  for (const [examId, groups] of activeGroupsByExam) {
-    const graded = gradedByExam.get(examId);
+  for (const examId of Object.keys(activeGroupsByExam)) {
+    const graded = gradedByExam[examId];
     if (!graded) continue;
     let ok = true;
     let expected = 0;
-    for (const gid of groups) {
-      const members = rosterByGroup.get(gid) ?? [];
+    for (const gid of activeGroupsByExam[examId]) {
+      const members = rosterByGroup[gid] ?? [];
       if (members.length === 0) continue;
       expected += members.length;
       for (const sid of members) {
-        if (!graded.has(sid)) {
+        if (!graded[sid]) {
           ok = false;
           break;
         }
@@ -250,7 +249,14 @@ export async function listCalificarCompletedExamIds(): Promise<string[]> {
     listCalificarCompletedExamIdsFromRpc(),
     listCalificarCompletedExamIdsClientSide(),
   ]);
-  return [...new Set([...fromRpc, ...fromClient])];
+  const seen: Record<string, true> = {};
+  const out: string[] = [];
+  for (const id of fromRpc.concat(fromClient)) {
+    if (seen[id]) continue;
+    seen[id] = true;
+    out.push(id);
+  }
+  return out;
 }
 
 export { HEARTBEAT_MS, LIST_POLL_MS };
