@@ -111,6 +111,16 @@ export function StudentCombobox({
               setQuery(event.target.value);
               setOpen(true);
             }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              // Con un solo resultado visible, Enter lo selecciona (sin mouse).
+              if (compactMatches.length !== 1) return;
+              event.preventDefault();
+              const only = compactMatches[0]!;
+              onValueChange(only.id);
+              setQuery('');
+              setOpen(false);
+            }}
           />
         </PopoverAnchor>
         <PopoverContent
