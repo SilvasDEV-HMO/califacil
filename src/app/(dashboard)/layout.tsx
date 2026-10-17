@@ -91,6 +91,21 @@ export default function DashboardLayout({
     }
   };
 
+  const isCalificarRoute =
+    pathname === '/calificar' || pathname.startsWith('/calificar/');
+
+  // En móvil (< lg) Calificar no está disponible: redirigir al dashboard.
+  useEffect(() => {
+    if (!isCalificarRoute) return;
+    const mq = window.matchMedia('(max-width: 1023px)');
+    const redirectIfMobile = () => {
+      if (mq.matches) router.replace('/dashboard');
+    };
+    redirectIfMobile();
+    mq.addEventListener('change', redirectIfMobile);
+    return () => mq.removeEventListener('change', redirectIfMobile);
+  }, [isCalificarRoute, router]);
+
   if (loading || !billingReady) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
@@ -103,15 +118,15 @@ export default function DashboardLayout({
     return null;
   }
 
-  const navItems = [
+  const desktopNavItems = [
     { href: '/dashboard', label: 'Inicio', icon: LayoutDashboard },
     { href: '/groups', label: 'Grupos', icon: Users },
     { href: '/exams', label: 'Exámenes', icon: FileText },
     { href: '/calificar', label: 'Calificar', icon: Camera },
   ] as const;
 
-  const isCalificarRoute =
-    pathname === '/calificar' || pathname.startsWith('/calificar/');
+  // Móvil (barra inferior < lg): sin Calificar — solo Dashboard, Grupos y Exámenes.
+  const mobileNavItems = desktopNavItems.filter((item) => item.href !== '/calificar');
 
   return (
     <div className="h-full min-h-0 overflow-hidden bg-orange-50/25 backdrop-blur-[1px]">
@@ -134,7 +149,7 @@ export default function DashboardLayout({
             </button>
           </div>
           <nav className="flex-1 space-y-1 p-4" aria-label="Navegación principal">
-            {navItems.map((item) => {
+            {desktopNavItems.map((item) => {
               const active = navActive(pathname, item.href);
               return (
                 <button
@@ -233,7 +248,7 @@ export default function DashboardLayout({
           aria-label="Navegación principal"
         >
           <div className="mx-auto flex max-w-lg items-stretch justify-around px-1 pt-1">
-            {navItems.map((item) => {
+            {mobileNavItems.map((item) => {
               const active = navActive(pathname, item.href);
               return (
                 <button
@@ -247,7 +262,9 @@ export default function DashboardLayout({
                   )}
                 >
                   <item.icon className="h-5 w-5 shrink-0" strokeWidth={active ? 2.5 : 2} />
-                  <span className="max-w-full truncate px-0.5 text-center">{item.label}</span>
+                  <span className="max-w-full truncate px-0.5 text-center">
+                    {item.label === 'Inicio' ? 'Dashboard' : item.label}
+                  </span>
                 </button>
               );
             })}
