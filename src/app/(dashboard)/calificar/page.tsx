@@ -859,6 +859,7 @@ export default function CalificarPage() {
   const omrQuestions = useMemo(() => getCalifacilOmrSheetQuestions(questions), [questions]);
   const omrCols = califacilOmrColumnCount(questions);
   const supportsCalifacil = exam ? examSupportsCalifacilOmr(questions) : false;
+  const isAdminCalifacil = isAdminCalifacilEmail(user?.email);
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
   const virtualKeyMaps = useMemo(() => buildVirtualKeyMaps(virtualKey.rows), [virtualKey.rows]);
   const examVirtualKeyByQuestionId = virtualKeyMaps.byQuestionId;
@@ -5885,55 +5886,78 @@ export default function CalificarPage() {
               {!isMobile && exam && supportsCalifacil && canGradeStudents && phase === 'elegir' && (
                 <div className="space-y-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-4">
                   <p className="text-sm text-gray-700">
-                    Sube <strong>uno o varios PDF</strong> (Ctrl/Cmd + clic para marcar varios).
-                    Si un PDF trae muchas páginas y el examen es de una hoja, cada página se
-                    califica como un examen distinto.
+                    {isAdminCalifacil ? (
+                      <>
+                        Sube <strong>uno o varios PDF</strong>. Si un PDF trae muchas páginas y el
+                        examen es de una hoja, cada página se califica como un examen distinto.
+                      </>
+                    ) : (
+                      <>
+                        Sube <strong>uno o varios PDF</strong> (Ctrl/Cmd + clic para marcar varios).
+                        Si un PDF trae muchas páginas y el examen es de una hoja, cada página se
+                        califica como un examen distinto.
+                      </>
+                    )}
                   </p>
                   <div className="flex flex-wrap gap-2">
+                    {!isAdminCalifacil ? (
+                      <>
+                        <Button
+                          type="button"
+                          className="bg-orange-600 hover:bg-orange-700"
+                          disabled={scanBusy || !canGradeStudents}
+                          onClick={() => pdfInputRef.current?.click()}
+                        >
+                          {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder') ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                          ) : (
+                            <FileUp className="mr-2 h-4 w-4" aria-hidden />
+                          )}
+                          {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder')
+                            ? 'Calificando…'
+                            : 'Subir PDF…'}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                          disabled={scanBusy || !canGradeStudents}
+                          onClick={() => void pickGradeFolder()}
+                        >
+                          {scanBusy && desktopScanKind === 'folder' ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                          ) : (
+                            <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                          )}
+                          Elegir carpeta…
+                        </Button>
+                      </>
+                    ) : null}
                     <Button
                       type="button"
-                      className="bg-orange-600 hover:bg-orange-700"
+                      className={
+                        isAdminCalifacil
+                          ? 'bg-orange-600 hover:bg-orange-700'
+                          : 'border-orange-300 text-orange-900 hover:bg-orange-50'
+                      }
+                      variant={isAdminCalifacil ? 'default' : 'outline'}
                       disabled={scanBusy || !canGradeStudents}
-                      onClick={() => pdfInputRef.current?.click()}
-                    >
-                      {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder') ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-                      ) : (
-                        <FileUp className="mr-2 h-4 w-4" aria-hidden />
-                      )}
-                      {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder')
-                        ? 'Calificando…'
-                        : 'Subir PDF…'}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="border-orange-300 text-orange-900 hover:bg-orange-50"
-                      disabled={scanBusy || !canGradeStudents}
-                      onClick={() => void pickGradeFolder()}
+                      onClick={() => void pickGradeFileList()}
                     >
                       {scanBusy && desktopScanKind === 'folder' ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
                       ) : (
-                        <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                        <Files className="mr-2 h-4 w-4" aria-hidden />
                       )}
-                      Elegir carpeta…
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="border-orange-300 text-orange-900 hover:bg-orange-50"
-                      disabled={scanBusy || !canGradeStudents}
-                      onClick={() => void pickGradeFileList()}
-                    >
-                      <Files className="mr-2 h-4 w-4" aria-hidden />
-                      Elegir archivos…
+                      {scanBusy && desktopScanKind === 'folder' ? 'Calificando…' : 'Elegir archivos…'}
                     </Button>
                   </div>
-                  <p className="text-[11px] text-gray-500">
-                    En el explorador puedes seleccionar varios PDF a la vez. También puedes usar
-                    carpeta o archivos sueltos (PDF/JPG/PNG).
-                  </p>
+                  {!isAdminCalifacil ? (
+                    <p className="text-[11px] text-gray-500">
+                      En el explorador puedes seleccionar varios PDF a la vez. También puedes usar
+                      carpeta o archivos sueltos (PDF/JPG/PNG).
+                    </p>
+                  ) : null}
                   {scanBusy && liveStatus ? (
                     <p className="text-xs font-medium text-orange-800">{liveStatus}</p>
                   ) : null}
@@ -6246,45 +6270,62 @@ export default function CalificarPage() {
                       examen es de una hoja, cada página cuenta como un examen.
                     </p>
                     <div className="mt-4 flex flex-wrap justify-center gap-2">
+                      {!isAdminCalifacil ? (
+                        <>
+                          <Button
+                            type="button"
+                            className="bg-orange-600 hover:bg-orange-700"
+                            disabled={scanBusy || !canGradeStudents}
+                            onClick={() => pdfInputRef.current?.click()}
+                          >
+                            {scanBusy &&
+                            (desktopScanKind === 'pdf' || desktopScanKind === 'folder') ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                            ) : (
+                              <FileUp className="mr-2 h-4 w-4" aria-hidden />
+                            )}
+                            {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder')
+                              ? 'Calificando…'
+                              : 'Subir PDF…'}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                            disabled={scanBusy || !canGradeStudents}
+                            onClick={() => void pickGradeFolder()}
+                          >
+                            <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                            Elegir carpeta…
+                          </Button>
+                        </>
+                      ) : null}
                       <Button
                         type="button"
-                        className="bg-orange-600 hover:bg-orange-700"
-                        disabled={scanBusy || !canGradeStudents}
-                        onClick={() => pdfInputRef.current?.click()}
-                      >
-                        {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder') ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-                        ) : (
-                          <FileUp className="mr-2 h-4 w-4" aria-hidden />
-                        )}
-                        {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder')
-                          ? 'Calificando…'
-                          : 'Subir PDF…'}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="border-orange-300 text-orange-900 hover:bg-orange-50"
-                        disabled={scanBusy || !canGradeStudents}
-                        onClick={() => void pickGradeFolder()}
-                      >
-                        <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
-                        Elegir carpeta…
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                        className={
+                          isAdminCalifacil
+                            ? 'bg-orange-600 hover:bg-orange-700'
+                            : 'border-orange-300 text-orange-900 hover:bg-orange-50'
+                        }
+                        variant={isAdminCalifacil ? 'default' : 'outline'}
                         disabled={scanBusy || !canGradeStudents}
                         onClick={() => void pickGradeFileList()}
                       >
-                        <Files className="mr-2 h-4 w-4" aria-hidden />
-                        Elegir archivos…
+                        {scanBusy && desktopScanKind === 'folder' ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                        ) : (
+                          <Files className="mr-2 h-4 w-4" aria-hidden />
+                        )}
+                        {scanBusy && desktopScanKind === 'folder'
+                          ? 'Calificando…'
+                          : 'Elegir archivos…'}
                       </Button>
                     </div>
-                    <p className="text-[11px] text-gray-500">
-                      Ctrl/Cmd + clic para marcar varios PDF en el explorador.
-                    </p>
+                    {!isAdminCalifacil ? (
+                      <p className="text-[11px] text-gray-500">
+                        Ctrl/Cmd + clic para marcar varios PDF en el explorador.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               </div>
