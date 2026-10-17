@@ -10,10 +10,16 @@ export function isDesktopPointerDevice(): boolean {
 }
 
 /**
- * Cámara en vivo solo en teléfono táctil estrecho.
- * El dashboard de escritorio (lg / ratón) nunca debe llamar getUserMedia.
+ * Cámara en vivo desactivada: Calificar no está disponible en móvil
+ * y en escritorio solo se usan PDF/JPG.
+ * Nunca llamar getUserMedia desde el dashboard ni rutas de maestro.
  */
 export function canRequestCalificarLiveCamera(): boolean {
+  return false
+}
+
+/** Conservado por si se rehabilita Calificar móvil con cámara. */
+export function canRequestCalificarLiveCameraLegacy(): boolean {
   if (typeof window === 'undefined') return false
   if (window.matchMedia(`(min-width: ${DESKTOP_LAYOUT_BREAKPOINT}px)`).matches) return false
   if (isDesktopPointerDevice()) return false

@@ -94,17 +94,25 @@ export default function DashboardLayout({
   const isCalificarRoute =
     pathname === '/calificar' || pathname.startsWith('/calificar/');
 
-  // En móvil (< lg) Calificar no está disponible: redirigir al dashboard.
+  // null = aún no medimos; true = viewport móvil (< lg).
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean | null>(null);
+
   useEffect(() => {
-    if (!isCalificarRoute) return;
     const mq = window.matchMedia('(max-width: 1023px)');
-    const redirectIfMobile = () => {
-      if (mq.matches) router.replace('/dashboard');
-    };
-    redirectIfMobile();
-    mq.addEventListener('change', redirectIfMobile);
-    return () => mq.removeEventListener('change', redirectIfMobile);
-  }, [isCalificarRoute, router]);
+    const sync = () => setIsMobileViewport(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
+  // En móvil Calificar no existe: no montar la página (evita pedir cámara) y redirigir.
+  useEffect(() => {
+    if (!isCalificarRoute || isMobileViewport !== true) return;
+    router.replace('/dashboard');
+  }, [isCalificarRoute, isMobileViewport, router]);
+
+  const suppressCalificarOnMobile =
+    isCalificarRoute && isMobileViewport !== false;
 
   if (loading || !billingReady) {
     return (
@@ -238,7 +246,7 @@ export default function DashboardLayout({
                 : 'app-scroll overflow-y-auto overflow-x-hidden'
           )}
         >
-          {children}
+          {suppressCalificarOnMobile ? null : children}
         </main>
 
         {/* Móvil: barra inferior tipo app */}
