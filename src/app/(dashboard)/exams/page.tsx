@@ -59,6 +59,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
 import { downloadTeacherResultsExcel } from '@/lib/exportTeacherResultsExcel';
+import { TwoStepDeleteDialog } from '@/components/two-step-delete-dialog';
 
 function folderMoveOptions(
   folders: ExamFolder[],
@@ -101,6 +102,8 @@ export default function ExamsPage() {
   const [editingFolder, setEditingFolder] = useState<ExamFolder | null>(null);
   const [folderSaving, setFolderSaving] = useState(false);
   const [exportingResults, setExportingResults] = useState(false);
+  const [examPendingDelete, setExamPendingDelete] = useState<string | null>(null);
+  const [isDeletingExam, setIsDeletingExam] = useState(false);
 
   const handleDownloadResultsExcel = async () => {
     if (exportingResults) return;
@@ -241,8 +244,12 @@ export default function ExamsPage() {
   };
 
   const handleDeleteExam = async (examId: string) => {
+    setIsDeletingExam(true);
     const success = await deleteExam(examId);
+    setIsDeletingExam(false);
+    setExamPendingDelete(null);
     if (success) toast.success('Examen eliminado');
+    else toast.error('No se pudo eliminar el examen');
   };
 
   const handleMoveExam = async (examId: string, folderId: string | null) => {
@@ -405,12 +412,24 @@ export default function ExamsPage() {
               key={exam.id}
               exam={exam}
               folders={folders}
-              onDelete={handleDeleteExam}
+              onDelete={() => setExamPendingDelete(exam.id)}
               onMove={(folderId) => void handleMoveExam(exam.id, folderId)}
             />
           ))}
         </div>
       )}
+
+      <TwoStepDeleteDialog
+        open={!!examPendingDelete}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingExam) setExamPendingDelete(null);
+        }}
+        firstQuestion="¿Seguro que quieres eliminar este examen?"
+        confirming={isDeletingExam}
+        onConfirm={() => {
+          if (examPendingDelete) void handleDeleteExam(examPendingDelete);
+        }}
+      />
 
       <Dialog open={folderDialogOpen} onOpenChange={setFolderDialogOpen}>
         <DialogContent>
@@ -560,7 +579,7 @@ function ExamCard({
 }: {
   exam: Exam;
   folders: ExamFolder[];
-  onDelete: (id: string) => void;
+  onDelete: () => void;
   onMove: (folderId: string | null) => void;
 }) {
   const router = useRouter();
@@ -573,8 +592,7 @@ function ExamCard({
   };
 
   const handleDeleteClick = () => {
-    if (!window.confirm('¿Eliminar este examen? Esta acción no se puede deshacer.')) return;
-    onDelete(exam.id);
+    onDelete();
   };
 
   const handleDownload = async () => {

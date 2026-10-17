@@ -33,6 +33,7 @@ import {
 import { toast } from 'sonner';
 import { parseStudentImportFile, type StudentImportResult } from '@/lib/studentImport';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
+import { TwoStepDeleteDialog } from '@/components/two-step-delete-dialog';
 
 export default function GroupsPage() {
   const { user } = useAuth();
@@ -41,6 +42,7 @@ export default function GroupsPage() {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [groupPendingDelete, setGroupPendingDelete] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedGroup && !groups.some((g) => g.id === selectedGroup)) {
@@ -70,8 +72,11 @@ export default function GroupsPage() {
       if (selectedGroup === groupId) {
         setSelectedGroup(null);
       }
+    } else {
+      toast.error('No se pudo eliminar el grupo');
     }
     setIsDeleting(null);
+    setGroupPendingDelete(null);
   };
 
   return (
@@ -147,7 +152,7 @@ export default function GroupsPage() {
                         className="h-9 w-9 shrink-0 p-0 text-red-500 hover:bg-red-50 hover:text-red-700"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDeleteGroup(group.id);
+                          setGroupPendingDelete(group.id);
                         }}
                         disabled={isDeleting === group.id}
                       >
@@ -187,6 +192,18 @@ export default function GroupsPage() {
           )}
         </div>
       )}
+
+      <TwoStepDeleteDialog
+        open={!!groupPendingDelete}
+        onOpenChange={(open) => {
+          if (!open && !isDeleting) setGroupPendingDelete(null);
+        }}
+        firstQuestion="¿Seguro que quieres eliminar este grupo?"
+        confirming={!!isDeleting}
+        onConfirm={() => {
+          if (groupPendingDelete) void handleDeleteGroup(groupPendingDelete);
+        }}
+      />
 
       {/* Create Group Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
