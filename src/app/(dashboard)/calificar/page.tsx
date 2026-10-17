@@ -35,6 +35,7 @@ import {
 } from '@/lib/printExam';
 import {
   classifyAnswerSheetFormat,
+  cropZipGradeNameFromSheetCanvas,
   cropZipGradeNameSnippetDataUrl,
   resolveZipGradeSheetForGrading,
   scanZipGradeAnswerSheet,
@@ -2296,9 +2297,9 @@ export default function CalificarPage() {
         const zgWarp = warpZipGradeAnswerSheet(workCanvas);
         const gradeCanvas = zgWarp.warped ?? workCanvas;
         setHandwrittenCurpUrl(
-          cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
-            zgResolved.nameCropUrl ??
-            cropZipGradeNameSnippetDataUrl(workCanvas, 560)
+          cropZipGradeNameFromSheetCanvas(gradeCanvas, 560) ??
+            cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
+            zgResolved.nameCropUrl
         );
         const chunk = sheets[sheetIndexRef.current] ?? [];
         const chunkRows = chunk.length;
@@ -2353,8 +2354,8 @@ export default function CalificarPage() {
       const gradeCanvas = canonical.canvas;
       setHandwrittenCurpUrl(
         cropAnswerSheetNameSnippetDataUrl(gradeCanvas, 420) ??
-          cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
-          cropZipGradeNameSnippetDataUrl(scanCanvas, 560)
+          cropZipGradeNameFromSheetCanvas(gradeCanvas, 560) ??
+          zgResolved.nameCropUrl
       );
       const pseudoFile = pdfPaginaPseudoFile(pageNumber);
       flushSync(() => setLiveStatus('Leyendo examen…'));
@@ -3937,17 +3938,16 @@ export default function CalificarPage() {
                 sheetFormat = 'zipgrade';
               }
               if (s === 0) {
-                nameCropUrl =
-                  zgResolved.nameCropUrl ??
-                  cropZipGradeNameSnippetDataUrl(workCanvas, 560);
+                nameCropUrl = zgResolved.nameCropUrl;
               }
               if (sheetFormat === 'zipgrade') {
                 const zgWarp = warpZipGradeAnswerSheet(workCanvas);
                 const gradeCanvas = zgWarp.warped ?? workCanvas;
                 if (s === 0) {
+                  // Solo recortar Nombre|Apellido desde la hoja — nunca la página Paper Details (logo).
                   nameCropUrl =
-                    cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
-                    nameCropUrl ??
+                    cropZipGradeNameFromSheetCanvas(gradeCanvas, 560) ??
+                    cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
                     zgResolved.nameCropUrl;
                 }
                   const chunk = sheets[sheetIndexRef.current] ?? [];
@@ -4008,8 +4008,8 @@ export default function CalificarPage() {
                 if (!canonical) {
                   if (s === 0 && !nameCropUrl) {
                     nameCropUrl =
-                      cropZipGradeNameSnippetDataUrl(scanCanvas, 560) ??
-                      cropAnswerSheetNameSnippetDataUrl(scanCanvas, 420);
+                      cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
+                      zgResolved.nameCropUrl;
                   }
                   results.push({
                     fileName: examLabel,
