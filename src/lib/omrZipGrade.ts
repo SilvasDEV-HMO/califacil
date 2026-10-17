@@ -1,13 +1,20 @@
 /**
- * Lectura OMR para hojas estilo ZipGrade (4 esquinas + 3 columnas de burbujas).
- * Compatible con formularios de 20–50 preguntas en layout vertical de 3 columnas.
+ * Lectura OMR para hojas estilo ZipGrade (4 esquinas + columnas de burbujas).
+ * Compatible con formularios de 20 (2×10), 30 (3×10) y 50 (3×17) preguntas.
  */
 
-import type { CalifacilOmrScanGeometry, OmrNormRect, Point, WarpAlignmentReport } from '@/lib/omrScan';
+import { computeHomographySrcToDst, warpCanvasWithHomography } from '@/lib/omr/homography';
+import type {
+  CalifacilOmrScanGeometry,
+  OmrNormRect,
+  OmrScanMetaResult,
+  OmrScanRowDetail,
+  Point,
+  WarpAlignmentReport,
+} from '@/lib/omrScan';
 import {
   readAnswerSheetPicksFromTemplateGeometry,
   syncCalifacilOmrGeometryImageSize,
-  warpCalifacilSheetFromQuad,
 } from '@/lib/omrScan';
 
 export const ZIPGRADE_WARP_WIDTH = 850;
@@ -21,12 +28,14 @@ const ZIPGRADE_CORNER_NORM = {
   br: { x: 0.972, y: 0.976 },
 } as const;
 
-/** Área de burbujas (3 columnas verticales). */
-const ZIPGRADE_GRID_NORM = {
-  x: 0.06,
-  y: 0.2,
-  w: 0.88,
-  h: 0.72,
+/** Área de burbujas — plantillas fijas (no repartir N en ceil(N/3) genérico). */
+const ZIPGRADE_GRID_BY_LAYOUT = {
+  /** Formulario 20: dos columnas × 10 filas. */
+  cols2: { x: 0.08, y: 0.2, w: 0.84, h: 0.7, layoutCols: 2 as const, rowsPerCol: 10 },
+  /** Formulario 30 / custom 3×10. */
+  cols3x10: { x: 0.06, y: 0.18, w: 0.88, h: 0.72, layoutCols: 3 as const, rowsPerCol: 10 },
+  /** Formulario 50 estándar ZipGrade. */
+  cols3x17: { x: 0.055, y: 0.16, w: 0.89, h: 0.76, layoutCols: 3 as const, rowsPerCol: 17 },
 } as const;
 
 /**
@@ -138,6 +147,33 @@ export function isZipGradePaperDetailsReport(canvas: HTMLCanvasElement): boolean
   return aspect < 0.68 || aspect > 0.92 || h > w * 1.2;
 }
 
+/** Busca el centro del cuadro negro más oscuro cerca de una esquina. */
+function findDarkCornerMark(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  corner: 'tl' | 'tr' | 'bl' | 'br'
+): Point | null {
+  const search = Math.max(18, Math.round(Math.min(w, h) * 0.14));
+  const mark = Math.max(5, Math.round(Math.min(w, h) * 0.018));
+  const step = Math.max(2, Math.floor(mark / 2));
+  let x0 = 0;
+  let y0 = 0;
+  if (corner === 'tr' || corner === 'br') x0 = Math.max(0, w - search);
+  if (corner === 'bl' || corner === 'br') y0 = Math.max(0, h - search);
+  let best: { x: number; y: number; luma: number } | null = null;
+  for (let y = y0; y <= y0 + search - mark; y += step) {
+    for (let x = x0; x <= x0 + search - mark; x += step) {
+      const luma = patchMeanLuma(data, w, x, y, mark, mark);
+      if (luma > 150) continue;
+      if (!best || luma < best.luma) {
+        best = { x: x + mark / 2, y: y + mark / 2, luma };
+      }
+    }
+  }
+  return best ? { x: best.x, y: best.y } : null;
+}
+
 export function detectZipGradeCornerQuad(
   canvas: HTMLCanvasElement
 ): [Point, Point, Point, Point] | null {
@@ -147,6 +183,32 @@ export function detectZipGradeCornerQuad(
   const h = canvas.height;
   if (w < 120 || h < 120) return null;
 
+  let id: ImageData;
+  try {
+    id = ctx.getImageData(0, 0, w, h);
+  } catch {
+    return null;
+  }
+  const d = id.data;
+
+  const padX = w * 0.012;
+  const padY = h * 0.012;
+  const edgeFallback: [Point, Point, Point, Point] = [
+    { x: padX, y: padY },
+    { x: w - padX, y: padY },
+    { x: w - padX, y: h - padY },
+    { x: padX, y: h - padY },
+  ];
+
+  const tl = findDarkCornerMark(d, w, h, 'tl') ?? edgeFallback[0];
+  const tr = findDarkCornerMark(d, w, h, 'tr') ?? edgeFallback[1];
+  const br = findDarkCornerMark(d, w, h, 'br') ?? edgeFallback[2];
+  const bl = findDarkCornerMark(d, w, h, 'bl') ?? edgeFallback[3];
+  const marksFound = [tl, tr, br, bl].filter(
+    (p, i) => p !== edgeFallback[i]
+  ).length;
+
+  // Fallback: esquinas de página oscuras → pads cerca del borde
   const patch = Math.max(10, Math.round(Math.min(w, h) * 0.07));
   const corners = [
     { x: 0, y: 0 },
@@ -154,26 +216,13 @@ export function detectZipGradeCornerQuad(
     { x: w - patch, y: h - patch },
     { x: 0, y: h - patch },
   ];
-
   let dark = 0;
   for (const c of corners) {
-    const id = ctx.getImageData(c.x, c.y, patch, patch);
-    let sum = 0;
-    for (let i = 0; i < id.data.length; i += 4) {
-      sum += id.data[i]! * 0.299 + id.data[i + 1]! * 0.587 + id.data[i + 2]! * 0.114;
-    }
-    if (sum / (patch * patch) < 200) dark += 1;
+    if (patchMeanLuma(d, w, c.x, c.y, patch, patch) < 200) dark += 1;
   }
-  if (dark < 3) return null;
+  if (marksFound < 3 && dark < 3) return null;
 
-  const padX = w * 0.012;
-  const padY = h * 0.012;
-  return [
-    { x: padX, y: padY },
-    { x: w - padX, y: padY },
-    { x: w - padX, y: h - padY },
-    { x: padX, y: h - padY },
-  ];
+  return [tl, tr, br, bl];
 }
 
 export function isZipGradeWarpedCanvas(canvas: HTMLCanvasElement): boolean {
@@ -192,7 +241,16 @@ export function warpZipGradeAnswerSheet(
   const quad = detectZipGradeCornerQuad(canvas);
   if (!quad) return { warped: null, alignment: null };
 
-  const warped = warpCalifacilSheetFromQuad(canvas, quad);
+  const W = ZIPGRADE_WARP_WIDTH;
+  const H = ZIPGRADE_WARP_HEIGHT;
+  const dst: [Point, Point, Point, Point] = [
+    { x: ZIPGRADE_CORNER_NORM.tl.x * W, y: ZIPGRADE_CORNER_NORM.tl.y * H },
+    { x: ZIPGRADE_CORNER_NORM.tr.x * W, y: ZIPGRADE_CORNER_NORM.tr.y * H },
+    { x: ZIPGRADE_CORNER_NORM.br.x * W, y: ZIPGRADE_CORNER_NORM.br.y * H },
+    { x: ZIPGRADE_CORNER_NORM.bl.x * W, y: ZIPGRADE_CORNER_NORM.bl.y * H },
+  ];
+  const homo = computeHomographySrcToDst(quad, dst);
+  const warped = homo ? warpCanvasWithHomography(canvas, homo, W, H) : null;
   if (!warped) return { warped: null, alignment: null };
 
   const alignment: WarpAlignmentReport = {
@@ -205,22 +263,34 @@ export function warpZipGradeAnswerSheet(
   return { warped, alignment };
 }
 
-/** Construye geometría OMR para N preguntas en 3 columnas estilo ZipGrade. */
+type ZipGradeLayoutKey = keyof typeof ZIPGRADE_GRID_BY_LAYOUT;
+
+function layoutKeysForQuestionCount(questionCount: number): ZipGradeLayoutKey[] {
+  const n = Math.max(1, Math.min(50, questionCount));
+  if (n <= 20) return ['cols2', 'cols3x10'];
+  if (n <= 30) return ['cols3x10', 'cols3x17', 'cols2'];
+  return ['cols3x17', 'cols3x10'];
+}
+
+/** Construye geometría OMR ZipGrade según plantilla fija (2×10 / 3×10 / 3×17). */
 export function buildZipGradeOmrGeometry(
   questionCount: number,
   optionColumns: number,
   imageWidth: number,
-  imageHeight: number
+  imageHeight: number,
+  layoutKey?: ZipGradeLayoutKey
 ): CalifacilOmrScanGeometry {
   const total = Math.max(1, Math.min(50, questionCount));
   const cols = Math.max(2, Math.min(5, optionColumns));
-  const layoutCols = 3;
-  const rowsPerCol = Math.ceil(total / layoutCols);
+  const key = layoutKey ?? layoutKeysForQuestionCount(total)[0]!;
+  const grid = ZIPGRADE_GRID_BY_LAYOUT[key];
+  const layoutCols = grid.layoutCols;
+  const rowsPerCol = grid.rowsPerCol;
 
-  const gx = ZIPGRADE_GRID_NORM.x * imageWidth;
-  const gy = ZIPGRADE_GRID_NORM.y * imageHeight;
-  const gw = ZIPGRADE_GRID_NORM.w * imageWidth;
-  const gh = ZIPGRADE_GRID_NORM.h * imageHeight;
+  const gx = grid.x * imageWidth;
+  const gy = grid.y * imageHeight;
+  const gw = grid.w * imageWidth;
+  const gh = grid.h * imageHeight;
   const colW = gw / layoutCols;
   const rowH = gh / Math.max(1, rowsPerCol);
 
@@ -228,11 +298,13 @@ export function buildZipGradeOmrGeometry(
   for (let q = 0; q < total; q++) {
     const layoutCol = Math.floor(q / rowsPerCol);
     const rowInCol = q % rowsPerCol;
+    // Si N no llena la última columna de la plantilla, aún así mapear en orden ZipGrade.
+    if (layoutCol >= layoutCols) break;
     const rowRects: OmrNormRect[] = [];
-    const bubbleW = (colW * 0.82) / cols;
-    const bubbleAreaLeft = gx + layoutCol * colW + colW * 0.1;
-    const yRowTop = gy + rowInCol * rowH + rowH * 0.12;
-    const yRowH = rowH * 0.76;
+    const bubbleW = (colW * 0.78) / cols;
+    const bubbleAreaLeft = gx + layoutCol * colW + colW * 0.12;
+    const yRowTop = gy + rowInCol * rowH + rowH * 0.14;
+    const yRowH = rowH * 0.72;
 
     for (let c = 0; c < cols; c++) {
       const x0 = bubbleAreaLeft + c * bubbleW;
@@ -249,35 +321,96 @@ export function buildZipGradeOmrGeometry(
   return { imageWidth, imageHeight, cells };
 }
 
+/** Umbrales un poco más permisivos: fotos incrustadas en Paper Details suelen ser ruidosas. */
 const ZIPGRADE_SCAN_THRESHOLDS = {
-  minMarkDarkness: 0.048,
-  minBestVsSecondGap: 0.022,
-  minBestVsSecondRatio: 1.18,
-  minCenterVsRingDelta: 0.022,
-  minSolidCenterDarkness: 0.14,
+  minMarkDarkness: 0.036,
+  minBestVsSecondGap: 0.016,
+  minBestVsSecondRatio: 1.12,
+  minCenterVsRingDelta: 0.016,
+  minSolidCenterDarkness: 0.11,
   ringDarknessWeight: 0.35,
 };
 
+export type ZipGradeScanResult = {
+  picks: (number | null)[];
+  rows: OmrScanRowDetail[];
+  geometry: CalifacilOmrScanGeometry | null;
+  maxSameColumnCount: number;
+  resolvedCount: number;
+};
+
+/**
+ * Lee burbujas ZipGrade. Prueba plantillas 2-col / 3-col y elige la de más picks.
+ * Devuelve rows con inkFractions para que sanitize no borre la lectura.
+ */
 export function scanZipGradeAnswerSheet(
   warped: HTMLCanvasElement,
   optionColumns: number,
   questionCount: number
-): {
-  picks: (number | null)[];
-  geometry: CalifacilOmrScanGeometry | null;
-} {
+): ZipGradeScanResult {
   const rows = Math.max(1, Math.min(50, questionCount));
-  const geometry = buildZipGradeOmrGeometry(rows, optionColumns, warped.width, warped.height);
-  const read = readAnswerSheetPicksFromTemplateGeometry(
-    warped,
-    geometry,
-    ZIPGRADE_SCAN_THRESHOLDS,
-    rows,
-    optionColumns
+  const cols = Math.max(2, Math.min(5, optionColumns));
+  let best: ZipGradeScanResult | null = null;
+
+  for (const layoutKey of layoutKeysForQuestionCount(rows)) {
+    const geometry = buildZipGradeOmrGeometry(
+      rows,
+      cols,
+      warped.width,
+      warped.height,
+      layoutKey
+    );
+    const read = readAnswerSheetPicksFromTemplateGeometry(
+      warped,
+      geometry,
+      ZIPGRADE_SCAN_THRESHOLDS,
+      rows,
+      cols
+    );
+    const resolvedCount = read.picks.filter((p) => p != null).length;
+    const candidate: ZipGradeScanResult = {
+      picks: read.picks,
+      rows: read.rows,
+      geometry: syncCalifacilOmrGeometryImageSize(geometry, warped.width, warped.height),
+      maxSameColumnCount: read.maxSameColumnCount,
+      resolvedCount,
+    };
+    if (!best || candidate.resolvedCount > best.resolvedCount) {
+      best = candidate;
+    }
+    // Suficiente señal: no hace falta probar más plantillas.
+    if (resolvedCount >= Math.ceil(rows * 0.55)) break;
+  }
+
+  return (
+    best ?? {
+      picks: Array(rows).fill(null),
+      rows: Array.from({ length: rows }, () => ({
+        pick: null,
+        ambiguous: false,
+        inkFractions: [],
+      })),
+      geometry: null,
+      maxSameColumnCount: 0,
+      resolvedCount: 0,
+    }
   );
+}
+
+/** Meta OMR lista para buildCalifacilOmrReadingOverride (con ink real). */
+export function zipGradeScanToOmrMeta(
+  scan: ZipGradeScanResult,
+  reviewCanvas: HTMLCanvasElement
+): OmrScanMetaResult {
   return {
-    picks: read.picks,
-    geometry: syncCalifacilOmrGeometryImageSize(geometry, warped.width, warped.height),
+    picks: scan.picks,
+    rows: scan.rows,
+    needsVisionAssist: false,
+    maxSameColumnCount: scan.maxSameColumnCount,
+    geometry: scan.geometry,
+    reviewSourceCanvas: reviewCanvas,
+    controlNumberDigits: [],
+    controlNumber: null,
   };
 }
 

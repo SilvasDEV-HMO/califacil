@@ -38,6 +38,7 @@ import {
   cropZipGradeNameFromSheetCanvas,
   cropZipGradeNameSnippetDataUrl,
   resolveZipGradeSheetForGrading,
+  zipGradeScanToOmrMeta,
   scanZipGradeAnswerSheet,
   warpZipGradeAnswerSheet,
   type ZipGradeSheetKind,
@@ -2295,7 +2296,7 @@ export default function CalificarPage() {
 
       if (sheetFormat === 'zipgrade') {
         const zgWarp = warpZipGradeAnswerSheet(workCanvas);
-        const gradeCanvas = zgWarp.warped ?? workCanvas;
+        let gradeCanvas = zgWarp.warped ?? workCanvas;
         setHandwrittenCurpUrl(
           cropZipGradeNameFromSheetCanvas(gradeCanvas, 560) ??
             cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
@@ -2303,42 +2304,37 @@ export default function CalificarPage() {
         );
         const chunk = sheets[sheetIndexRef.current] ?? [];
         const chunkRows = chunk.length;
-        const zgScan =
+        let zgScan =
           chunkRows > 0
             ? scanZipGradeAnswerSheet(gradeCanvas, omrCols, chunkRows)
             : null;
+        if (chunkRows > 0 && zgWarp.warped) {
+          const rawScan = scanZipGradeAnswerSheet(workCanvas, omrCols, chunkRows);
+          if (!zgScan || rawScan.resolvedCount > zgScan.resolvedCount) {
+            zgScan = rawScan;
+            gradeCanvas = workCanvas;
+          }
+        }
         const pseudoFile = pdfPaginaPseudoFile(pageNumber);
         flushSync(() => setLiveStatus('Leyendo examen…'));
         await yieldForSpinnerPaint();
         const readingOverride =
           zgScan && chunkRows > 0
             ? buildCalifacilOmrReadingOverride(
-                {
-                  picks: zgScan.picks,
-                  rows: Array.from({ length: chunkRows }, () => ({
-                    pick: null as number | null,
-                    ambiguous: false,
-                    inkFractions: [] as number[],
-                  })),
-                  needsVisionAssist: false,
-                  maxSameColumnCount: 0,
-                  geometry: zgScan.geometry,
-                  reviewSourceCanvas: gradeCanvas,
-                  controlNumberDigits: [],
-                  controlNumber: null,
-                },
+                zipGradeScanToOmrMeta(zgScan, gradeCanvas),
                 chunk,
                 gradeCanvas,
                 liveLockedAnswersRef.current,
-                zgWarp.alignment
+                gradeCanvas === zgWarp.warped ? zgWarp.alignment : null,
+                { trustedMobileRead: true }
               )
             : undefined;
         await finalizeCapturedSheet(gradeCanvas, pseudoFile, {
           displaySource: gradeCanvas,
           skipSheetValidation: true,
           uploadKind: 'pdf',
-          preWarped: Boolean(zgWarp.warped),
-          warpAlignment: zgWarp.alignment,
+          preWarped: Boolean(zgWarp.warped) && gradeCanvas === zgWarp.warped,
+          warpAlignment: gradeCanvas === zgWarp.warped ? zgWarp.alignment : null,
           readingOverride,
         });
         return;
@@ -3942,7 +3938,7 @@ export default function CalificarPage() {
               }
               if (sheetFormat === 'zipgrade') {
                 const zgWarp = warpZipGradeAnswerSheet(workCanvas);
-                const gradeCanvas = zgWarp.warped ?? workCanvas;
+                let gradeCanvas = zgWarp.warped ?? workCanvas;
                 if (s === 0) {
                   // Solo recortar Nombre|Apellido desde la hoja — nunca la página Paper Details (logo).
                   nameCropUrl =
@@ -3952,41 +3948,48 @@ export default function CalificarPage() {
                 }
                   const chunk = sheets[sheetIndexRef.current] ?? [];
                   const chunkRows = chunk.length;
-                  const zgScan =
+                  let zgScan =
                     chunkRows > 0
                       ? scanZipGradeAnswerSheet(gradeCanvas, omrCols, chunkRows)
                       : null;
-                  const readingOverride =
-                    zgScan && chunkRows > 0
-                      ? buildCalifacilOmrReadingOverride(
-                          {
-                            picks: zgScan.picks,
-                            rows: Array.from({ length: chunkRows }, () => ({
-                              pick: null as number | null,
-                              ambiguous: false,
-                              inkFractions: [] as number[],
-                            })),
-                            needsVisionAssist: false,
-                            maxSameColumnCount: 0,
-                            geometry: zgScan.geometry,
-                            reviewSourceCanvas: gradeCanvas,
-                            controlNumberDigits: [],
-                            controlNumber: null,
-                          },
-                          chunk,
-                          gradeCanvas,
-                          liveLockedAnswersRef.current,
-                          zgWarp.alignment
-                        )
-                      : undefined;
+                  if (chunkRows > 0 && zgWarp.warped) {
+                    const rawScan = scanZipGradeAnswerSheet(workCanvas, omrCols, chunkRows);
+                    if (!zgScan || rawScan.resolvedCount > zgScan.resolvedCount) {
+                      zgScan = rawScan;
+                      gradeCanvas = workCanvas;
+                    }
+                  }
+                  const minPicks = Math.max(1, Math.ceil(chunkRows * 0.2));
+                  if (!zgScan || zgScan.resolvedCount < minPicks) {
+                    results.push({
+                      fileName: examLabel,
+                      ok: false,
+                      error:
+                        s > 0
+                          ? `Página ${p}: no se leyeron las burbujas`
+                          : 'No se leyeron las burbujas de la hoja ZipGrade',
+                      nameCropUrl: nameCropUrl ?? undefined,
+                    });
+                    pdfFailed = true;
+                    break;
+                  }
+                  const usedWarp = Boolean(zgWarp.warped) && gradeCanvas === zgWarp.warped;
+                  const readingOverride = buildCalifacilOmrReadingOverride(
+                    zipGradeScanToOmrMeta(zgScan, gradeCanvas),
+                    chunk,
+                    gradeCanvas,
+                    liveLockedAnswersRef.current,
+                    usedWarp ? zgWarp.alignment : null,
+                    { trustedMobileRead: true }
+                  );
                   const read = await finalizeCapturedSheet(gradeCanvas, pdfPseudo(p), {
                     skipReviewUi: true,
                     silentBatch: true,
                     skipSheetValidation: true,
                     uploadKind: 'pdf',
                     displaySource: gradeCanvas,
-                    preWarped: Boolean(zgWarp.warped),
-                    warpAlignment: zgWarp.alignment,
+                    preWarped: usedWarp,
+                    warpAlignment: usedWarp ? zgWarp.alignment : null,
                     readingOverride,
                   });
                   if (!read.success || !read.chunkDraft) {
@@ -4691,26 +4694,13 @@ export default function CalificarPage() {
         scanCanvas = warped;
         displayCanvas = warped;
         if (zipPreviewMeta) {
-          const zgRows = Array.from({ length: chunkRows }, () => ({
-            pick: null as number | null,
-            ambiguous: false,
-            inkFractions: [] as number[],
-          }));
           readingOverride = buildCalifacilOmrReadingOverride(
-            {
-              picks: zipPreviewMeta.picks,
-              rows: zgRows,
-              needsVisionAssist: false,
-              maxSameColumnCount: 0,
-              geometry: zipPreviewMeta.geometry,
-              reviewSourceCanvas: displayCanvas,
-              controlNumberDigits: [],
-              controlNumber: null,
-            },
+            zipGradeScanToOmrMeta(zgPreview, displayCanvas),
             chunk,
             scanCanvas,
             liveLockedAnswersRef.current,
-            alignment
+            alignment,
+            { trustedMobileRead: true }
           );
         }
       }
