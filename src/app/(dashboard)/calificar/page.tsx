@@ -894,7 +894,7 @@ export default function CalificarPage() {
 
   const publishedExams = useMemo(() => {
     const published = (exams as Exam[]).filter((e) => e.status === 'published');
-    // Ocultar exámenes ya calificados al 100% del grupo (todos los docentes).
+    // Ocultar exámenes que ya tienen calificaciones guardadas.
     if (completedExamIds.size === 0) return published;
     return published.filter((e) => !completedExamIds.has(e.id) || e.id === examId);
   }, [exams, completedExamIds, examId]);
@@ -4452,23 +4452,9 @@ export default function CalificarPage() {
             ? `Carpeta lista: ${saved} calificación(es) guardada(s).`
             : `Carpeta lista: ${saved} guardada(s), ${pending} sin alumno, ${failed} con error.`
         );
-        // Si ya no quedan pendientes, comprobar si el grupo quedó 100% calificado.
-        if (pending === 0) {
-          void (async () => {
-            const ids = await listCalificarCompletedExamIds();
-            setCompletedExamIds(new Set(ids));
-            if (examId && ids.includes(examId)) {
-              toast.success('Grupo calificado al completo. El examen ya no aparece en la lista.');
-              const held = heldExamLockRef.current;
-              const clientId = calificarClientIdRef.current;
-              heldExamLockRef.current = null;
-              if (examLocksEnabled && held && clientId) {
-                await releaseCalificarExamLock(held, clientId);
-              }
-              setExamId('');
-              resetFlow();
-            }
-          })();
+        // Sin pendientes: si se guardó algo, sacar el examen de la lista de Calificar.
+        if (pending === 0 && saved > 0 && examId) {
+          void clearExamAfterBatchSave();
         }
       }
     }
@@ -4605,11 +4591,17 @@ export default function CalificarPage() {
     });
   };
 
-  const clearExamIfFullyGraded = useCallback(async () => {
+  /** Tras Guardar nombres del lote: sacar el examen de la lista de Calificar. */
+  const clearExamAfterBatchSave = useCallback(async () => {
     if (!examId) return;
-    const ids = await refreshCompletedExamIds();
-    if (!ids.includes(examId)) return;
-    toast.success('Grupo calificado al completo. El examen ya no aparece en la lista.');
+    setCompletedExamIds((prev) => {
+      const next = new Set<string>();
+      prev.forEach((id) => next.add(id));
+      next.add(examId);
+      return next;
+    });
+    void refreshCompletedExamIds();
+    toast.success('Examen calificado. Ya no aparece en la lista.');
     if (examLocksEnabled) {
       await releaseHeldExamLock();
       heldExamLockRef.current = null;
@@ -4625,7 +4617,7 @@ export default function CalificarPage() {
       .filter(({ row }) => row.pendingStudent && row.mergedDraft);
     if (pending.length === 0) {
       setBatchSummary(null);
-      void clearExamIfFullyGraded();
+      void clearExamAfterBatchSave();
       return;
     }
     const missing = pending.filter(({ row }) => !row.selectedStudentId);
@@ -4650,7 +4642,7 @@ export default function CalificarPage() {
       }
       toast.success('Resultados guardados.');
       setBatchSummary(null);
-      await clearExamIfFullyGraded();
+      await clearExamAfterBatchSave();
     } catch {
       toast.error('No se pudieron guardar todas las hojas.');
     } finally {
