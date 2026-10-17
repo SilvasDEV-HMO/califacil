@@ -176,7 +176,9 @@ function downloadWorkbook(wb: XLSX.WorkBook, filename: string) {
   }
   const raw = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as number[] | Uint8Array;
   const bytes = raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
-  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)], {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const blob = new Blob([copy], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
   const url = URL.createObjectURL(blob);
