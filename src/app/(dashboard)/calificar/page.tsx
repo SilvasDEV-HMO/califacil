@@ -35,6 +35,8 @@ import {
 } from '@/lib/printExam';
 import {
   classifyAnswerSheetFormat,
+  cropZipGradeNameSnippetDataUrl,
+  extractEmbeddedZipGradeSheet,
   scanZipGradeAnswerSheet,
   warpZipGradeAnswerSheet,
   type ZipGradeSheetKind,
@@ -211,6 +213,7 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { ExamCombobox } from '@/components/exam-combobox';
 import { StudentCombobox } from '@/components/student-combobox';
 import {
   Select,
@@ -424,8 +427,7 @@ const MIN_FRAME_LUMINANCE = 0.11;
 const OMR_DEBUG_ENABLED = process.env.NEXT_PUBLIC_CALIFACIL_OMR_DEBUG === 'true';
 /** Etiquetas de cámaras virtuales comunes que no queremos priorizar en escritorio. */
 
-/** Valores centinela para que Radix Select sea siempre controlado (evita uncontrolled→controlled). */
-const SELECT_NO_EXAM = '__califacil_no_exam__';
+/** Valor centinela para que Radix Select sea siempre controlado (evita uncontrolled→controlled). */
 const SELECT_NO_OPTION = '__califacil_no_option__';
 
 type RoiQuad = [
@@ -1868,7 +1870,9 @@ export default function CalificarPage() {
             snapW = reviewCanvas.width;
             snapH = reviewCanvas.height;
           }
-          nameCropUrl = cropAnswerSheetNameSnippetDataUrl(reviewCanvas);
+          nameCropUrl =
+            cropAnswerSheetNameSnippetDataUrl(reviewCanvas) ??
+            cropZipGradeNameSnippetDataUrl(reviewCanvas, 560);
         }
         const previewW = snapW > 0 ? snapW : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.width : 900;
         const previewH = snapH > 0 ? snapH : reviewCanvas instanceof HTMLCanvasElement ? reviewCanvas.height : 1165;
@@ -2275,7 +2279,75 @@ export default function CalificarPage() {
         });
         return;
       }
-      const canonical = prepareCanonicalCalifacilLetterCanvas(scanCanvas, { fast: true });
+
+      let workCanvas = scanCanvas;
+      let sheetFormat = classifyAnswerSheetFormat(workCanvas);
+      if (sheetFormat === 'unknown') {
+        const embedded = extractEmbeddedZipGradeSheet(scanCanvas);
+        if (embedded) {
+          workCanvas = embedded;
+          sheetFormat =
+            classifyAnswerSheetFormat(embedded) === 'califacil' ? 'califacil' : 'zipgrade';
+        }
+      }
+      // Siempre intentar mostrar nombre/apellido para buscar al alumno.
+      setHandwrittenCurpUrl(
+        cropZipGradeNameSnippetDataUrl(workCanvas, 560) ??
+          cropZipGradeNameSnippetDataUrl(scanCanvas, 560)
+      );
+
+      if (sheetFormat === 'zipgrade') {
+        const zgWarp = warpZipGradeAnswerSheet(workCanvas);
+        const gradeCanvas = zgWarp.warped ?? workCanvas;
+        setHandwrittenCurpUrl(
+          cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
+            cropZipGradeNameSnippetDataUrl(workCanvas, 560) ??
+            cropZipGradeNameSnippetDataUrl(scanCanvas, 560)
+        );
+        const chunk = sheets[sheetIndexRef.current] ?? [];
+        const chunkRows = chunk.length;
+        const zgScan =
+          chunkRows > 0
+            ? scanZipGradeAnswerSheet(gradeCanvas, omrCols, chunkRows)
+            : null;
+        const pseudoFile = pdfPaginaPseudoFile(pageNumber);
+        flushSync(() => setLiveStatus('Leyendo examen…'));
+        await yieldForSpinnerPaint();
+        const readingOverride =
+          zgScan && chunkRows > 0
+            ? buildCalifacilOmrReadingOverride(
+                {
+                  picks: zgScan.picks,
+                  rows: Array.from({ length: chunkRows }, () => ({
+                    pick: null as number | null,
+                    ambiguous: false,
+                    inkFractions: [] as number[],
+                  })),
+                  needsVisionAssist: false,
+                  maxSameColumnCount: 0,
+                  geometry: zgScan.geometry,
+                  reviewSourceCanvas: gradeCanvas,
+                  controlNumberDigits: [],
+                  controlNumber: null,
+                },
+                chunk,
+                gradeCanvas,
+                liveLockedAnswersRef.current,
+                zgWarp.alignment
+              )
+            : undefined;
+        await finalizeCapturedSheet(gradeCanvas, pseudoFile, {
+          displaySource: gradeCanvas,
+          skipSheetValidation: true,
+          uploadKind: 'pdf',
+          preWarped: Boolean(zgWarp.warped),
+          warpAlignment: zgWarp.alignment,
+          readingOverride,
+        });
+        return;
+      }
+
+      const canonical = prepareCanonicalCalifacilLetterCanvas(workCanvas, { fast: true });
       if (!canonical) {
         toast.error(
           'No se ven los 4 cuadritos negros de las esquinas. Sube la hoja completa, con buena luz.'
@@ -2283,6 +2355,11 @@ export default function CalificarPage() {
         return;
       }
       const gradeCanvas = canonical.canvas;
+      setHandwrittenCurpUrl(
+        cropAnswerSheetNameSnippetDataUrl(gradeCanvas, 420) ??
+          cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
+          cropZipGradeNameSnippetDataUrl(scanCanvas, 560)
+      );
       const pseudoFile = pdfPaginaPseudoFile(pageNumber);
       flushSync(() => setLiveStatus('Leyendo examen…'));
       await yieldForSpinnerPaint();
@@ -2294,7 +2371,7 @@ export default function CalificarPage() {
         warpAlignment: canonical.alignment,
       });
     },
-    [finalizeCapturedSheet, questions, user?.email, exam?.title]
+    [finalizeCapturedSheet, questions, user?.email, exam?.title, sheets, omrCols]
   );
 
   const resetFlow = useCallback(() => {
@@ -3733,8 +3810,93 @@ export default function CalificarPage() {
                 if (read.studentId) studentId = read.studentId;
                 continue;
               }
-              const canonical = prepareCanonicalCalifacilLetterCanvas(scanCanvas, { fast: true });
+              let workCanvas = scanCanvas;
+              let sheetFormat = classifyAnswerSheetFormat(workCanvas);
+              if (sheetFormat === 'unknown') {
+                const embedded = extractEmbeddedZipGradeSheet(scanCanvas);
+                if (embedded) {
+                  workCanvas = embedded;
+                  sheetFormat =
+                    classifyAnswerSheetFormat(embedded) === 'califacil'
+                      ? 'califacil'
+                      : 'zipgrade';
+                }
+              }
+              if (p === 1) {
+                nameCropUrl =
+                  cropZipGradeNameSnippetDataUrl(workCanvas, 560) ??
+                  cropZipGradeNameSnippetDataUrl(scanCanvas, 560);
+              }
+              if (sheetFormat === 'zipgrade') {
+                const zgWarp = warpZipGradeAnswerSheet(workCanvas);
+                const gradeCanvas = zgWarp.warped ?? workCanvas;
+                if (p === 1) {
+                  nameCropUrl =
+                    cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
+                    nameCropUrl ??
+                    cropZipGradeNameSnippetDataUrl(scanCanvas, 560);
+                }
+                const chunk = sheets[sheetIndexRef.current] ?? [];
+                const chunkRows = chunk.length;
+                const zgScan =
+                  chunkRows > 0
+                    ? scanZipGradeAnswerSheet(gradeCanvas, omrCols, chunkRows)
+                    : null;
+                const readingOverride =
+                  zgScan && chunkRows > 0
+                    ? buildCalifacilOmrReadingOverride(
+                        {
+                          picks: zgScan.picks,
+                          rows: Array.from({ length: chunkRows }, () => ({
+                            pick: null as number | null,
+                            ambiguous: false,
+                            inkFractions: [] as number[],
+                          })),
+                          needsVisionAssist: false,
+                          maxSameColumnCount: 0,
+                          geometry: zgScan.geometry,
+                          reviewSourceCanvas: gradeCanvas,
+                          controlNumberDigits: [],
+                          controlNumber: null,
+                        },
+                        chunk,
+                        gradeCanvas,
+                        liveLockedAnswersRef.current,
+                        zgWarp.alignment
+                      )
+                    : undefined;
+                const read = await finalizeCapturedSheet(gradeCanvas, pdfPseudo(p), {
+                  skipReviewUi: true,
+                  silentBatch: true,
+                  skipSheetValidation: true,
+                  uploadKind: 'pdf',
+                  displaySource: gradeCanvas,
+                  preWarped: Boolean(zgWarp.warped),
+                  warpAlignment: zgWarp.alignment,
+                  readingOverride,
+                });
+                if (!read.success || !read.chunkDraft) {
+                  results.push({
+                    fileName: label,
+                    ok: false,
+                    error: p > 1 ? `No se leyó la página ${p}` : 'No se pudo leer la hoja',
+                    nameCropUrl: nameCropUrl ?? undefined,
+                  });
+                  pdfFailed = true;
+                  break;
+                }
+                Object.assign(merged, read.chunkDraft);
+                if (read.controlNumber) controlNumber = read.controlNumber ?? controlNumber;
+                if (read.studentId) studentId = read.studentId;
+                continue;
+              }
+              const canonical = prepareCanonicalCalifacilLetterCanvas(workCanvas, { fast: true });
               if (!canonical) {
+                if (p === 1 && !nameCropUrl) {
+                  nameCropUrl =
+                    cropZipGradeNameSnippetDataUrl(scanCanvas, 560) ??
+                    cropAnswerSheetNameSnippetDataUrl(scanCanvas, 420);
+                }
                 results.push({
                   fileName: label,
                   ok: false,
@@ -3742,12 +3904,15 @@ export default function CalificarPage() {
                     p > 1
                       ? `Página ${p}: no se ven los 4 cuadritos negros`
                       : 'No se ven los 4 cuadritos negros de las esquinas',
+                  nameCropUrl: nameCropUrl ?? undefined,
                 });
                 pdfFailed = true;
                 break;
               }
               if (p === 1) {
-                nameCropUrl = cropAnswerSheetNameSnippetDataUrl(canonical.canvas, 420);
+                nameCropUrl =
+                  cropAnswerSheetNameSnippetDataUrl(canonical.canvas, 420) ??
+                  cropZipGradeNameSnippetDataUrl(canonical.canvas, 560);
               }
               const read = await finalizeCapturedSheet(canonical.canvas, pdfPseudo(p), {
                 skipReviewUi: true,
@@ -5230,9 +5395,9 @@ export default function CalificarPage() {
                             })}
                             value={row.selectedStudentId ?? ''}
                             disabled={scanBusy}
-                            placeholder="Escribe la CURP…"
-                            searchPlaceholder="Primeras letras de la CURP"
-                            emptyText="Esa CURP ya tiene un examen o no coincide."
+                            placeholder="Escribe nombre o apellido…"
+                            searchPlaceholder="Nombre, apellido o CURP…"
+                            emptyText="Ningún alumno coincide con la búsqueda."
                             onValueChange={(id) => {
                               if (id) assignPendingBatchStudent(idx, id);
                             }}
@@ -5381,27 +5546,16 @@ export default function CalificarPage() {
         <CardContent className="space-y-3 sm:space-y-4">
           <div className="space-y-2">
             <Label>Examen</Label>
-            <Select
-              value={examId ? examId : SELECT_NO_EXAM}
-              onValueChange={(v) => {
-                if (v === SELECT_NO_EXAM) return;
-                setExamId(v);
+            <ExamCombobox
+              exams={publishedExams}
+              value={examId}
+              loading={examsLoading}
+              disabled={phase === 'guardando' || (isMobile && phase === 'ver_resultados')}
+              onValueChange={(id) => {
+                setExamId(id);
                 resetFlow();
               }}
-              disabled={examsLoading || phase === 'guardando' || (isMobile && phase === 'ver_resultados')}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={examsLoading ? 'Cargando…' : 'Elige un examen'} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={SELECT_NO_EXAM}>Elige un examen publicado</SelectItem>
-                {publishedExams.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.title}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            />
           </div>
 
           {examId && examLoading && (
@@ -5693,6 +5847,25 @@ export default function CalificarPage() {
 
               <div className="space-y-2">
                 <Label htmlFor="calif-alumno">Alumno</Label>
+                {handwrittenCurpUrl ? (
+                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+                    <p className="text-xs font-medium text-sky-950">
+                      {isCustom20Exam(user?.email, exam?.title, questions) ||
+                      isLenguaje45Exam(user?.email, exam?.title, questions)
+                        ? 'CURP escrita en la hoja'
+                        : 'Nombre y apellido en la hoja'}
+                    </p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={handwrittenCurpUrl}
+                      alt="Identificación manuscrita de la hoja"
+                      className="mt-1 h-16 w-full max-w-xl rounded border border-sky-100 bg-white object-contain object-left"
+                    />
+                    <p className="mt-1 text-[11px] text-sky-900/80">
+                      Usa este recorte para buscar al alumno en la lista.
+                    </p>
+                  </div>
+                ) : null}
                 <StudentCombobox
                   id="calif-alumno"
                   students={sortedStudents}
@@ -5703,8 +5876,22 @@ export default function CalificarPage() {
                   }
                   autoOptionValue={CALIFICAR_AUTO_STUDENT_ID}
                   autoOptionLabel="Automático (detectar en la hoja)"
-                  placeholder="Automático (detectar en la hoja)"
-                  searchPlaceholder="Escribe para buscar…"
+                  placeholder={
+                    handwrittenCurpUrl
+                      ? isCustom20Exam(user?.email, exam?.title, questions) ||
+                        isLenguaje45Exam(user?.email, exam?.title, questions)
+                        ? 'Escribe la CURP…'
+                        : 'Escribe el nombre o apellido…'
+                      : 'Automático (detectar en la hoja)'
+                  }
+                  searchPlaceholder={
+                    handwrittenCurpUrl
+                      ? isCustom20Exam(user?.email, exam?.title, questions) ||
+                        isLenguaje45Exam(user?.email, exam?.title, questions)
+                        ? 'Primeras letras de la CURP…'
+                        : 'Busca por nombre o apellido…'
+                      : 'Escribe para buscar…'
+                  }
                   emptyText="Ningún alumno coincide."
                   noStudentsText={
                     exam && allowedGroupIds.length === 0
@@ -5966,6 +6153,22 @@ export default function CalificarPage() {
                       src={handwrittenCurpUrl}
                       alt="CURP manuscrita"
                       className="mt-1 h-14 w-full bg-white object-contain"
+                    />
+                  </div>
+                ) : null}
+                {handwrittenCurpUrl &&
+                !isCustom20Exam(user?.email, exam?.title, questions) &&
+                !isLenguaje45Exam(user?.email, exam?.title, questions) &&
+                phase === 'revisar_hoja' ? (
+                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 lg:hidden">
+                    <p className="text-xs font-medium text-sky-950">
+                      Nombre y apellido en la hoja
+                    </p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={handwrittenCurpUrl}
+                      alt="Nombre manuscrito"
+                      className="mt-1 h-14 w-full bg-white object-contain object-left"
                     />
                   </div>
                 ) : null}

@@ -91,7 +91,25 @@ export function CalificarMobileHome({
   onScan,
 }: Props) {
   const [examPickerOpen, setExamPickerOpen] = useState(false);
+  const [examSearch, setExamSearch] = useState('');
   const [studentPickerOpen, setStudentPickerOpen] = useState(false);
+
+  const filteredExams = useMemo(() => {
+    const q = examSearch
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+    if (!q) return exams;
+    return exams.filter((e) =>
+      e.title
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '')
+        .includes(q)
+    );
+  }, [exams, examSearch]);
 
   const examTitle = useMemo(() => {
     if (examsLoading) return 'Cargando exámenes…';
@@ -193,22 +211,37 @@ export function CalificarMobileHome({
             type="button"
             className="flex-1"
             aria-label="Cerrar"
-            onClick={() => setExamPickerOpen(false)}
+            onClick={() => {
+              setExamPickerOpen(false);
+              setExamSearch('');
+            }}
           />
           <div
             className="flex max-h-[min(75dvh,calc(100dvh-2rem))] flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl"
             style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
           >
-            <div className="shrink-0 border-b border-orange-100 bg-orange-50/60 px-4 py-3.5">
+            <div className="shrink-0 space-y-2 border-b border-orange-100 bg-orange-50/60 px-4 py-3.5">
               <p className="text-center text-sm font-semibold text-gray-900">Elegir examen</p>
+              <input
+                type="search"
+                value={examSearch}
+                onChange={(e) => setExamSearch(e.target.value)}
+                placeholder="Busca CCT, grupo o materia…"
+                autoComplete="off"
+                className="h-11 w-full rounded-lg border-2 border-orange-400 bg-white px-3 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-orange-500 focus:ring-2 focus:ring-orange-400/70"
+              />
             </div>
             <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {exams.length === 0 ? (
                 <li className="px-4 py-8 text-center text-sm text-gray-500">
                   No hay exámenes publicados.
                 </li>
+              ) : filteredExams.length === 0 ? (
+                <li className="px-4 py-8 text-center text-sm text-gray-500">
+                  Ningún examen coincide con la búsqueda.
+                </li>
               ) : (
-                exams.map((e) => (
+                filteredExams.map((e) => (
                   <li key={e.id}>
                     <button
                       type="button"
@@ -219,6 +252,7 @@ export function CalificarMobileHome({
                       onClick={() => {
                         onSelectExam(e.id);
                         setExamPickerOpen(false);
+                        setExamSearch('');
                       }}
                     >
                       <ScanLine className="h-5 w-5 shrink-0 text-gray-400" />

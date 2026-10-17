@@ -29,6 +29,25 @@ const ZIPGRADE_GRID_NORM = {
   h: 0.72,
 } as const;
 
+/**
+ * Cajas de nombre + apellido encima de la rejilla (hoja ZipGrade enderezada).
+ * Una franja ancha: [Nombre] [Apellido] como en el encabezado de la hoja.
+ */
+const ZIPGRADE_NAME_STRIP_NORM = {
+  x: 0.07,
+  y: 0.042,
+  w: 0.86,
+  h: 0.125,
+} as const;
+
+/** Recorte del nombre en reportes PDF «Paper Details» de ZipGrade (arriba-izquierda). */
+const ZIPGRADE_REPORT_NAME_NORM = {
+  x: 0.02,
+  y: 0.055,
+  w: 0.38,
+  h: 0.14,
+} as const;
+
 export type ZipGradeSheetKind = 'califacil' | 'zipgrade' | 'unknown';
 
 export function detectZipGradeCornerQuad(
@@ -172,6 +191,184 @@ export function scanZipGradeAnswerSheet(
     picks: read.picks,
     geometry: syncCalifacilOmrGeometryImageSize(geometry, warped.width, warped.height),
   };
+}
+
+function canvasMeanLuminance(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number
+): number | null {
+  try {
+    const sampled = ctx.getImageData(0, 0, w, h);
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < sampled.data.length; i += 16) {
+      sum +=
+        (sampled.data[i]! * 0.299 + sampled.data[i + 1]! * 0.587 + sampled.data[i + 2]! * 0.114) /
+        255;
+      n++;
+    }
+    return n > 0 ? sum / n : null;
+  } catch {
+    return null;
+  }
+}
+
+function cropNormRectToJpegDataUrl(
+  canvas: HTMLCanvasElement,
+  rect: { x: number; y: number; w: number; h: number },
+  maxWidth: number,
+  maxMeanLuma = 0.94
+): string | null {
+  if (typeof document === 'undefined' || canvas.width < 40 || canvas.height < 40) {
+    return null;
+  }
+  const W = canvas.width;
+  const H = canvas.height;
+  const sx = Math.max(0, Math.floor(rect.x * W));
+  const sy = Math.max(0, Math.floor(rect.y * H));
+  const sw = Math.max(8, Math.min(W - sx, Math.round(rect.w * W)));
+  const sh = Math.max(6, Math.min(H - sy, Math.round(rect.h * H)));
+  if (sw < 8 || sh < 6) return null;
+
+  const out = document.createElement('canvas');
+  const scale = Math.min(1, maxWidth / sw);
+  out.width = Math.max(1, Math.round(sw * scale));
+  out.height = Math.max(1, Math.round(sh * scale));
+  const ctx = out.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
+  const mean = canvasMeanLuminance(ctx, out.width, out.height);
+  if (mean != null && mean > maxMeanLuma) return null;
+  try {
+    return out.toDataURL('image/jpeg', 0.92);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Recorte JPEG del nombre + apellido manuscritos (cajas superiores de la hoja ZipGrade).
+ * Sirve para mostrarlo junto al buscador de alumnos al calificar.
+ */
+export function cropZipGradeNameSnippetDataUrl(
+  canvas: HTMLCanvasElement,
+  maxWidth = 520
+): string | null {
+  const aspect = canvas.width / Math.max(1, canvas.height);
+  // Hoja enderezada ~850×1100 (aspect ~0.77)
+  if (aspect > 0.68 && aspect < 0.88) {
+    const fromSheet = cropNormRectToJpegDataUrl(
+      canvas,
+      ZIPGRADE_NAME_STRIP_NORM,
+      maxWidth,
+      0.95
+    );
+    if (fromSheet) return fromSheet;
+  }
+  // PDF reporte ZipGrade «Paper Details»: snippet de nombre arriba a la izquierda
+  if (aspect < 0.95) {
+    const fromReport = cropNormRectToJpegDataUrl(
+      canvas,
+      ZIPGRADE_REPORT_NAME_NORM,
+      Math.min(maxWidth, 360),
+      0.96
+    );
+    if (fromReport) return fromReport;
+  }
+  return cropNormRectToJpegDataUrl(canvas, ZIPGRADE_NAME_STRIP_NORM, maxWidth, 0.95);
+}
+
+function patchMeanLuma(
+  data: Uint8ClampedArray,
+  width: number,
+  x0: number,
+  y0: number,
+  pw: number,
+  ph: number
+): number {
+  let sum = 0;
+  let n = 0;
+  const x1 = Math.min(width, x0 + pw);
+  const y1 = y0 + ph;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * width + x) * 4;
+      sum += data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 255;
+}
+
+/**
+ * En reportes «Paper Details» la hoja está incrustada (no llena la página).
+ * Busca un rectángulo con 4 esquinas oscuras y lo recorta para OMR / nombre.
+ */
+export function extractEmbeddedZipGradeSheet(
+  canvas: HTMLCanvasElement
+): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx || canvas.width < 200 || canvas.height < 200) return null;
+
+  const w = canvas.width;
+  const h = canvas.height;
+  const aspect = w / h;
+  // Página de reporte típica (más alta que hoja carta sola)
+  if (aspect >= 0.72 && aspect <= 0.85 && detectZipGradeCornerQuad(canvas)) {
+    return null; // ya es hoja completa
+  }
+
+  let id: ImageData;
+  try {
+    id = ctx.getImageData(0, 0, w, h);
+  } catch {
+    return null;
+  }
+  const d = id.data;
+  const patch = Math.max(6, Math.round(Math.min(w, h) * 0.025));
+  const darkLimit = 140;
+
+  type Cand = { x: number; y: number; rw: number; rh: number; score: number };
+  let best: Cand | null = null;
+
+  // Candidatos: zona izquierda / centro (donde ZipGrade pone la foto de la hoja)
+  const widths = [0.42, 0.48, 0.55, 0.62].map((f) => Math.round(w * f));
+  for (const rw of widths) {
+    const rh = Math.round(rw / 0.773);
+    if (rh > h * 0.85 || rh < h * 0.28) continue;
+    const stepX = Math.max(8, Math.round(rw * 0.08));
+    const stepY = Math.max(8, Math.round(rh * 0.08));
+    const maxX = Math.max(0, Math.floor(w * 0.62) - rw);
+    const maxY = Math.max(0, h - rh - Math.round(h * 0.02));
+    const minY = Math.round(h * 0.18);
+    for (let y = minY; y <= maxY; y += stepY) {
+      for (let x = 0; x <= maxX; x += stepX) {
+        const tl = patchMeanLuma(d, w, x, y, patch, patch);
+        const tr = patchMeanLuma(d, w, x + rw - patch, y, patch, patch);
+        const bl = patchMeanLuma(d, w, x, y + rh - patch, patch, patch);
+        const br = patchMeanLuma(d, w, x + rw - patch, y + rh - patch, patch, patch);
+        const dark =
+          (tl < darkLimit ? 1 : 0) +
+          (tr < darkLimit ? 1 : 0) +
+          (bl < darkLimit ? 1 : 0) +
+          (br < darkLimit ? 1 : 0);
+        if (dark < 3) continue;
+        const score = dark * 1000 - (tl + tr + bl + br);
+        if (!best || score > best.score) best = { x, y, rw, rh, score };
+      }
+    }
+  }
+
+  if (!best) return null;
+  const out = document.createElement('canvas');
+  out.width = best.rw;
+  out.height = best.rh;
+  const octx = out.getContext('2d');
+  if (!octx) return null;
+  octx.drawImage(canvas, best.x, best.y, best.rw, best.rh, 0, 0, best.rw, best.rh);
+  return out;
 }
 
 /** Intenta detectar si la imagen es una hoja ZipGrade (4 esquinas negras, sin franjas CaliFacil). */
