@@ -1,0 +1,5 @@
+-- DEPRECATED: usa la carpeta scripts/raf-import/
+-- 1) Corre 00-grupos.sql
+-- 2) Corre 01-alumnos.sql … 26-alumnos.sql en orden
+--
+-- Totales: 2816 grupos + 64898 alumnos → admin@califacil.com

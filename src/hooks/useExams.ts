@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { fetchAllPaged } from '@/lib/supabasePaged';
 import { Exam, Question, Answer, ExamWithQuestions } from '@/types';
 import { isMissingSortOrderColumnError, sortExamQuestions } from '@/lib/examQuestions';
 
@@ -15,14 +16,14 @@ export function useExams(teacherId: string | undefined) {
     
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('exams')
-        .select('*')
-        .eq('teacher_id', teacherId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setExams(data || []);
+      const data = await fetchAllPaged<Exam>(() =>
+        supabase
+          .from('exams')
+          .select('*')
+          .eq('teacher_id', teacherId)
+          .order('created_at', { ascending: false })
+      );
+      setExams(data);
     } catch (err: any) {
       setError(err.message);
     } finally {

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { fetchAllPaged } from '@/lib/supabasePaged';
 import { normalizeAnswerText } from '@/lib/utils';
 import { Group, Student } from '@/types';
 
@@ -15,14 +16,14 @@ export function useGroups(teacherId: string | undefined) {
     
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('groups')
-        .select('*')
-        .eq('teacher_id', teacherId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setGroups(data || []);
+      const data = await fetchAllPaged<Group>(() =>
+        supabase
+          .from('groups')
+          .select('*')
+          .eq('teacher_id', teacherId)
+          .order('created_at', { ascending: false })
+      );
+      setGroups(data);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -89,14 +90,14 @@ export function useStudents(groupId: string | undefined) {
     
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('students')
-        .select('*')
-        .eq('group_id', groupId)
-        .order('name', { ascending: true });
-
-      if (error) throw error;
-      setStudents(data || []);
+      const data = await fetchAllPaged<Student>(() =>
+        supabase
+          .from('students')
+          .select('*')
+          .eq('group_id', groupId)
+          .order('name', { ascending: true })
+      );
+      setStudents(data);
     } catch (err: any) {
       setError(err.message);
     } finally {
