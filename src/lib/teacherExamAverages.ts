@@ -35,6 +35,11 @@ type ExamGroupAssignmentRow = {
   group_id: string;
 };
 
+/** Keep PostgREST GET URLs under browser limits (~2k–8k). ~80 UUIDs is safe. */
+const EXAM_ID_CHUNK = 80;
+const STUDENT_ID_CHUNK = 200;
+const PAGE_SIZE = 1000;
+
 /**
  * Misma lógica que la página Promedios: porcentaje por alumno = puntos / nº preguntas del examen.
  * `globalAveragePercent` agrupa todas las calificaciones (alumno–examen) del maestro en un único % 0–100.
@@ -50,37 +55,41 @@ export async function fetchTeacherExamAverageSummaries(
   const examIds = exams.map((e) => e.id);
 
   const answers: StudentAnswerRow[] = [];
-  const pageSize = 1000;
-  for (let from = 0; ; from += pageSize) {
-    const { data: answersData, error: answersError } = await supabase
-      .from('answers')
-      .select('exam_id,student_id,score')
-      .in('exam_id', examIds)
-      .order('id', { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (answersError) throw answersError;
-    const batch = (answersData || []) as StudentAnswerRow[];
-    answers.push(...batch);
-    if (batch.length < pageSize) break;
+  for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
+    const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data: answersData, error: answersError } = await supabase
+        .from('answers')
+        .select('exam_id,student_id,score')
+        .in('exam_id', examSlice)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (answersError) throw answersError;
+      const batch = (answersData || []) as StudentAnswerRow[];
+      answers.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+    }
   }
 
-  const { data: questionsData, error: questionsError } = await supabase
-    .from('questions')
-    .select('exam_id,points')
-    .in('exam_id', examIds);
-  if (questionsError) throw questionsError;
   const maxScoreByExam = new Map<string, number>();
-  for (const row of questionsData || []) {
-    const examId = String((row as { exam_id: string; points?: number | null }).exam_id);
-    const pts = (row as { points?: number | null }).points ?? 1;
-    maxScoreByExam.set(examId, (maxScoreByExam.get(examId) ?? 0) + pts);
+  for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
+    const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
+    const { data: questionsData, error: questionsError } = await supabase
+      .from('questions')
+      .select('exam_id,points')
+      .in('exam_id', examSlice);
+    if (questionsError) throw questionsError;
+    for (const row of questionsData || []) {
+      const examId = String((row as { exam_id: string; points?: number | null }).exam_id);
+      const pts = (row as { points?: number | null }).points ?? 1;
+      maxScoreByExam.set(examId, (maxScoreByExam.get(examId) ?? 0) + pts);
+    }
   }
 
   const studentIds = Array.from(new Set(answers.map((a) => a.student_id)));
   const studentsById = new Map<string, StudentRow>();
-  const idChunk = 200;
-  for (let i = 0; i < studentIds.length; i += idChunk) {
-    const slice = studentIds.slice(i, i + idChunk);
+  for (let i = 0; i < studentIds.length; i += STUDENT_ID_CHUNK) {
+    const slice = studentIds.slice(i, i + STUDENT_ID_CHUNK);
     const { data: studentsData, error: studentsError } = await supabase
       .from('students')
       .select('id,name,group_id')
@@ -91,12 +100,16 @@ export async function fetchTeacherExamAverageSummaries(
     }
   }
 
-  const { data: assignmentData, error: assignmentError } = await supabase
-    .from('exam_group_assignments')
-    .select('exam_id,group_id')
-    .in('exam_id', examIds);
-  if (assignmentError) throw assignmentError;
-  const assignments = (assignmentData || []) as ExamGroupAssignmentRow[];
+  const assignments: ExamGroupAssignmentRow[] = [];
+  for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
+    const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
+    const { data: assignmentData, error: assignmentError } = await supabase
+      .from('exam_group_assignments')
+      .select('exam_id,group_id')
+      .in('exam_id', examSlice);
+    if (assignmentError) throw assignmentError;
+    assignments.push(...((assignmentData || []) as ExamGroupAssignmentRow[]));
+  }
   const assignedGroupIdsByExam = new Map<string, Set<string>>();
   for (const row of assignments) {
     if (!assignedGroupIdsByExam.has(row.exam_id)) {
