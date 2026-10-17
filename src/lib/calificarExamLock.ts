@@ -108,13 +108,149 @@ export async function listActiveCalificarExamLocks(): Promise<CalificarActiveLoc
   return payload.locks;
 }
 
-/** Exámenes con todos los alumnos del grupo ya calificados (ocultar en Calificar). */
-export async function listCalificarCompletedExamIds(): Promise<string[]> {
+async function listCalificarCompletedExamIdsFromRpc(): Promise<string[]> {
   const { data, error } = await supabase.rpc('list_calificar_completed_exam_ids');
   if (error) return [];
   const payload = data as { ok?: boolean; exam_ids?: string[] | null } | null;
   if (!payload?.ok || !Array.isArray(payload.exam_ids)) return [];
   return payload.exam_ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Fallback / refuerzo: un examen está completo si, en cada grupo donde ya hay
+ * al menos una respuesta, todos los alumnos de ese grupo tienen respuestas.
+ * Cubre desajustes examen↔grupo (p. ej. título «copia» vs alumnos del grupo original).
+ */
+async function listCalificarCompletedExamIdsClientSide(): Promise<string[]> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) return [];
+
+  const { data: exams, error: examsError } = await supabase
+    .from('exams')
+    .select('id, group_id')
+    .eq('teacher_id', user.id)
+    .eq('status', 'published');
+  if (examsError || !exams?.length) return [];
+
+  const examIds = exams.map((e) => e.id as string);
+  const answerRows: { exam_id: string; student_id: string }[] = [];
+  const chunkSize = 80;
+  for (let i = 0; i < examIds.length; i += chunkSize) {
+    const chunk = examIds.slice(i, i + chunkSize);
+    const { data, error: answersError } = await supabase
+      .from('answers')
+      .select('exam_id, student_id')
+      .in('exam_id', chunk);
+    if (answersError) return [];
+    for (const row of data ?? []) {
+      answerRows.push({
+        exam_id: row.exam_id as string,
+        student_id: row.student_id as string,
+      });
+    }
+  }
+  if (!answerRows.length) return [];
+
+  const gradedByExam = new Map<string, Set<string>>();
+  const studentIds = new Set<string>();
+  for (const row of answerRows) {
+    const examId = row.exam_id as string;
+    const studentId = row.student_id as string;
+    if (!examId || !studentId) continue;
+    studentIds.add(studentId);
+    let set = gradedByExam.get(examId);
+    if (!set) {
+      set = new Set();
+      gradedByExam.set(examId, set);
+    }
+    set.add(studentId);
+  }
+  if (studentIds.size === 0) return [];
+
+  const studentIdList = [...studentIds];
+  const gradedStudents: { id: string; group_id: string | null }[] = [];
+  for (let i = 0; i < studentIdList.length; i += chunkSize) {
+    const chunk = studentIdList.slice(i, i + chunkSize);
+    const { data, error: studentsError } = await supabase
+      .from('students')
+      .select('id, group_id')
+      .in('id', chunk);
+    if (studentsError) return [];
+    for (const s of data ?? []) {
+      gradedStudents.push({
+        id: s.id as string,
+        group_id: (s.group_id as string | null) ?? null,
+      });
+    }
+  }
+  if (!gradedStudents.length) return [];
+
+  const groupByStudent = new Map<string, string>();
+  for (const s of gradedStudents) {
+    if (!s.group_id) continue;
+    groupByStudent.set(s.id, s.group_id);
+  }
+  const activeGroupsByExam = new Map<string, Set<string>>();
+  for (const [examId, graded] of gradedByExam) {
+    const groups = new Set<string>();
+    for (const sid of graded) {
+      const gid = groupByStudent.get(sid);
+      if (gid) groups.add(gid);
+    }
+    if (groups.size > 0) activeGroupsByExam.set(examId, groups);
+  }
+  if (activeGroupsByExam.size === 0) return [];
+
+  const allActiveGroupIds = [
+    ...new Set([...activeGroupsByExam.values()].flatMap((g) => [...g])),
+  ];
+  const { data: roster, error: rosterError } = await supabase
+    .from('students')
+    .select('id, group_id')
+    .in('group_id', allActiveGroupIds);
+  if (rosterError || !roster?.length) return [];
+
+  const rosterByGroup = new Map<string, string[]>();
+  for (const s of roster) {
+    const gid = s.group_id as string;
+    const sid = s.id as string;
+    const list = rosterByGroup.get(gid) ?? [];
+    list.push(sid);
+    rosterByGroup.set(gid, list);
+  }
+
+  const completed: string[] = [];
+  for (const [examId, groups] of activeGroupsByExam) {
+    const graded = gradedByExam.get(examId);
+    if (!graded) continue;
+    let ok = true;
+    let expected = 0;
+    for (const gid of groups) {
+      const members = rosterByGroup.get(gid) ?? [];
+      if (members.length === 0) continue;
+      expected += members.length;
+      for (const sid of members) {
+        if (!graded.has(sid)) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) break;
+    }
+    if (ok && expected > 0) completed.push(examId);
+  }
+  return completed;
+}
+
+/** Exámenes con todos los alumnos del grupo ya calificados (ocultar en Calificar). */
+export async function listCalificarCompletedExamIds(): Promise<string[]> {
+  const [fromRpc, fromClient] = await Promise.all([
+    listCalificarCompletedExamIdsFromRpc(),
+    listCalificarCompletedExamIdsClientSide(),
+  ]);
+  return [...new Set([...fromRpc, ...fromClient])];
 }
 
 export { HEARTBEAT_MS, LIST_POLL_MS };

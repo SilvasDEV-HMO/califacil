@@ -31,6 +31,7 @@ import {
 import { toast } from 'sonner';
 import { dashboardAuthJsonHeaders } from '@/lib/supabaseRouteAuth';
 import { VoidedAttemptsPanel } from '@/components/voided-attempts-panel';
+import { TwoStepDeleteDialog } from '@/components/two-step-delete-dialog';
 import { 
   BarChart, 
   Bar, 
@@ -304,6 +305,7 @@ export default function ExamResultsPage() {
   const [assignedGroups, setAssignedGroups] = useState<AssignedGroup[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>('all');
   const [deletingStudentId, setDeletingStudentId] = useState<string | null>(null);
+  const [studentPendingDelete, setStudentPendingDelete] = useState<StudentResult | null>(null);
 
   useEffect(() => {
     if (!examId) return;
@@ -679,13 +681,6 @@ export default function ExamResultsPage() {
   };
 
   const handleDeleteStudentResult = async (result: StudentResult) => {
-    if (
-      !window.confirm(
-        `¿Eliminar el intento de ${result.studentName}? Se borrarán sus respuestas de este examen.`
-      )
-    ) {
-      return;
-    }
     setDeletingStudentId(result.studentId);
     try {
       const res = await fetch(`/api/exams/${examId}/students/${result.studentId}/result`, {
@@ -700,6 +695,7 @@ export default function ExamResultsPage() {
         return;
       }
       toast.success(`Se eliminó el intento de ${result.studentName}`);
+      setStudentPendingDelete(null);
       if (selectedStudentBreakdownId === result.studentId) {
         setSelectedStudentBreakdownId('');
       }
@@ -991,7 +987,7 @@ export default function ExamResultsPage() {
                               className="h-8 w-8 text-red-600 hover:bg-red-50 hover:text-red-700"
                               disabled={deletingStudentId === result.studentId}
                               aria-label={`Eliminar intento de ${result.studentName}`}
-                              onClick={() => void handleDeleteStudentResult(result)}
+                              onClick={() => setStudentPendingDelete(result)}
                             >
                               {deletingStudentId === result.studentId ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1324,6 +1320,22 @@ export default function ExamResultsPage() {
           <VoidedAttemptsPanel examId={examId} />
         </TabsContent>
       </Tabs>
+
+      <TwoStepDeleteDialog
+        open={!!studentPendingDelete}
+        onOpenChange={(open) => {
+          if (!open && !deletingStudentId) setStudentPendingDelete(null);
+        }}
+        firstQuestion={
+          studentPendingDelete
+            ? `¿Eliminar el intento de ${studentPendingDelete.studentName}?`
+            : '¿Eliminar este intento?'
+        }
+        confirming={!!deletingStudentId}
+        onConfirm={() => {
+          if (studentPendingDelete) void handleDeleteStudentResult(studentPendingDelete);
+        }}
+      />
     </div>
   );
 }

@@ -1,7 +1,5 @@
 'use client';
 
-import Image from 'next/image';
-
 type ExamMiniPreviewProps = {
   title: string;
 };
@@ -16,13 +14,9 @@ export function ExamMiniPreview({ title }: ExamMiniPreviewProps) {
         className="flex items-center gap-1.5 border-b border-gray-800 bg-gray-50/90 px-1.5 py-1"
         aria-hidden
       >
-        <Image
-          src="/ith-wordmark.png"
-          alt="I.T.H."
-          width={120}
-          height={32}
-          className="h-5 w-auto max-w-[55%] object-contain object-left"
-        />
+        <span className="max-w-[70%] truncate text-[10px] font-bold leading-none tracking-tight text-orange-600">
+          SEC Sonora
+        </span>
         <span className="ml-auto text-[6px] font-medium uppercase tracking-wide text-gray-500">
           Carta
         </span>
