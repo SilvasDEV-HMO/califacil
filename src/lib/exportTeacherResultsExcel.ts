@@ -100,7 +100,7 @@ function questionNumberMap(questions: QuestionRow[]): Map<string, number> {
     byExam.set(q.exam_id, list);
   }
   const map = new Map<string, number>();
-  for (const [, list] of byExam) {
+  Array.from(byExam.values()).forEach((list) => {
     list.sort((a, b) => {
       const ao = a.sort_order;
       const bo = b.sort_order;
@@ -110,7 +110,7 @@ function questionNumberMap(questions: QuestionRow[]): Map<string, number> {
       return a.created_at.localeCompare(b.created_at);
     });
     list.forEach((q, i) => map.set(q.id, i + 1));
-  }
+  });
   return map;
 }
 
@@ -161,7 +161,7 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     maxScoreByExam.set(q.exam_id, (maxScoreByExam.get(q.exam_id) ?? 0) + (q.points ?? 1));
   }
 
-  const studentIds = [...new Set(answers.map((a) => a.student_id))];
+  const studentIds = Array.from(new Set(answers.map((a) => a.student_id)));
   const studentsById = new Map<string, StudentRow>();
   for (let i = 0; i < studentIds.length; i += 200) {
     const slice = studentIds.slice(i, i + 200);
@@ -173,7 +173,9 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     for (const s of data || []) studentsById.set(s.id, s as StudentRow);
   }
 
-  const groupIds = [...new Set([...studentsById.values()].map((s) => s.group_id))];
+  const groupIds = Array.from(
+    new Set(Array.from(studentsById.values()).map((s) => s.group_id))
+  );
   const groupsById = new Map<string, GroupRow>();
   for (let i = 0; i < groupIds.length; i += 200) {
     const slice = groupIds.slice(i, i + 200);
@@ -205,7 +207,7 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     else if (a.is_correct === false) agg.wrong.push(n);
   }
 
-  const rows: ResultRow[] = [...byPair.values()].map((agg) => {
+  const rows: ResultRow[] = Array.from(byPair.values()).map((agg) => {
     const student = studentsById.get(agg.studentId);
     const group = student ? groupsById.get(student.group_id) : undefined;
     const { escuela, grupo } = schoolAndGroupFromName(group?.name ?? '');
@@ -243,7 +245,7 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     a.Alumno.localeCompare(b.Alumno, 'es')
   );
 
-  const subsystems = [...new Set(rows.map((r) => r._subsystem))];
+  const subsystems = Array.from(new Set(rows.map((r) => r._subsystem)));
   subsystems.sort((a, b) => {
     const ia = SUBSYSTEM_ORDER.indexOf(a);
     const ib = SUBSYSTEM_ORDER.indexOf(b);
