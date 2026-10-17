@@ -116,6 +116,7 @@ function questionNumberMap(questions: QuestionRow[]): Map<string, number> {
 
 /**
  * Excel con resultados del maestro: alumno, escuela, calificación y reactivos OK/error.
+ * Solo incluye grupos/exámenes que ya tienen al menos una calificación guardada.
  */
 export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows: number }> {
   if (exams.length === 0) {
@@ -123,12 +124,12 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
   }
 
   const examById = new Map(exams.map((e) => [e.id, e]));
-  const examIds = exams.map((e) => e.id);
+  const allExamIds = exams.map((e) => e.id);
 
   const answers: AnswerRow[] = [];
   const idChunk = 80;
-  for (let i = 0; i < examIds.length; i += idChunk) {
-    const slice = examIds.slice(i, i + idChunk);
+  for (let i = 0; i < allExamIds.length; i += idChunk) {
+    const slice = allExamIds.slice(i, i + idChunk);
     const batch = await fetchAllPaged<AnswerRow>(() =>
       supabase
         .from('answers')
@@ -143,9 +144,12 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     throw new Error('Todavía no hay calificaciones guardadas.');
   }
 
+  // Solo exámenes (y luego grupos) que tienen respuestas guardadas.
+  const gradedExamIds = Array.from(new Set(answers.map((a) => a.exam_id)));
+
   const questions: QuestionRow[] = [];
-  for (let i = 0; i < examIds.length; i += idChunk) {
-    const slice = examIds.slice(i, i + idChunk);
+  for (let i = 0; i < gradedExamIds.length; i += idChunk) {
+    const slice = gradedExamIds.slice(i, i + idChunk);
     const batch = await fetchAllPaged<QuestionRow>(() =>
       supabase
         .from('questions')
@@ -207,13 +211,28 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     else if (a.is_correct === false) agg.wrong.push(n);
   }
 
-  const rows: ResultRow[] = Array.from(byPair.values()).map((agg) => {
+  // Grupos con al menos un alumno-examen realmente calificado (reactivos evaluados).
+  const gradedGroupIds = new Set<string>();
+  for (const agg of Array.from(byPair.values())) {
+    if (agg.correct.length + agg.wrong.length === 0) continue;
     const student = studentsById.get(agg.studentId);
-    const group = student ? groupsById.get(student.group_id) : undefined;
+    if (student?.group_id) gradedGroupIds.add(student.group_id);
+  }
+
+  if (gradedGroupIds.size === 0) {
+    throw new Error('No hay grupos con exámenes calificados para exportar.');
+  }
+
+  const rows: ResultRow[] = [];
+  for (const agg of Array.from(byPair.values())) {
+    // Sin reactivos evaluados → no es una calificación usable
+    if (agg.correct.length + agg.wrong.length === 0) continue;
+    const student = studentsById.get(agg.studentId);
+    if (!student || !gradedGroupIds.has(student.group_id)) continue;
+    const group = groupsById.get(student.group_id);
     const { escuela, grupo } = schoolAndGroupFromName(group?.name ?? '');
     const exam = examById.get(agg.examId);
     const examTitle = exam?.title ?? '—';
-    // Si el grupo no trae CCT, intentar sacarlo del título del examen.
     const cctFromExam = examTitle.split(' · ').map((p) => p.trim())[1] ?? '';
     const subsystem = subsystemFromCct(escuela !== '—' ? escuela : cctFromExam);
     const subject = subjectFromExamTitle(examTitle);
@@ -221,8 +240,8 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     const pct = calculatePercentage(agg.points, maxScore);
     const correctSorted = [...agg.correct].sort((a, b) => a - b);
     const wrongSorted = [...agg.wrong].sort((a, b) => a - b);
-    return {
-      Alumno: student?.name ?? '—',
+    rows.push({
+      Alumno: student.name,
       Escuela: escuela,
       Grupo: grupo,
       Examen: examTitle,
@@ -235,8 +254,12 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
       'N.º errores': wrongSorted.length,
       _subsystem: subsystem,
       _subject: subject,
-    };
-  });
+    });
+  }
+
+  if (rows.length === 0) {
+    throw new Error('No hay grupos con exámenes calificados para exportar.');
+  }
 
   rows.sort((a, b) =>
     a.Escuela.localeCompare(b.Escuela, 'es') ||

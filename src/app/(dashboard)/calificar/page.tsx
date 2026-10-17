@@ -36,7 +36,7 @@ import {
 import {
   classifyAnswerSheetFormat,
   cropZipGradeNameSnippetDataUrl,
-  extractEmbeddedZipGradeSheet,
+  resolveZipGradeSheetForGrading,
   scanZipGradeAnswerSheet,
   warpZipGradeAnswerSheet,
   type ZipGradeSheetKind,
@@ -2284,29 +2284,21 @@ export default function CalificarPage() {
         return;
       }
 
-      let workCanvas = scanCanvas;
+      const zgResolved = resolveZipGradeSheetForGrading(scanCanvas);
+      let workCanvas = zgResolved.sheet;
       let sheetFormat = classifyAnswerSheetFormat(workCanvas);
-      if (sheetFormat === 'unknown') {
-        const embedded = extractEmbeddedZipGradeSheet(scanCanvas);
-        if (embedded) {
-          workCanvas = embedded;
-          sheetFormat =
-            classifyAnswerSheetFormat(embedded) === 'califacil' ? 'califacil' : 'zipgrade';
-        }
+      if (sheetFormat === 'unknown' && zgResolved.fromReport) {
+        sheetFormat = 'zipgrade';
       }
-      // Siempre intentar mostrar nombre/apellido para buscar al alumno.
-      setHandwrittenCurpUrl(
-        cropZipGradeNameSnippetDataUrl(workCanvas, 560) ??
-          cropZipGradeNameSnippetDataUrl(scanCanvas, 560)
-      );
+      if (zgResolved.nameCropUrl) setHandwrittenCurpUrl(zgResolved.nameCropUrl);
 
       if (sheetFormat === 'zipgrade') {
         const zgWarp = warpZipGradeAnswerSheet(workCanvas);
         const gradeCanvas = zgWarp.warped ?? workCanvas;
         setHandwrittenCurpUrl(
           cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
-            cropZipGradeNameSnippetDataUrl(workCanvas, 560) ??
-            cropZipGradeNameSnippetDataUrl(scanCanvas, 560)
+            zgResolved.nameCropUrl ??
+            cropZipGradeNameSnippetDataUrl(workCanvas, 560)
         );
         const chunk = sheets[sheetIndexRef.current] ?? [];
         const chunkRows = chunk.length;
@@ -3791,11 +3783,6 @@ export default function CalificarPage() {
         toast.message(
           `${files.length} archivo(s) suman ${plannedExams} exámenes; este lote califica ${batchExamTotal}.`
         );
-      } else {
-        toast.message(
-          `${files.length} archivo(s) → ${batchExamTotal} examen(es) a calificar` +
-            (pagesPerExam === 1 ? ' (1 página = 1 alumno).' : '.')
-        );
       }
 
       for (let i = 0; i < files.length; i++) {
@@ -3943,32 +3930,26 @@ export default function CalificarPage() {
                   if (read.studentId) studentId = read.studentId;
                   continue;
                 }
-                let workCanvas = scanCanvas;
-                let sheetFormat = classifyAnswerSheetFormat(workCanvas);
-                if (sheetFormat === 'unknown') {
-                  const embedded = extractEmbeddedZipGradeSheet(scanCanvas);
-                  if (embedded) {
-                    workCanvas = embedded;
-                    sheetFormat =
-                      classifyAnswerSheetFormat(embedded) === 'califacil'
-                        ? 'califacil'
-                        : 'zipgrade';
-                  }
-                }
+              const zgResolved = resolveZipGradeSheetForGrading(scanCanvas);
+              let workCanvas = zgResolved.sheet;
+              let sheetFormat = classifyAnswerSheetFormat(workCanvas);
+              if (sheetFormat === 'unknown' && zgResolved.fromReport) {
+                sheetFormat = 'zipgrade';
+              }
+              if (s === 0) {
+                nameCropUrl =
+                  zgResolved.nameCropUrl ??
+                  cropZipGradeNameSnippetDataUrl(workCanvas, 560);
+              }
+              if (sheetFormat === 'zipgrade') {
+                const zgWarp = warpZipGradeAnswerSheet(workCanvas);
+                const gradeCanvas = zgWarp.warped ?? workCanvas;
                 if (s === 0) {
                   nameCropUrl =
-                    cropZipGradeNameSnippetDataUrl(workCanvas, 560) ??
-                    cropZipGradeNameSnippetDataUrl(scanCanvas, 560);
+                    cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
+                    nameCropUrl ??
+                    zgResolved.nameCropUrl;
                 }
-                if (sheetFormat === 'zipgrade') {
-                  const zgWarp = warpZipGradeAnswerSheet(workCanvas);
-                  const gradeCanvas = zgWarp.warped ?? workCanvas;
-                  if (s === 0) {
-                    nameCropUrl =
-                      cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
-                      nameCropUrl ??
-                      cropZipGradeNameSnippetDataUrl(scanCanvas, 560);
-                  }
                   const chunk = sheets[sheetIndexRef.current] ?? [];
                   const chunkRows = chunk.length;
                   const zgScan =
@@ -5450,7 +5431,7 @@ export default function CalificarPage() {
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
-              Identifica al alumno por la CURP escrita en la hoja. Escribe las primeras letras de la CURP, elige la correcta y pulsa
+              Identifica al alumno con el recorte de nombre y apellido de la hoja. Escríbelos en el buscador, elige al alumno y pulsa
               Guardar. Si una hoja no se leyó, pulsa Quitar para no incluirla.
             </DialogDescription>
           </DialogHeader>
