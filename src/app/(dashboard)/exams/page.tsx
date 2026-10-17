@@ -113,7 +113,14 @@ export default function ExamsPage() {
       const { rows } = await downloadTeacherResultsExcel(exams);
       toast.success(`Excel listo: ${rows} alumno(s) con calificación.`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'No se pudo generar el Excel.';
+      const message =
+        err instanceof Error && err.message.trim()
+          ? err.message
+          : err && typeof err === 'object' && 'message' in err
+            ? String((err as { message?: unknown }).message ?? '').trim() ||
+              'No se pudo generar el Excel.'
+            : 'No se pudo generar el Excel.';
+      console.error('[export-results-excel]', err);
       toast.error(message);
     } finally {
       setExportingResults(false);

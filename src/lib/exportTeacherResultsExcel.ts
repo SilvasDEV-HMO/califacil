@@ -1,7 +1,9 @@
+import * as XLSX from 'xlsx';
 import { supabase } from '@/lib/supabase';
 import { calculatePercentage } from '@/lib/utils';
 import type { Exam } from '@/types';
 import { fetchAllPaged } from '@/lib/supabasePaged';
+import { isMissingSortOrderColumnError } from '@/lib/examQuestions';
 
 type AnswerRow = {
   exam_id: string;
@@ -114,6 +116,80 @@ function questionNumberMap(questions: QuestionRow[]): Map<string, number> {
   return map;
 }
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) return err.message;
+  if (err && typeof err === 'object' && 'message' in err) {
+    const m = String((err as { message?: unknown }).message ?? '').trim();
+    if (m) return m;
+  }
+  return 'No se pudo generar el Excel.';
+}
+
+async function fetchQuestionsForExams(examIds: string[]): Promise<QuestionRow[]> {
+  const idChunk = 80;
+  const questions: QuestionRow[] = [];
+  for (let i = 0; i < examIds.length; i += idChunk) {
+    const slice = examIds.slice(i, i + idChunk);
+    try {
+      const batch = await fetchAllPaged<QuestionRow>(() =>
+        supabase
+          .from('questions')
+          .select('id,exam_id,sort_order,created_at,points')
+          .in('exam_id', slice)
+          .order('created_at', { ascending: true })
+      );
+      questions.push(...batch);
+    } catch (err) {
+      if (!isMissingSortOrderColumnError(errorMessage(err))) throw err;
+      const batch = await fetchAllPaged<{
+        id: string;
+        exam_id: string;
+        created_at: string;
+        points: number | null;
+      }>(() =>
+        supabase
+          .from('questions')
+          .select('id,exam_id,created_at,points')
+          .in('exam_id', slice)
+          .order('created_at', { ascending: true })
+      );
+      questions.push(
+        ...batch.map((q) => ({
+          id: q.id,
+          exam_id: q.exam_id,
+          created_at: q.created_at,
+          points: q.points,
+          sort_order: null as number | null,
+        }))
+      );
+    }
+  }
+  return questions;
+}
+
+function downloadWorkbook(wb: XLSX.WorkBook, filename: string) {
+  try {
+    XLSX.writeFile(wb, filename);
+    return;
+  } catch {
+    /* fallback: blob + <a download> (incógnito / bloqueo de writeFile) */
+  }
+  const raw = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as number[] | Uint8Array;
+  const bytes = raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
+  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 /**
  * Excel con resultados del maestro: alumno, escuela, calificación y reactivos OK/error.
  * Solo incluye grupos/exámenes que ya tienen al menos una calificación guardada.
@@ -127,38 +203,36 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
   const allExamIds = exams.map((e) => e.id);
 
   const answers: AnswerRow[] = [];
-  const idChunk = 80;
-  for (let i = 0; i < allExamIds.length; i += idChunk) {
-    const slice = allExamIds.slice(i, i + idChunk);
-    const batch = await fetchAllPaged<AnswerRow>(() =>
-      supabase
-        .from('answers')
-        .select('exam_id,student_id,question_id,is_correct,score')
-        .in('exam_id', slice)
-        .order('id', { ascending: true })
-    );
-    answers.push(...batch);
+  const idChunk = 60;
+  try {
+    for (let i = 0; i < allExamIds.length; i += idChunk) {
+      const slice = allExamIds.slice(i, i + idChunk);
+      const batch = await fetchAllPaged<AnswerRow>(() =>
+        supabase
+          .from('answers')
+          .select('exam_id,student_id,question_id,is_correct,score')
+          .in('exam_id', slice)
+          .order('exam_id', { ascending: true })
+      );
+      answers.push(...batch);
+    }
+  } catch (err) {
+    throw new Error(`No se pudieron leer las calificaciones: ${errorMessage(err)}`);
   }
 
   if (answers.length === 0) {
     throw new Error('Todavía no hay calificaciones guardadas.');
   }
 
-  // Solo exámenes (y luego grupos) que tienen respuestas guardadas.
   const gradedExamIds = Array.from(new Set(answers.map((a) => a.exam_id)));
 
-  const questions: QuestionRow[] = [];
-  for (let i = 0; i < gradedExamIds.length; i += idChunk) {
-    const slice = gradedExamIds.slice(i, i + idChunk);
-    const batch = await fetchAllPaged<QuestionRow>(() =>
-      supabase
-        .from('questions')
-        .select('id,exam_id,sort_order,created_at,points')
-        .in('exam_id', slice)
-        .order('created_at', { ascending: true })
-    );
-    questions.push(...batch);
+  let questions: QuestionRow[] = [];
+  try {
+    questions = await fetchQuestionsForExams(gradedExamIds);
+  } catch (err) {
+    throw new Error(`No se pudieron leer las preguntas: ${errorMessage(err)}`);
   }
+
   const qNum = questionNumberMap(questions);
   const maxScoreByExam = new Map<string, number>();
   for (const q of questions) {
@@ -167,25 +241,33 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
 
   const studentIds = Array.from(new Set(answers.map((a) => a.student_id)));
   const studentsById = new Map<string, StudentRow>();
-  for (let i = 0; i < studentIds.length; i += 200) {
-    const slice = studentIds.slice(i, i + 200);
-    const { data, error } = await supabase
-      .from('students')
-      .select('id,name,group_id')
-      .in('id', slice);
-    if (error) throw error;
-    for (const s of data || []) studentsById.set(s.id, s as StudentRow);
+  try {
+    for (let i = 0; i < studentIds.length; i += 150) {
+      const slice = studentIds.slice(i, i + 150);
+      const { data, error } = await supabase
+        .from('students')
+        .select('id,name,group_id')
+        .in('id', slice);
+      if (error) throw error;
+      for (const s of data || []) studentsById.set(s.id, s as StudentRow);
+    }
+  } catch (err) {
+    throw new Error(`No se pudieron leer los alumnos: ${errorMessage(err)}`);
   }
 
   const groupIds = Array.from(
-    new Set(Array.from(studentsById.values()).map((s) => s.group_id))
+    new Set(Array.from(studentsById.values()).map((s) => s.group_id).filter(Boolean))
   );
   const groupsById = new Map<string, GroupRow>();
-  for (let i = 0; i < groupIds.length; i += 200) {
-    const slice = groupIds.slice(i, i + 200);
-    const { data, error } = await supabase.from('groups').select('id,name').in('id', slice);
-    if (error) throw error;
-    for (const g of data || []) groupsById.set(g.id, g as GroupRow);
+  try {
+    for (let i = 0; i < groupIds.length; i += 150) {
+      const slice = groupIds.slice(i, i + 150);
+      const { data, error } = await supabase.from('groups').select('id,name').in('id', slice);
+      if (error) throw error;
+      for (const g of data || []) groupsById.set(g.id, g as GroupRow);
+    }
+  } catch (err) {
+    throw new Error(`No se pudieron leer los grupos: ${errorMessage(err)}`);
   }
 
   type Agg = {
@@ -194,6 +276,7 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     points: number;
     correct: number[];
     wrong: number[];
+    answered: number;
   };
   const byPair = new Map<string, Agg>();
 
@@ -201,20 +284,30 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     const key = `${a.exam_id}|${a.student_id}`;
     let agg = byPair.get(key);
     if (!agg) {
-      agg = { examId: a.exam_id, studentId: a.student_id, points: 0, correct: [], wrong: [] };
+      agg = {
+        examId: a.exam_id,
+        studentId: a.student_id,
+        points: 0,
+        correct: [],
+        wrong: [],
+        answered: 0,
+      };
       byPair.set(key, agg);
     }
     agg.points += typeof a.score === 'number' ? a.score : 0;
+    agg.answered += 1;
     const n = qNum.get(a.question_id);
     if (n == null) continue;
     if (a.is_correct === true) agg.correct.push(n);
     else if (a.is_correct === false) agg.wrong.push(n);
+    else if ((a.score ?? 0) > 0) agg.correct.push(n);
+    else agg.wrong.push(n);
   }
 
-  // Grupos con al menos un alumno-examen realmente calificado (reactivos evaluados).
+  // Grupos con al menos un alumno-examen con respuestas guardadas.
   const gradedGroupIds = new Set<string>();
   for (const agg of Array.from(byPair.values())) {
-    if (agg.correct.length + agg.wrong.length === 0) continue;
+    if (agg.answered === 0) continue;
     const student = studentsById.get(agg.studentId);
     if (student?.group_id) gradedGroupIds.add(student.group_id);
   }
@@ -225,8 +318,7 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
 
   const rows: ResultRow[] = [];
   for (const agg of Array.from(byPair.values())) {
-    // Sin reactivos evaluados → no es una calificación usable
-    if (agg.correct.length + agg.wrong.length === 0) continue;
+    if (agg.answered === 0) continue;
     const student = studentsById.get(agg.studentId);
     if (!student || !gradedGroupIds.has(student.group_id)) continue;
     const group = groupsById.get(student.group_id);
@@ -261,11 +353,12 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     throw new Error('No hay grupos con exámenes calificados para exportar.');
   }
 
-  rows.sort((a, b) =>
-    a.Escuela.localeCompare(b.Escuela, 'es') ||
-    a.Grupo.localeCompare(b.Grupo, 'es') ||
-    a.Examen.localeCompare(b.Examen, 'es') ||
-    a.Alumno.localeCompare(b.Alumno, 'es')
+  rows.sort(
+    (a, b) =>
+      a.Escuela.localeCompare(b.Escuela, 'es') ||
+      a.Grupo.localeCompare(b.Grupo, 'es') ||
+      a.Examen.localeCompare(b.Examen, 'es') ||
+      a.Alumno.localeCompare(b.Alumno, 'es')
   );
 
   const subsystems = Array.from(new Set(rows.map((r) => r._subsystem)));
@@ -278,7 +371,6 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
     return a.localeCompare(b, 'es');
   });
 
-  const XLSX = await import('xlsx');
   const wb = XLSX.utils.book_new();
   const usedSheetNames = new Set<string>();
 
@@ -289,9 +381,7 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
       );
       if (sheetRows.length === 0) continue;
 
-      const exportRows = sheetRows.map(
-        ({ _subsystem: _s, _subject: _t, ...rest }) => rest
-      );
+      const exportRows = sheetRows.map(({ _subsystem: _s, _subject: _t, ...rest }) => rest);
       const sheet = XLSX.utils.json_to_sheet(exportRows);
       sheet['!cols'] = SHEET_COLS;
 
@@ -311,6 +401,9 @@ export async function downloadTeacherResultsExcel(exams: Exam[]): Promise<{ rows
   }
 
   const stamp = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `resultados_califacil_${stamp}.xlsx`);
+  if (typeof document === 'undefined') {
+    throw new Error('La descarga del Excel solo está disponible en el navegador.');
+  }
+  downloadWorkbook(wb, `resultados_califacil_${stamp}.xlsx`);
   return { rows: rows.length };
 }
