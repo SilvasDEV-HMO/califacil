@@ -263,8 +263,11 @@ type BatchGradeItem = {
   selectedStudentId?: string;
 };
 
-/** Límite de exámenes (archivos o páginas de PDF) por lote en escritorio. */
-const FOLDER_BATCH_MAX_FILES = 200;
+/**
+ * Límite de exámenes por lote (cada página de un PDF de 1 hoja = 1 examen).
+ * No confundir con el número de archivos PDF subidos.
+ */
+const FOLDER_BATCH_MAX_EXAMS = 800;
 
 function isDesktopFolderGradeFile(file: File): boolean {
   const name = file.name.toLowerCase();
@@ -289,7 +292,7 @@ async function collectGradeFilesFromDirectoryHandle(
   acc: File[] = [],
   depth = 0
 ): Promise<File[]> {
-  if (depth > 4 || acc.length >= FOLDER_BATCH_MAX_FILES * 2) return acc;
+  if (depth > 4 || acc.length >= FOLDER_BATCH_MAX_EXAMS * 2) return acc;
   if (typeof dir.values !== 'function') return acc;
   for await (const entry of dir.values()) {
     if (entry.kind === 'file' && typeof entry.getFile === 'function') {
@@ -3723,19 +3726,14 @@ export default function CalificarPage() {
       return;
     }
 
-    const all = picked.filter(isDesktopFolderGradeFile).sort((a, b) =>
-      folderFileLabel(a).localeCompare(folderFileLabel(b), 'es', { numeric: true })
-    );
-    if (all.length === 0) {
+    const files = picked
+      .filter(isDesktopFolderGradeFile)
+      .sort((a, b) =>
+        folderFileLabel(a).localeCompare(folderFileLabel(b), 'es', { numeric: true })
+      );
+    if (files.length === 0) {
       toast.error('La carpeta no tiene PDF (ni JPG/PNG) para calificar.');
       return;
-    }
-    const skipped = all.length > FOLDER_BATCH_MAX_FILES ? all.length - FOLDER_BATCH_MAX_FILES : 0;
-    const files = all.slice(0, FOLDER_BATCH_MAX_FILES);
-    if (skipped > 0) {
-      toast.message(
-        `Se calificarán los primeros ${FOLDER_BATCH_MAX_FILES} archivos. Quedan ${skipped} para otro lote.`
-      );
     }
 
     clearPendingPdfGrading();
@@ -3749,13 +3747,65 @@ export default function CalificarPage() {
     const results: BatchGradeItem[] = [];
 
     const pdfPseudo = (pageNumber: number) => pdfPaginaPseudoFile(pageNumber);
+    const pagesPerExam = Math.max(1, totalSheets);
 
     try {
+      // Contar exámenes reales (páginas) antes de calificar — no usar el tope 800 como total.
+      setLiveStatus(`Contando hojas en ${files.length} archivo(s)…`);
+      await yieldForSpinnerPaint();
+      type PdfPrep = { numPages: number; firstCanvas: HTMLCanvasElement };
+      const pdfPrepByIndex = new Map<number, PdfPrep>();
+      let plannedExams = 0;
       for (let i = 0; i < files.length; i++) {
         if (gen !== gradeReadGenRef.current) return;
         const file = files[i]!;
+        const isPdf =
+          file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+        if (!isPdf) {
+          plannedExams += 1;
+          continue;
+        }
+        setLiveStatus(`Contando hojas… ${i + 1}/${files.length} · ${file.name}`);
+        await yieldForSpinnerPaint();
+        try {
+          const first = await renderPdfGradingPageCanvas(file, 1, undefined, {
+            timeoutMs: 25000,
+          });
+          if (gen !== gradeReadGenRef.current) return;
+          if (first.numPages < 1) continue;
+          pdfPrepByIndex.set(i, { numPages: first.numPages, firstCanvas: first.canvas });
+          plannedExams +=
+            pagesPerExam === 1
+              ? first.numPages
+              : Math.floor(first.numPages / pagesPerExam);
+        } catch {
+          /* se reporta al calificar */
+        }
+      }
+      const batchExamTotal = Math.min(plannedExams, FOLDER_BATCH_MAX_EXAMS);
+      if (plannedExams === 0) {
+        toast.error('No se encontraron páginas legibles en los PDF.');
+        return;
+      }
+      if (plannedExams > FOLDER_BATCH_MAX_EXAMS) {
+        toast.message(
+          `${files.length} archivo(s) suman ${plannedExams} exámenes; este lote califica ${batchExamTotal}.`
+        );
+      } else {
+        toast.message(
+          `${files.length} archivo(s) → ${batchExamTotal} examen(es) a calificar` +
+            (pagesPerExam === 1 ? ' (1 página = 1 alumno).' : '.')
+        );
+      }
+
+      for (let i = 0; i < files.length; i++) {
+        if (gen !== gradeReadGenRef.current) return;
+        if (results.length >= FOLDER_BATCH_MAX_EXAMS) break;
+        const file = files[i]!;
         const label = folderFileLabel(file);
-        setLiveStatus(`Calificando ${i + 1}/${files.length} · ${file.name}`);
+        setLiveStatus(
+          `Calificando ${results.length + 1}/${batchExamTotal} · ${file.name}`
+        );
         await yieldForSpinnerPaint();
 
         try {
@@ -3804,20 +3854,24 @@ export default function CalificarPage() {
           };
 
           if (isPdf) {
-            const first = await renderPdfGradingPageCanvas(file, 1, undefined, {
-              timeoutMs: 25000,
-            });
-            if (gen !== gradeReadGenRef.current) return;
-            if (first.numPages < 1) {
-              results.push({ fileName: label, ok: false, error: 'PDF sin páginas legibles' });
-              continue;
+            let prep = pdfPrepByIndex.get(i);
+            if (!prep) {
+              const first = await renderPdfGradingPageCanvas(file, 1, undefined, {
+                timeoutMs: 25000,
+              });
+              if (gen !== gradeReadGenRef.current) return;
+              if (first.numPages < 1) {
+                results.push({ fileName: label, ok: false, error: 'PDF sin páginas legibles' });
+                continue;
+              }
+              prep = { numPages: first.numPages, firstCanvas: first.canvas };
             }
-            const pagesPerExam = Math.max(1, totalSheets);
-            const remainingSlots = Math.max(0, FOLDER_BATCH_MAX_FILES - results.length);
+            const { numPages, firstCanvas } = prep;
+            const remainingSlots = Math.max(0, FOLDER_BATCH_MAX_EXAMS - results.length);
             const maxExams =
               pagesPerExam === 1
-                ? Math.min(first.numPages, remainingSlots)
-                : Math.min(Math.floor(first.numPages / pagesPerExam), remainingSlots);
+                ? Math.min(numPages, remainingSlots)
+                : Math.min(Math.floor(numPages / pagesPerExam), remainingSlots);
             if (maxExams < 1) {
               results.push({
                 fileName: label,
@@ -3826,14 +3880,10 @@ export default function CalificarPage() {
               });
               continue;
             }
-            if (first.numPages > maxExams * pagesPerExam) {
-              toast.message(
-                `${label}: ${first.numPages} páginas → se califican ${maxExams} examen(es) en este lote.`
-              );
-            }
 
             for (let examIdx = 0; examIdx < maxExams; examIdx++) {
               if (gen !== gradeReadGenRef.current) return;
+              if (results.length >= FOLDER_BATCH_MAX_EXAMS) break;
               const merged: Record<string, string> = {};
               let controlNumber: string | null = null;
               let studentId: string | null = null;
@@ -3841,7 +3891,7 @@ export default function CalificarPage() {
               let pdfFailed = false;
               const basePage = examIdx * pagesPerExam + 1;
               const examLabel =
-                first.numPages > pagesPerExam || files.length > 1
+                numPages > pagesPerExam || files.length > 1
                   ? pagesPerExam === 1
                     ? `${label} · p.${basePage}`
                     : `${label} · p.${basePage}-${basePage + pagesPerExam - 1}`
@@ -3851,12 +3901,12 @@ export default function CalificarPage() {
                 const p = basePage + s;
                 sheetIndexRef.current = s;
                 setLiveStatus(
-                  `Calificando ${results.length + 1}/${FOLDER_BATCH_MAX_FILES} · ${examLabel}`
+                  `Calificando ${results.length + 1}/${batchExamTotal} · ${examLabel}`
                 );
                 await yieldForSpinnerPaint();
                 const raw =
                   p === 1
-                    ? first.canvas
+                    ? firstCanvas
                     : (await renderPdfGradingPageCanvas(file, p, undefined, { timeoutMs: 25000 }))
                         .canvas;
                 if (gen !== gradeReadGenRef.current) return;
