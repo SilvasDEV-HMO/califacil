@@ -19,10 +19,17 @@ import { useExam, useExams } from '@/hooks/useExams';
 import { downloadCalificacionCsv } from '@/lib/calificarExport';
 import {
   createPdfGradingHandle,
+  extractPdfPagePlainText,
   PDF_OMR_RENDER_MAX_SIDE,
   renderPdfGradingPageCanvas,
   type PdfGradingHandle,
 } from '@/lib/pdfClientPreview';
+import {
+  cropPaperDetailsNameApellidoDataUrl,
+  mapPaperDetailsToMcDraft,
+  parseZipGradePaperDetailsText,
+  shouldImportZipGradePaperDetails,
+} from '@/lib/zipGradePaperDetails';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
@@ -3801,7 +3808,8 @@ export default function CalificarPage() {
             merged: Record<string, string>,
             controlNumber: string | null,
             studentId: string | null,
-            nameCropUrl: string | null
+            nameCropUrl: string | null,
+            opts?: { pctOverride?: number | null }
           ) => {
             let sid = studentId;
             if (!sid && controlNumber) {
@@ -3815,13 +3823,17 @@ export default function CalificarPage() {
               if (student) sid = student.id;
             }
             const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
+            const displayPct =
+              opts?.pctOverride != null && Number.isFinite(opts.pctOverride)
+                ? Math.round(opts.pctOverride)
+                : previewStats.pct;
             if (!student) {
               results.push({
                 fileName: examLabel,
                 ok: false,
                 pendingStudent: true,
                 mergedDraft: { ...merged },
-                pct: previewStats.pct,
+                pct: displayPct,
                 nameCropUrl,
                 error: 'Elige al alumno para guardar',
               });
@@ -3832,7 +3844,7 @@ export default function CalificarPage() {
               fileName: examLabel,
               ok: true,
               studentName: student.name,
-              pct: stats.pct,
+              pct: opts?.pctOverride != null ? displayPct : stats.pct,
               nameCropUrl,
             });
           };
@@ -3873,6 +3885,7 @@ export default function CalificarPage() {
               let studentId: string | null = null;
               let nameCropUrl: string | null = null;
               let pdfFailed = false;
+              let paperDetailsPct: number | null = null;
               const basePage = examIdx * pagesPerExam + 1;
               const examLabel =
                 numPages > pagesPerExam || files.length > 1
@@ -3895,6 +3908,42 @@ export default function CalificarPage() {
                         .canvas;
                 if (gen !== gradeReadGenRef.current) return;
                 const scanCanvas = downscaleCanvasForOmrScan(raw, PDF_OMR_RENDER_MAX_SIDE) ?? raw;
+
+                // admin@califacil.com + Paper Details: importar % y reactivos del PDF (sin OMR).
+                if (shouldImportZipGradePaperDetails(user?.email, scanCanvas)) {
+                  if (s === 0) {
+                    nameCropUrl = cropPaperDetailsNameApellidoDataUrl(scanCanvas, 640);
+                  }
+                  let pageText = '';
+                  try {
+                    const extracted = await extractPdfPagePlainText(file, p, { timeoutMs: 25000 });
+                    pageText = extracted.text;
+                  } catch {
+                    pageText = '';
+                  }
+                  const chunkQs =
+                    pagesPerExam === 1
+                      ? questions
+                      : (sheets[sheetIndexRef.current] ?? questions);
+                  const parsed = parseZipGradePaperDetailsText(pageText, chunkQs.length);
+                  if (!parsed.ok) {
+                    results.push({
+                      fileName: examLabel,
+                      ok: false,
+                      error:
+                        s > 0
+                          ? `Página ${p}: no se leyó el reporte Paper Details`
+                          : 'No se pudo leer Percent / respuestas del PDF Paper Details',
+                      nameCropUrl: nameCropUrl ?? undefined,
+                    });
+                    pdfFailed = true;
+                    break;
+                  }
+                  Object.assign(merged, mapPaperDetailsToMcDraft(chunkQs, parsed));
+                  if (parsed.percent != null) paperDetailsPct = parsed.percent;
+                  continue;
+                }
+
                 if (
                   isCustom20Exam(user?.email, exam?.title, questions) ||
                   isLenguaje45Exam(user?.email, exam?.title, questions)
@@ -3934,14 +3983,17 @@ export default function CalificarPage() {
                 sheetFormat = 'zipgrade';
               }
               if (s === 0) {
-                nameCropUrl = zgResolved.nameCropUrl;
+                nameCropUrl =
+                  cropPaperDetailsNameApellidoDataUrl(scanCanvas, 640) ??
+                  cropPaperDetailsNameApellidoDataUrl(workCanvas, 640) ??
+                  zgResolved.nameCropUrl;
               }
               if (sheetFormat === 'zipgrade') {
                 const zgWarp = warpZipGradeAnswerSheet(workCanvas);
                 let gradeCanvas = zgWarp.warped ?? workCanvas;
                 if (s === 0) {
-                  // Solo recortar Nombre|Apellido desde la hoja — nunca la página Paper Details (logo).
                   nameCropUrl =
+                    cropPaperDetailsNameApellidoDataUrl(scanCanvas, 640) ??
                     cropZipGradeNameFromSheetCanvas(gradeCanvas, 560) ??
                     cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
                     zgResolved.nameCropUrl;
@@ -4054,7 +4106,9 @@ export default function CalificarPage() {
                 if (read.studentId) studentId = read.studentId;
               }
               if (pdfFailed) continue;
-              await finishBatchItem(examLabel, merged, controlNumber, studentId, nameCropUrl);
+              await finishBatchItem(examLabel, merged, controlNumber, studentId, nameCropUrl, {
+                pctOverride: paperDetailsPct,
+              });
             }
             continue;
           }
@@ -5453,7 +5507,7 @@ export default function CalificarPage() {
                             src={row.nameCropUrl}
                             alt={`Nombre escrito (${row.fileName})`}
                             title={row.fileName}
-                            className="h-28 w-[28rem] max-w-full rounded border border-gray-200 bg-white object-contain object-left"
+                            className="max-h-24 w-[28rem] max-w-full rounded border border-gray-200 bg-white object-contain object-left object-top"
                           />
                         ) : (
                           <span className="max-w-[10rem] truncate text-xs text-gray-500" title={row.fileName}>

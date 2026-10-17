@@ -134,6 +134,54 @@ export async function canvasToJpegFile(
   return new File([blob], filename, { type: 'image/jpeg' });
 }
 
+/** Texto de una página PDF (servidor / pdf.js) para Paper Details ZipGrade. */
+export async function extractPdfPagePlainText(
+  file: File,
+  pageNumber: number,
+  opts?: { signal?: AbortSignal; timeoutMs?: number }
+): Promise<{ text: string; numPages: number }> {
+  if (typeof window === 'undefined') {
+    throw new Error('La extracción de texto PDF solo está disponible en el navegador');
+  }
+  if (file.size > PDF_GRADE_MAX_FILE_BYTES) {
+    throw new Error(
+      `El PDF supera el límite de ${Math.round(PDF_GRADE_MAX_FILE_BYTES / (1024 * 1024))} MB.`
+    );
+  }
+  const timeoutMs = opts?.timeoutMs ?? 25000;
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  opts?.signal?.addEventListener('abort', onAbort);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('page', String(pageNumber));
+    form.append('textOnly', '1');
+    const authHeaders = await dashboardAuthHeadersOnly();
+    const res = await fetch('/api/calificar/render-pdf-page', {
+      method: 'POST',
+      headers: authHeaders,
+      credentials: 'include',
+      body: form,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('Sesión expirada. Inicia sesión de nuevo.');
+      const err = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+      throw new Error(err?.message ?? err?.error ?? 'No se pudo leer el texto del PDF');
+    }
+    const data = (await res.json()) as { text?: string; numPages?: number };
+    return {
+      text: data.text ?? '',
+      numPages: Number(data.numPages ?? 0),
+    };
+  } finally {
+    window.clearTimeout(timeoutId);
+    opts?.signal?.removeEventListener('abort', onAbort);
+  }
+}
+
 async function fetchPdfPageCanvas(
   file: File,
   pageNumber: number,

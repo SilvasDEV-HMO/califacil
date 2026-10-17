@@ -4,6 +4,7 @@ import {
   PDF_GRADE_MAX_FILE_BYTES,
   PDF_OMR_RENDER_MAX_SIDE,
   countPdfPages,
+  extractPdfPageTextFromBuffer,
   renderPdfPageToJpeg,
 } from '@/lib/renderPdfPage.server';
 
@@ -44,6 +45,11 @@ export async function POST(request: NextRequest) {
     }
 
     const page = Math.max(1, Number(form.get('page')) || 1);
+
+    if (form.get('textOnly') === '1') {
+      const { text, numPages } = await extractPdfPageTextFromBuffer(buffer, page);
+      return NextResponse.json({ text, numPages, page });
+    }
     const maxSide = Math.min(
       2400,
       Math.max(800, Number(form.get('maxSide')) || PDF_OMR_RENDER_MAX_SIDE)

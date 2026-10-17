@@ -34,6 +34,41 @@ export async function countPdfPages(buffer: ArrayBuffer): Promise<number> {
   return numPages;
 }
 
+/** Texto de una página (para importar Paper Details de ZipGrade). */
+export async function extractPdfPageTextFromBuffer(
+  buffer: ArrayBuffer,
+  pageNumber: number
+): Promise<{ text: string; numPages: number }> {
+  const pdf = await loadPdfDocument(buffer);
+  const numPages = pdf.numPages;
+  if (pageNumber < 1 || pageNumber > numPages) {
+    pdf.destroy?.();
+    throw new Error('Página fuera de rango');
+  }
+  const page = await pdf.getPage(pageNumber);
+  const textContent = await page.getTextContent();
+  const chunks: string[] = [];
+  let currentLine = '';
+  for (const item of textContent.items as Array<{ str?: string; hasEOL?: boolean }>) {
+    const part = (item?.str ?? '').replace(/\s+/g, ' ').trim();
+    if (part) currentLine = `${currentLine} ${part}`.trim();
+    if (item?.hasEOL && currentLine) {
+      chunks.push(currentLine);
+      currentLine = '';
+    }
+  }
+  if (currentLine) chunks.push(currentLine);
+
+  // También una versión “plana” con todos los tokens (por si hasEOL falta)
+  const flat = (textContent.items as Array<{ str?: string }>)
+    .map((it) => (it?.str ?? '').trim())
+    .filter(Boolean)
+    .join(' ');
+  pdf.destroy?.();
+  const text = `${chunks.join('\n')}\n${flat}`.trim();
+  return { text, numPages };
+}
+
 export async function renderPdfPageToJpeg(
   buffer: ArrayBuffer,
   pageNumber: number,
