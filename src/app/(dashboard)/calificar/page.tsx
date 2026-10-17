@@ -19,13 +19,21 @@ import { useExam, useExams } from '@/hooks/useExams';
 import { downloadCalificacionCsv } from '@/lib/calificarExport';
 import {
   createPdfGradingHandle,
+  countPdfGradingPages,
   extractPdfPagePlainText,
   PDF_OMR_RENDER_MAX_SIDE,
   renderPdfGradingPageCanvas,
   type PdfGradingHandle,
 } from '@/lib/pdfClientPreview';
 import {
+  mapPool,
+  requestBatchWakeLock,
+  yieldForBatchUi,
+} from '@/lib/batchYield';
+import {
   cropPaperDetailsNameApellidoDataUrl,
+  isAdminCalifacilEmail,
+  looksLikeZipGradePaperDetailsText,
   mapPaperDetailsToMcDraft,
   parseZipGradePaperDetailsText,
   shouldImportZipGradePaperDetails,
@@ -514,17 +522,11 @@ function buildMcDraftFromChunk(
 }
 
 /**
- * Permite que React y el navegador pinten el spinner antes de trabajo pesado en el hilo principal;
- * si no, la animación CSS parece “congelada”.
+ * Cede el hilo para pintar el spinner sin congelarse al minimizar la pestaña.
+ * (Antes: doble rAF + 16ms → en background el navegador lo limita a ~1 fps.)
  */
 function yieldForSpinnerPaint(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        window.setTimeout(resolve, 16);
-      });
-    });
-  });
+  return yieldForBatchUi(true);
 }
 
 function countResolvedOmrPicks(picks: (number | null)[]): number {
@@ -3745,13 +3747,15 @@ export default function CalificarPage() {
     const pdfPseudo = (pageNumber: number) => pdfPaginaPseudoFile(pageNumber);
     const pagesPerExam = Math.max(1, totalSheets);
 
+    const wake = await requestBatchWakeLock();
     try {
       // Contar exámenes reales (páginas) antes de calificar — no usar el tope 800 como total.
       setLiveStatus(`Contando hojas en ${files.length} archivo(s)…`);
       await yieldForSpinnerPaint();
-      type PdfPrep = { numPages: number; firstCanvas: HTMLCanvasElement };
+      type PdfPrep = { numPages: number; firstCanvas?: HTMLCanvasElement; paperDetails?: boolean };
       const pdfPrepByIndex = new Map<number, PdfPrep>();
       let plannedExams = 0;
+      const adminPaperDetails = isAdminCalifacilEmail(user?.email);
       for (let i = 0; i < files.length; i++) {
         if (gen !== gradeReadGenRef.current) return;
         const file = files[i]!;
@@ -3761,19 +3765,32 @@ export default function CalificarPage() {
           plannedExams += 1;
           continue;
         }
-        setLiveStatus(`Contando hojas… ${i + 1}/${files.length} · ${file.name}`);
-        await yieldForSpinnerPaint();
+        // Actualizar estado solo cada archivo (y no bloquear con doble rAF en background).
+        if (i === 0 || i % 2 === 0 || !document.hidden) {
+          setLiveStatus(`Contando hojas… ${i + 1}/${files.length} · ${file.name}`);
+          await yieldForSpinnerPaint();
+        } else {
+          await yieldForBatchUi(false);
+        }
         try {
-          const first = await renderPdfGradingPageCanvas(file, 1, undefined, {
-            timeoutMs: 25000,
-          });
+          // Solo contar páginas (sin rasterizar) — el render se hace al calificar.
+          const numPages = await countPdfGradingPages(file, { timeoutMs: 20000 });
           if (gen !== gradeReadGenRef.current) return;
-          if (first.numPages < 1) continue;
-          pdfPrepByIndex.set(i, { numPages: first.numPages, firstCanvas: first.canvas });
+          if (numPages < 1) continue;
+          let paperDetails = false;
+          if (adminPaperDetails) {
+            try {
+              const probe = await extractPdfPagePlainText(file, 1, { timeoutMs: 20000 });
+              paperDetails = looksLikeZipGradePaperDetailsText(probe.text);
+            } catch {
+              paperDetails = false;
+            }
+          }
+          pdfPrepByIndex.set(i, { numPages, paperDetails });
           plannedExams +=
             pagesPerExam === 1
-              ? first.numPages
-              : Math.floor(first.numPages / pagesPerExam);
+              ? numPages
+              : Math.floor(numPages / pagesPerExam);
         } catch {
           /* se reporta al calificar */
         }
@@ -3852,17 +3869,30 @@ export default function CalificarPage() {
           if (isPdf) {
             let prep = pdfPrepByIndex.get(i);
             if (!prep) {
-              const first = await renderPdfGradingPageCanvas(file, 1, undefined, {
-                timeoutMs: 25000,
-              });
-              if (gen !== gradeReadGenRef.current) return;
-              if (first.numPages < 1) {
+              try {
+                const numPages = await countPdfGradingPages(file, { timeoutMs: 20000 });
+                if (gen !== gradeReadGenRef.current) return;
+                if (numPages < 1) {
+                  results.push({ fileName: label, ok: false, error: 'PDF sin páginas legibles' });
+                  continue;
+                }
+                let paperDetails = false;
+                if (adminPaperDetails) {
+                  try {
+                    const probe = await extractPdfPagePlainText(file, 1, { timeoutMs: 20000 });
+                    paperDetails = looksLikeZipGradePaperDetailsText(probe.text);
+                  } catch {
+                    paperDetails = false;
+                  }
+                }
+                prep = { numPages, paperDetails };
+                pdfPrepByIndex.set(i, prep);
+              } catch {
                 results.push({ fileName: label, ok: false, error: 'PDF sin páginas legibles' });
                 continue;
               }
-              prep = { numPages: first.numPages, firstCanvas: first.canvas };
             }
-            const { numPages, firstCanvas } = prep;
+            const { numPages } = prep;
             const remainingSlots = Math.max(0, FOLDER_BATCH_MAX_EXAMS - results.length);
             const maxExams =
               pagesPerExam === 1
@@ -3874,6 +3904,92 @@ export default function CalificarPage() {
                 ok: false,
                 error: 'Límite de lote alcanzado; sube el resto en otra tanda.',
               });
+              continue;
+            }
+
+            // Ruta rápida admin: texto + recorte nombre en paralelo (sin OMR).
+            if (prep.paperDetails && adminPaperDetails && pagesPerExam === 1) {
+              const pageNumbers = Array.from({ length: maxExams }, (_, k) => k + 1);
+              const NAME_RENDER_MAX_SIDE = 900;
+              const CONCURRENCY = document.hidden ? 4 : 3;
+              let statusTick = 0;
+              const pageOutcomes = await mapPool(pageNumbers, CONCURRENCY, async (p) => {
+                if (gen !== gradeReadGenRef.current) {
+                  return { p, aborted: true as const };
+                }
+                statusTick += 1;
+                if (statusTick === 1 || statusTick % 3 === 0 || !document.hidden) {
+                  setLiveStatus(
+                    `Calificando ${results.length + statusTick}/${batchExamTotal} · ${label} · p.${p}`
+                  );
+                  await yieldForBatchUi(false);
+                } else {
+                  await yieldForBatchUi(false);
+                }
+                try {
+                  const [textRes, canvasRes] = await Promise.all([
+                    extractPdfPagePlainText(file, p, { timeoutMs: 25000 }),
+                    renderPdfGradingPageCanvas(file, p, NAME_RENDER_MAX_SIDE, {
+                      timeoutMs: 25000,
+                    }),
+                  ]);
+                  if (gen !== gradeReadGenRef.current) {
+                    return { p, aborted: true as const };
+                  }
+                  const parsed = parseZipGradePaperDetailsText(textRes.text, questions.length);
+                  const nameCropUrl = cropPaperDetailsNameApellidoDataUrl(canvasRes.canvas, 640);
+                  if (!parsed.ok) {
+                    return {
+                      p,
+                      aborted: false as const,
+                      ok: false as const,
+                      nameCropUrl,
+                      error: 'No se pudo leer Percent / respuestas del PDF Paper Details',
+                    };
+                  }
+                  return {
+                    p,
+                    aborted: false as const,
+                    ok: true as const,
+                    nameCropUrl,
+                    merged: mapPaperDetailsToMcDraft(questions, parsed),
+                    pct: parsed.percent,
+                  };
+                } catch (err) {
+                  const message = err instanceof Error ? err.message : 'Error al leer página';
+                  return {
+                    p,
+                    aborted: false as const,
+                    ok: false as const,
+                    nameCropUrl: null as string | null,
+                    error: message.length < 120 ? message : 'No se pudo leer la página del PDF',
+                  };
+                }
+              });
+              if (gen !== gradeReadGenRef.current) return;
+              for (const out of pageOutcomes) {
+                if (out.aborted) return;
+                if (results.length >= FOLDER_BATCH_MAX_EXAMS) break;
+                const examLabel =
+                  numPages > 1 || files.length > 1 ? `${label} · p.${out.p}` : label;
+                if (!out.ok) {
+                  results.push({
+                    fileName: examLabel,
+                    ok: false,
+                    error: out.error,
+                    nameCropUrl: out.nameCropUrl ?? undefined,
+                  });
+                  continue;
+                }
+                await finishBatchItem(
+                  examLabel,
+                  out.merged,
+                  null,
+                  null,
+                  out.nameCropUrl,
+                  { pctOverride: out.pct }
+                );
+              }
               continue;
             }
 
@@ -3897,15 +4013,15 @@ export default function CalificarPage() {
               for (let s = 0; s < pagesPerExam; s++) {
                 const p = basePage + s;
                 sheetIndexRef.current = s;
-                setLiveStatus(
-                  `Calificando ${results.length + 1}/${batchExamTotal} · ${examLabel}`
-                );
-                await yieldForSpinnerPaint();
-                const raw =
-                  p === 1
-                    ? firstCanvas
-                    : (await renderPdfGradingPageCanvas(file, p, undefined, { timeoutMs: 25000 }))
-                        .canvas;
+                if (examIdx === 0 || examIdx % 2 === 0 || !document.hidden) {
+                  setLiveStatus(
+                    `Calificando ${results.length + 1}/${batchExamTotal} · ${examLabel}`
+                  );
+                }
+                await yieldForBatchUi(false);
+                const raw = (
+                  await renderPdfGradingPageCanvas(file, p, undefined, { timeoutMs: 25000 })
+                ).canvas;
                 if (gen !== gradeReadGenRef.current) return;
                 const scanCanvas = downscaleCanvasForOmrScan(raw, PDF_OMR_RENDER_MAX_SIDE) ?? raw;
 
@@ -4169,6 +4285,7 @@ export default function CalificarPage() {
         }
       }
     } finally {
+      void wake.release();
       sheetIndexRef.current = savedSheet;
       if (gen === gradeReadGenRef.current) {
         setScanBusy(false);

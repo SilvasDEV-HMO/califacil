@@ -31,6 +31,16 @@ export function isAdminCalifacilEmail(email: string | null | undefined): boolean
   return (email ?? '').trim().toLowerCase() === DESPEGUE_ADMIN_EMAIL;
 }
 
+/** Detecta Paper Details solo con texto (sin rasterizar). */
+export function looksLikeZipGradePaperDetailsText(text: string): boolean {
+  const t = text.toLowerCase();
+  if (t.includes('points earned') && t.includes('possible points')) return true;
+  if (t.includes('paper details') && (t.includes('percent') || t.includes('points earned'))) {
+    return true;
+  }
+  return /\bpri\b/i.test(text) && /\bstu\b/i.test(text) && /\bpercent\b/i.test(text);
+}
+
 /** Admin + página Paper Details → importar datos del PDF, no OMR. */
 export function shouldImportZipGradePaperDetails(
   email: string | null | undefined,

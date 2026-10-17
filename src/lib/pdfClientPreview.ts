@@ -91,11 +91,59 @@ export const PDF_OMR_RENDER_MAX_SIDE = 1600;
 export const PDF_GRADE_MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 function yieldToBrowser(): Promise<void> {
+  // No usar rAF: en pestaña oculta se congela / ralenta todo el lote.
   return new Promise((resolve) => {
-    window.requestAnimationFrame(() => {
-      window.setTimeout(resolve, 0);
-    });
+    if (typeof MessageChannel !== 'undefined') {
+      const { port1, port2 } = new MessageChannel();
+      port1.onmessage = () => resolve();
+      port2.postMessage(null);
+      return;
+    }
+    window.setTimeout(resolve, 0);
   });
+}
+
+/** Solo cuenta páginas (sin rasterizar) — mucho más rápido al preparar el lote. */
+export async function countPdfGradingPages(
+  file: File,
+  opts?: { signal?: AbortSignal; timeoutMs?: number }
+): Promise<number> {
+  if (typeof window === 'undefined') {
+    throw new Error('El conteo de PDF solo está disponible en el navegador');
+  }
+  if (file.size > PDF_GRADE_MAX_FILE_BYTES) {
+    throw new Error(
+      `El PDF supera el límite de ${Math.round(PDF_GRADE_MAX_FILE_BYTES / (1024 * 1024))} MB.`
+    );
+  }
+  const timeoutMs = opts?.timeoutMs ?? 20000;
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  opts?.signal?.addEventListener('abort', onAbort);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('metaOnly', '1');
+    const authHeaders = await dashboardAuthHeadersOnly();
+    const res = await fetch('/api/calificar/render-pdf-page', {
+      method: 'POST',
+      headers: authHeaders,
+      credentials: 'include',
+      body: form,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('Sesión expirada. Inicia sesión de nuevo.');
+      const err = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+      throw new Error(err?.message ?? err?.error ?? 'No se pudo leer el PDF');
+    }
+    const data = (await res.json()) as { numPages?: number };
+    return Math.max(0, Number(data.numPages ?? 0));
+  } finally {
+    window.clearTimeout(timeoutId);
+    opts?.signal?.removeEventListener('abort', onAbort);
+  }
 }
 
 async function jpegBlobToCanvas(blob: Blob): Promise<HTMLCanvasElement> {
