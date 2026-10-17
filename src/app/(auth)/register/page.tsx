@@ -168,6 +168,7 @@ export default function RegisterPage() {
                   </Label>
                   <Input
                     id="verificationCode"
+                    name="verificationCode"
                     type="text"
                     inputMode="numeric"
                     placeholder="Clave de 8 caracteres"
@@ -211,11 +212,13 @@ export default function RegisterPage() {
                     <User className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
                     <Input
                       id="name"
+                      name="name"
                       type="text"
                       placeholder="Juan Pérez"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       className="h-9 pl-9 text-base sm:h-10 sm:text-sm"
+                      autoComplete="name"
                       required
                     />
                   </div>
@@ -228,11 +231,13 @@ export default function RegisterPage() {
                     <Mail className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
                     <Input
                       id="email"
+                      name="email"
                       type="email"
                       placeholder="maestro@escuela.edu"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       className="h-9 pl-9 text-base sm:h-10 sm:text-sm"
+                      autoComplete="email"
                       required
                     />
                   </div>
@@ -245,11 +250,13 @@ export default function RegisterPage() {
                     <Lock className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
                     <Input
                       id="password"
+                      name="password"
                       type={showPassword ? 'text' : 'password'}
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       className="h-9 pl-9 pr-10 text-base sm:h-10 sm:text-sm"
+                      autoComplete="new-password"
                       required
                     />
                     <button
@@ -274,11 +281,13 @@ export default function RegisterPage() {
                     <Lock className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
                     <Input
                       id="confirmPassword"
+                      name="confirmPassword"
                       type={showConfirmPassword ? 'text' : 'password'}
                       placeholder="••••••••"
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       className="h-9 pl-9 pr-10 text-base sm:h-10 sm:text-sm"
+                      autoComplete="new-password"
                       required
                     />
                     <button

@@ -184,6 +184,7 @@ export default function LoginPage() {
                   <Mail className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
                   <Input
                     id="email"
+                    name="email"
                     type="email"
                     placeholder="maestro@escuela.edu"
                     value={email}
@@ -203,6 +204,7 @@ export default function LoginPage() {
                   <Lock className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 sm:h-4 sm:w-4" />
                   <Input
                     id="password"
+                    name="password"
                     type={showPassword ? 'text' : 'password'}
                     placeholder="••••••••"
                     value={password}

@@ -879,29 +879,25 @@ export default function CalificarPage() {
   }, []);
 
   const refreshCompletedExamIds = useCallback(async () => {
-    if (!examLocksEnabled) {
-      setCompletedExamIds(new Set());
-      return [] as string[];
-    }
     const ids = await listCalificarCompletedExamIds();
     setCompletedExamIds(new Set(ids));
     return ids;
-  }, [examLocksEnabled]);
+  }, []);
 
   useEffect(() => {
-    if (!examLocksEnabled || !user?.id) {
+    if (!user?.id) {
       setCompletedExamIds(new Set());
       return;
     }
     void refreshCompletedExamIds();
-  }, [examLocksEnabled, user?.id, refreshCompletedExamIds]);
+  }, [user?.id, refreshCompletedExamIds]);
 
   const publishedExams = useMemo(() => {
     const published = (exams as Exam[]).filter((e) => e.status === 'published');
-    // admin: ocultar exámenes ya calificados al 100% del grupo
-    if (!examLocksEnabled || completedExamIds.size === 0) return published;
+    // Ocultar exámenes ya calificados al 100% del grupo (todos los docentes).
+    if (completedExamIds.size === 0) return published;
     return published.filter((e) => !completedExamIds.has(e.id) || e.id === examId);
-  }, [exams, examLocksEnabled, completedExamIds, examId]);
+  }, [exams, completedExamIds, examId]);
 
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
   const virtualKeyMaps = useMemo(() => buildVirtualKeyMaps(virtualKey.rows), [virtualKey.rows]);
@@ -4457,7 +4453,7 @@ export default function CalificarPage() {
             : `Carpeta lista: ${saved} guardada(s), ${pending} sin alumno, ${failed} con error.`
         );
         // Si ya no quedan pendientes, comprobar si el grupo quedó 100% calificado.
-        if (pending === 0 && examLocksEnabled) {
+        if (pending === 0) {
           void (async () => {
             const ids = await listCalificarCompletedExamIds();
             setCompletedExamIds(new Set(ids));
@@ -4466,7 +4462,9 @@ export default function CalificarPage() {
               const held = heldExamLockRef.current;
               const clientId = calificarClientIdRef.current;
               heldExamLockRef.current = null;
-              if (held && clientId) await releaseCalificarExamLock(held, clientId);
+              if (examLocksEnabled && held && clientId) {
+                await releaseCalificarExamLock(held, clientId);
+              }
               setExamId('');
               resetFlow();
             }
@@ -4608,12 +4606,14 @@ export default function CalificarPage() {
   };
 
   const clearExamIfFullyGraded = useCallback(async () => {
-    if (!examLocksEnabled || !examId) return;
+    if (!examId) return;
     const ids = await refreshCompletedExamIds();
     if (!ids.includes(examId)) return;
     toast.success('Grupo calificado al completo. El examen ya no aparece en la lista.');
-    await releaseHeldExamLock();
-    heldExamLockRef.current = null;
+    if (examLocksEnabled) {
+      await releaseHeldExamLock();
+      heldExamLockRef.current = null;
+    }
     setExamId('');
     resetFlow();
   }, [examLocksEnabled, examId, refreshCompletedExamIds, releaseHeldExamLock, resetFlow]);
@@ -5917,6 +5917,8 @@ export default function CalificarPage() {
       {isMobile ? (
         <input
           ref={galleryInputRef}
+          id="calificar-gallery-mobile"
+          name="calificar-gallery"
           type="file"
           accept="image/*"
           className="sr-only"
@@ -5927,6 +5929,8 @@ export default function CalificarPage() {
         <>
           <input
             ref={galleryInputRef}
+            id="calificar-gallery"
+            name="calificar-gallery"
             type="file"
             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
             className="sr-only"
@@ -5935,6 +5939,8 @@ export default function CalificarPage() {
           />
           <input
             ref={pdfInputRef}
+            id="calificar-pdf"
+            name="calificar-pdf"
             type="file"
             accept=".pdf,application/pdf"
             multiple
@@ -5944,6 +5950,8 @@ export default function CalificarPage() {
           />
           <input
             ref={folderInputRef}
+            id="calificar-folder"
+            name="calificar-folder"
             type="file"
             multiple
             className="hidden"
@@ -5954,6 +5962,8 @@ export default function CalificarPage() {
           />
           <input
             ref={filesInputRef}
+            id="calificar-files"
+            name="calificar-files"
             type="file"
             multiple
             accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
@@ -6203,6 +6213,8 @@ export default function CalificarPage() {
                           <label className="flex cursor-pointer items-start gap-2 rounded-md px-1 py-1.5 hover:bg-orange-50">
                             <input
                               type="checkbox"
+                              id={`folder-file-${i}`}
+                              name={`folder-file-${i}`}
                               className="mt-1 h-4 w-4 accent-orange-600"
                               checked={folderFileChosen[i] !== false}
                               onChange={(ev) =>

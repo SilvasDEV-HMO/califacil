@@ -491,6 +491,8 @@ export default function ExamDetailPage() {
                 <div className="flex min-w-0 flex-col gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <Input
+                      id="exam-title"
+                      name="exam-title"
                       value={titleDraft}
                       onChange={(e) => setTitleDraft(e.target.value)}
                       className="h-9 max-w-md text-lg font-bold"
@@ -514,6 +516,8 @@ export default function ExamDetailPage() {
                     </Button>
                   </div>
                   <Input
+                    id="exam-description"
+                    name="exam-description"
                     value={descriptionDraft}
                     onChange={(e) => setDescriptionDraft(e.target.value)}
                     className="h-9 max-w-md"
@@ -765,6 +769,8 @@ export default function ExamDetailPage() {
                 <div className="space-y-2">
                   <Label>Valor (puntos)</Label>
                   <Input
+                    id="new-question-points"
+                    name="new-question-points"
                     type="number"
                     min="1"
                     step="1"
@@ -1019,6 +1025,8 @@ function QuestionCard({
                   <div className="space-y-1">
                     <Label className="text-xs text-gray-600">Valor (puntos)</Label>
                     <Input
+                      id="edit-question-points"
+                      name="edit-question-points"
                       type="number"
                       min="1"
                       step="1"

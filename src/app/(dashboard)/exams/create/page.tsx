@@ -507,6 +507,7 @@ export default function CreateExamPage() {
                 <Label htmlFor="title">Título del examen *</Label>
                 <Input
                   id="title"
+                  name="title"
                   placeholder="Ej: Examen de Matemáticas - Unidad 1"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
@@ -675,6 +676,8 @@ export default function CreateExamPage() {
                     <Label>Archivo PDF del examen *</Label>
                     <input
                       ref={pdfInputRef}
+                      id="exam-create-pdf"
+                      name="exam-pdf"
                       type="file"
                       accept=".pdf,application/pdf"
                       className="hidden"
@@ -951,6 +954,8 @@ export default function CreateExamPage() {
                                         {String.fromCharCode(65 + optIndex)}.
                                       </span>
                                       <Input
+                                        id={`question-${index}-option-${optIndex}`}
+                                        name={`question-${index}-option-${optIndex}`}
                                         value={option}
                                         placeholder={`Opción ${String.fromCharCode(65 + optIndex)}`}
                                         onChange={(e) => {
@@ -1046,6 +1051,8 @@ export default function CreateExamPage() {
                                 <div className="space-y-2">
                                   <Label>Respuesta esperada (opcional)</Label>
                                   <Input
+                                    id={`question-${index}-expected-answer`}
+                                    name={`question-${index}-expected-answer`}
                                     value={
                                       isWhiteboardCorrectAnswer(question.correct_answer)
                                         ? ''
@@ -1126,6 +1133,7 @@ export default function CreateExamPage() {
                             </Label>
                             <Input
                               id={`question-points-${index}`}
+                              name={`question-points-${index}`}
                               type="number"
                               min="1"
                               step="1"

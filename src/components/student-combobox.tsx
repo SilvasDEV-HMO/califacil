@@ -97,7 +97,8 @@ export function StudentCombobox({
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverAnchor asChild>
           <input
-            id={id}
+            id={id ?? 'student-combobox-search'}
+            name="student-search"
             disabled={disabled}
             value={open ? query : selectedLabel}
             placeholder={placeholder}

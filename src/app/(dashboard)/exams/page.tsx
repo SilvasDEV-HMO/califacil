@@ -333,6 +333,8 @@ export default function ExamsPage() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
           <Input
+            id="exams-search"
+            name="exams-search"
             placeholder={inSearchMode ? 'Buscando en todos los exámenes…' : 'Buscar en esta carpeta…'}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -447,6 +449,7 @@ export default function ExamsPage() {
             <Label htmlFor="folder-name">Nombre</Label>
             <Input
               id="folder-name"
+              name="folder-name"
               value={folderDialogName}
               onChange={(e) => setFolderDialogName(e.target.value)}
               placeholder="Ej. Física 1er parcial"

@@ -78,6 +78,7 @@ const CommandInput = React.forwardRef<
           className
         )}
         {...props}
+        name={props.name ?? "command-search"}
       />
     </div>
   )

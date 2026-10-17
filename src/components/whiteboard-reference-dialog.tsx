@@ -110,6 +110,7 @@ export function WhiteboardReferenceDialog({
           <div className="flex flex-col gap-2 sm:flex-row">
             <Input
               id="whiteboard-expected-text"
+              name="whiteboard-expected-text"
               value={expectedText}
               onChange={(e) => setExpectedText(e.target.value)}
               placeholder="Ej. √5, x=3, 2.5×10⁸"

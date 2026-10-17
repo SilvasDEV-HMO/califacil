@@ -226,6 +226,8 @@ export function CalificarMobileHome({
             <div className="shrink-0 space-y-2 border-b border-orange-100 bg-orange-50/60 px-4 py-3.5">
               <p className="text-center text-sm font-semibold text-gray-900">Elegir examen</p>
               <input
+                id="calificar-exam-search"
+                name="exam-search"
                 type="search"
                 value={examSearch}
                 onChange={(e) => setExamSearch(e.target.value)}

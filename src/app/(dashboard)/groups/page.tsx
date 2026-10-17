@@ -219,6 +219,7 @@ export default function GroupsPage() {
               <Label htmlFor="groupName">Nombre del grupo</Label>
               <Input
                 id="groupName"
+                name="groupName"
                 placeholder="Ej: 1º A, 2º B, etc."
                 value={newGroupName}
                 onChange={(e) => setNewGroupName(e.target.value)}
@@ -422,6 +423,8 @@ function StudentsManager({
         {/* Add Student */}
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input
+            id="new-student-name"
+            name="student-name"
             placeholder="Nombre del estudiante"
             value={newStudentName}
             onChange={(e) => setNewStudentName(e.target.value)}
@@ -465,6 +468,7 @@ function StudentsManager({
             </Label>
             <input
               id="studentImportUpload"
+              name="student-import"
               type="file"
               disabled={isReadingList}
               accept=".csv,.xlsx,.xls,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -481,6 +485,8 @@ function StudentsManager({
         <div className="relative">
           <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
           <Input
+            id="students-search"
+            name="students-search"
             placeholder="Buscar estudiante..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
