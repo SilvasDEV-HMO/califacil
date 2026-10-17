@@ -108,4 +108,13 @@ export async function listActiveCalificarExamLocks(): Promise<CalificarActiveLoc
   return payload.locks;
 }
 
+/** Exámenes con todos los alumnos del grupo ya calificados (ocultar en Calificar). */
+export async function listCalificarCompletedExamIds(): Promise<string[]> {
+  const { data, error } = await supabase.rpc('list_calificar_completed_exam_ids');
+  if (error) return [];
+  const payload = data as { ok?: boolean; exam_ids?: string[] | null } | null;
+  if (!payload?.ok || !Array.isArray(payload.exam_ids)) return [];
+  return payload.exam_ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
 export { HEARTBEAT_MS, LIST_POLL_MS };

@@ -36,6 +36,7 @@ import {
   HEARTBEAT_MS,
   heartbeatCalificarExamLock,
   listActiveCalificarExamLocks,
+  listCalificarCompletedExamIds,
   LIST_POLL_MS,
   releaseCalificarExamLock,
 } from '@/lib/calificarExamLock';
@@ -859,11 +860,6 @@ export default function CalificarPage() {
     ) => Promise<{ success: boolean; chunkDraft?: Record<string, string> }>
   >(async () => ({ success: false }));
 
-  const publishedExams = useMemo(
-    () => (exams as Exam[]).filter((e) => e.status === 'published'),
-    [exams]
-  );
-
   const questions = useMemo(() => exam?.questions ?? [], [exam]);
   const omrQuestions = useMemo(() => getCalifacilOmrSheetQuestions(questions), [questions]);
   const omrCols = califacilOmrColumnCount(questions);
@@ -874,12 +870,39 @@ export default function CalificarPage() {
   const calificarClientIdRef = useRef<string>('');
   const heldExamLockRef = useRef<string | null>(null);
   const [lockedByOthers, setLockedByOthers] = useState<ReadonlySet<string>>(() => new Set());
+  const [completedExamIds, setCompletedExamIds] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
     if (!calificarClientIdRef.current) {
       calificarClientIdRef.current = getOrCreateCalificarClientId();
     }
   }, []);
+
+  const refreshCompletedExamIds = useCallback(async () => {
+    if (!examLocksEnabled) {
+      setCompletedExamIds(new Set());
+      return [] as string[];
+    }
+    const ids = await listCalificarCompletedExamIds();
+    setCompletedExamIds(new Set(ids));
+    return ids;
+  }, [examLocksEnabled]);
+
+  useEffect(() => {
+    if (!examLocksEnabled || !user?.id) {
+      setCompletedExamIds(new Set());
+      return;
+    }
+    void refreshCompletedExamIds();
+  }, [examLocksEnabled, user?.id, refreshCompletedExamIds]);
+
+  const publishedExams = useMemo(() => {
+    const published = (exams as Exam[]).filter((e) => e.status === 'published');
+    // admin: ocultar exámenes ya calificados al 100% del grupo
+    if (!examLocksEnabled || completedExamIds.size === 0) return published;
+    return published.filter((e) => !completedExamIds.has(e.id) || e.id === examId);
+  }, [exams, examLocksEnabled, completedExamIds, examId]);
+
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
   const virtualKeyMaps = useMemo(() => buildVirtualKeyMaps(virtualKey.rows), [virtualKey.rows]);
   const examVirtualKeyByQuestionId = virtualKeyMaps.byQuestionId;
@@ -4433,6 +4456,22 @@ export default function CalificarPage() {
             ? `Carpeta lista: ${saved} calificación(es) guardada(s).`
             : `Carpeta lista: ${saved} guardada(s), ${pending} sin alumno, ${failed} con error.`
         );
+        // Si ya no quedan pendientes, comprobar si el grupo quedó 100% calificado.
+        if (pending === 0 && examLocksEnabled) {
+          void (async () => {
+            const ids = await listCalificarCompletedExamIds();
+            setCompletedExamIds(new Set(ids));
+            if (examId && ids.includes(examId)) {
+              toast.success('Grupo calificado al completo. El examen ya no aparece en la lista.');
+              const held = heldExamLockRef.current;
+              const clientId = calificarClientIdRef.current;
+              heldExamLockRef.current = null;
+              if (held && clientId) await releaseCalificarExamLock(held, clientId);
+              setExamId('');
+              resetFlow();
+            }
+          })();
+        }
       }
     }
   };
@@ -4568,6 +4607,17 @@ export default function CalificarPage() {
     });
   };
 
+  const clearExamIfFullyGraded = useCallback(async () => {
+    if (!examLocksEnabled || !examId) return;
+    const ids = await refreshCompletedExamIds();
+    if (!ids.includes(examId)) return;
+    toast.success('Grupo calificado al completo. El examen ya no aparece en la lista.');
+    await releaseHeldExamLock();
+    heldExamLockRef.current = null;
+    setExamId('');
+    resetFlow();
+  }, [examLocksEnabled, examId, refreshCompletedExamIds, releaseHeldExamLock, resetFlow]);
+
   const savePendingBatchStudents = async () => {
     const rows = batchSummary ?? [];
     const pending = rows
@@ -4575,6 +4625,7 @@ export default function CalificarPage() {
       .filter(({ row }) => row.pendingStudent && row.mergedDraft);
     if (pending.length === 0) {
       setBatchSummary(null);
+      void clearExamIfFullyGraded();
       return;
     }
     const missing = pending.filter(({ row }) => !row.selectedStudentId);
@@ -4599,6 +4650,7 @@ export default function CalificarPage() {
       }
       toast.success('Resultados guardados.');
       setBatchSummary(null);
+      await clearExamIfFullyGraded();
     } catch {
       toast.error('No se pudieron guardar todas las hojas.');
     } finally {
