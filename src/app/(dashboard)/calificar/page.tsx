@@ -263,7 +263,8 @@ type BatchGradeItem = {
   selectedStudentId?: string;
 };
 
-const FOLDER_BATCH_MAX_FILES = 80;
+/** Límite de exámenes (archivos o páginas de PDF) por lote en escritorio. */
+const FOLDER_BATCH_MAX_FILES = 200;
 
 function isDesktopFolderGradeFile(file: File): boolean {
   const name = file.name.toLowerCase();
@@ -2613,11 +2614,17 @@ export default function CalificarPage() {
   };
 
   const handlePdfFile = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const list = e.target.files;
     e.target.value = '';
-    if (!file) return;
+    if (!list || list.length === 0) return;
     setDesktopScanKind('pdf');
-    await ingestDesktopPdfFile(file);
+    const files = Array.from(list);
+    // Examen multi-hoja + un solo PDF: flujo página a página. Resto → lote.
+    if (files.length === 1 && totalSheets > 1) {
+      await ingestDesktopPdfFile(files[0]!);
+      return;
+    }
+    await ingestPickedDesktopFiles(files);
   };
 
   const startLiveCamera = useCallback(async (opts?: { skipPhaseGuard?: boolean }): Promise<boolean> => {
@@ -3754,10 +3761,47 @@ export default function CalificarPage() {
         try {
           const isPdf =
             file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-          const merged: Record<string, string> = {};
-          let controlNumber: string | null = null;
-          let studentId: string | null = null;
-          let nameCropUrl: string | null = null;
+
+          const finishBatchItem = async (
+            examLabel: string,
+            merged: Record<string, string>,
+            controlNumber: string | null,
+            studentId: string | null,
+            nameCropUrl: string | null
+          ) => {
+            let sid = studentId;
+            if (!sid && controlNumber) {
+              sid = findStudentByControlNumber(sortedStudents, controlNumber)?.id ?? null;
+            }
+            let student = sid
+              ? sortedStudents.find((s) => s.id === sid) ?? null
+              : findStudentByControlNumber(sortedStudents, controlNumber);
+            if (!student) {
+              student = matchStudentFromScanFileName(examLabel, sortedStudents);
+              if (student) sid = student.id;
+            }
+            const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
+            if (!student) {
+              results.push({
+                fileName: examLabel,
+                ok: false,
+                pendingStudent: true,
+                mergedDraft: { ...merged },
+                pct: previewStats.pct,
+                nameCropUrl,
+                error: 'Elige al alumno para guardar',
+              });
+              return;
+            }
+            const stats = await persistStudentAnswers(merged, student.id);
+            results.push({
+              fileName: examLabel,
+              ok: true,
+              studentName: student.name,
+              pct: stats.pct,
+              nameCropUrl,
+            });
+          };
 
           if (isPdf) {
             const first = await renderPdfGradingPageCanvas(file, 1, undefined, {
@@ -3768,245 +3812,258 @@ export default function CalificarPage() {
               results.push({ fileName: label, ok: false, error: 'PDF sin páginas legibles' });
               continue;
             }
-            const pageCount = Math.min(first.numPages, Math.max(1, totalSheets));
-            let pdfFailed = false;
-            for (let p = 1; p <= pageCount; p++) {
-              sheetIndexRef.current = p - 1;
-              const raw =
-                p === 1
-                  ? first.canvas
-                  : (await renderPdfGradingPageCanvas(file, p, undefined, { timeoutMs: 25000 }))
-                      .canvas;
+            const pagesPerExam = Math.max(1, totalSheets);
+            const remainingSlots = Math.max(0, FOLDER_BATCH_MAX_FILES - results.length);
+            const maxExams =
+              pagesPerExam === 1
+                ? Math.min(first.numPages, remainingSlots)
+                : Math.min(Math.floor(first.numPages / pagesPerExam), remainingSlots);
+            if (maxExams < 1) {
+              results.push({
+                fileName: label,
+                ok: false,
+                error: 'Límite de lote alcanzado; sube el resto en otra tanda.',
+              });
+              continue;
+            }
+            if (first.numPages > maxExams * pagesPerExam) {
+              toast.message(
+                `${label}: ${first.numPages} páginas → se califican ${maxExams} examen(es) en este lote.`
+              );
+            }
+
+            for (let examIdx = 0; examIdx < maxExams; examIdx++) {
               if (gen !== gradeReadGenRef.current) return;
-              const scanCanvas = downscaleCanvasForOmrScan(raw, PDF_OMR_RENDER_MAX_SIDE) ?? raw;
-              if (
-                isCustom20Exam(user?.email, exam?.title, questions) ||
-                isLenguaje45Exam(user?.email, exam?.title, questions)
-              ) {
-                if (p === 1) {
-                  const idCrop = isLenguaje45Exam(user?.email, exam?.title, questions)
-                    ? cropLenguajeHandwrittenId(scanCanvas)
-                    : cropCustom20HandwrittenId(scanCanvas);
-                  nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
-                }
-                const read = await finalizeCapturedSheet(scanCanvas, pdfPseudo(p), {
-                  skipReviewUi: true,
-                  silentBatch: true,
-                  skipSheetValidation: true,
-                  uploadKind: 'pdf',
-                  displaySource: scanCanvas,
-                });
-                if (!read.success || !read.chunkDraft) {
-                  results.push({
-                    fileName: label,
-                    ok: false,
-                    error: p > 1 ? `No se leyó la página ${p}` : 'No se pudo leer la hoja',
+              const merged: Record<string, string> = {};
+              let controlNumber: string | null = null;
+              let studentId: string | null = null;
+              let nameCropUrl: string | null = null;
+              let pdfFailed = false;
+              const basePage = examIdx * pagesPerExam + 1;
+              const examLabel =
+                first.numPages > pagesPerExam || files.length > 1
+                  ? pagesPerExam === 1
+                    ? `${label} · p.${basePage}`
+                    : `${label} · p.${basePage}-${basePage + pagesPerExam - 1}`
+                  : label;
+
+              for (let s = 0; s < pagesPerExam; s++) {
+                const p = basePage + s;
+                sheetIndexRef.current = s;
+                setLiveStatus(
+                  `Calificando ${results.length + 1}/${FOLDER_BATCH_MAX_FILES} · ${examLabel}`
+                );
+                await yieldForSpinnerPaint();
+                const raw =
+                  p === 1
+                    ? first.canvas
+                    : (await renderPdfGradingPageCanvas(file, p, undefined, { timeoutMs: 25000 }))
+                        .canvas;
+                if (gen !== gradeReadGenRef.current) return;
+                const scanCanvas = downscaleCanvasForOmrScan(raw, PDF_OMR_RENDER_MAX_SIDE) ?? raw;
+                if (
+                  isCustom20Exam(user?.email, exam?.title, questions) ||
+                  isLenguaje45Exam(user?.email, exam?.title, questions)
+                ) {
+                  if (s === 0) {
+                    const idCrop = isLenguaje45Exam(user?.email, exam?.title, questions)
+                      ? cropLenguajeHandwrittenId(scanCanvas)
+                      : cropCustom20HandwrittenId(scanCanvas);
+                    nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                  }
+                  const read = await finalizeCapturedSheet(scanCanvas, pdfPseudo(p), {
+                    skipReviewUi: true,
+                    silentBatch: true,
+                    skipSheetValidation: true,
+                    uploadKind: 'pdf',
+                    displaySource: scanCanvas,
                   });
-                  pdfFailed = true;
-                  break;
+                  if (!read.success || !read.chunkDraft) {
+                    results.push({
+                      fileName: examLabel,
+                      ok: false,
+                      error: s > 0 ? `No se leyó la página ${p}` : 'No se pudo leer la hoja',
+                      nameCropUrl: nameCropUrl ?? undefined,
+                    });
+                    pdfFailed = true;
+                    break;
+                  }
+                  Object.assign(merged, read.chunkDraft);
+                  if (read.controlNumber) controlNumber = read.controlNumber ?? controlNumber;
+                  if (read.studentId) studentId = read.studentId;
+                  continue;
                 }
-                Object.assign(merged, read.chunkDraft);
-                if (read.controlNumber) controlNumber = read.controlNumber ?? controlNumber;
-                if (read.studentId) studentId = read.studentId;
-                continue;
-              }
-              let workCanvas = scanCanvas;
-              let sheetFormat = classifyAnswerSheetFormat(workCanvas);
-              if (sheetFormat === 'unknown') {
-                const embedded = extractEmbeddedZipGradeSheet(scanCanvas);
-                if (embedded) {
-                  workCanvas = embedded;
-                  sheetFormat =
-                    classifyAnswerSheetFormat(embedded) === 'califacil'
-                      ? 'califacil'
-                      : 'zipgrade';
+                let workCanvas = scanCanvas;
+                let sheetFormat = classifyAnswerSheetFormat(workCanvas);
+                if (sheetFormat === 'unknown') {
+                  const embedded = extractEmbeddedZipGradeSheet(scanCanvas);
+                  if (embedded) {
+                    workCanvas = embedded;
+                    sheetFormat =
+                      classifyAnswerSheetFormat(embedded) === 'califacil'
+                        ? 'califacil'
+                        : 'zipgrade';
+                  }
                 }
-              }
-              if (p === 1) {
-                nameCropUrl =
-                  cropZipGradeNameSnippetDataUrl(workCanvas, 560) ??
-                  cropZipGradeNameSnippetDataUrl(scanCanvas, 560);
-              }
-              if (sheetFormat === 'zipgrade') {
-                const zgWarp = warpZipGradeAnswerSheet(workCanvas);
-                const gradeCanvas = zgWarp.warped ?? workCanvas;
-                if (p === 1) {
+                if (s === 0) {
                   nameCropUrl =
-                    cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
-                    nameCropUrl ??
+                    cropZipGradeNameSnippetDataUrl(workCanvas, 560) ??
                     cropZipGradeNameSnippetDataUrl(scanCanvas, 560);
                 }
-                const chunk = sheets[sheetIndexRef.current] ?? [];
-                const chunkRows = chunk.length;
-                const zgScan =
-                  chunkRows > 0
-                    ? scanZipGradeAnswerSheet(gradeCanvas, omrCols, chunkRows)
-                    : null;
-                const readingOverride =
-                  zgScan && chunkRows > 0
-                    ? buildCalifacilOmrReadingOverride(
-                        {
-                          picks: zgScan.picks,
-                          rows: Array.from({ length: chunkRows }, () => ({
-                            pick: null as number | null,
-                            ambiguous: false,
-                            inkFractions: [] as number[],
-                          })),
-                          needsVisionAssist: false,
-                          maxSameColumnCount: 0,
-                          geometry: zgScan.geometry,
-                          reviewSourceCanvas: gradeCanvas,
-                          controlNumberDigits: [],
-                          controlNumber: null,
-                        },
-                        chunk,
-                        gradeCanvas,
-                        liveLockedAnswersRef.current,
-                        zgWarp.alignment
-                      )
-                    : undefined;
-                const read = await finalizeCapturedSheet(gradeCanvas, pdfPseudo(p), {
-                  skipReviewUi: true,
-                  silentBatch: true,
-                  skipSheetValidation: true,
-                  uploadKind: 'pdf',
-                  displaySource: gradeCanvas,
-                  preWarped: Boolean(zgWarp.warped),
-                  warpAlignment: zgWarp.alignment,
-                  readingOverride,
-                });
-                if (!read.success || !read.chunkDraft) {
+                if (sheetFormat === 'zipgrade') {
+                  const zgWarp = warpZipGradeAnswerSheet(workCanvas);
+                  const gradeCanvas = zgWarp.warped ?? workCanvas;
+                  if (s === 0) {
+                    nameCropUrl =
+                      cropZipGradeNameSnippetDataUrl(gradeCanvas, 560) ??
+                      nameCropUrl ??
+                      cropZipGradeNameSnippetDataUrl(scanCanvas, 560);
+                  }
+                  const chunk = sheets[sheetIndexRef.current] ?? [];
+                  const chunkRows = chunk.length;
+                  const zgScan =
+                    chunkRows > 0
+                      ? scanZipGradeAnswerSheet(gradeCanvas, omrCols, chunkRows)
+                      : null;
+                  const readingOverride =
+                    zgScan && chunkRows > 0
+                      ? buildCalifacilOmrReadingOverride(
+                          {
+                            picks: zgScan.picks,
+                            rows: Array.from({ length: chunkRows }, () => ({
+                              pick: null as number | null,
+                              ambiguous: false,
+                              inkFractions: [] as number[],
+                            })),
+                            needsVisionAssist: false,
+                            maxSameColumnCount: 0,
+                            geometry: zgScan.geometry,
+                            reviewSourceCanvas: gradeCanvas,
+                            controlNumberDigits: [],
+                            controlNumber: null,
+                          },
+                          chunk,
+                          gradeCanvas,
+                          liveLockedAnswersRef.current,
+                          zgWarp.alignment
+                        )
+                      : undefined;
+                  const read = await finalizeCapturedSheet(gradeCanvas, pdfPseudo(p), {
+                    skipReviewUi: true,
+                    silentBatch: true,
+                    skipSheetValidation: true,
+                    uploadKind: 'pdf',
+                    displaySource: gradeCanvas,
+                    preWarped: Boolean(zgWarp.warped),
+                    warpAlignment: zgWarp.alignment,
+                    readingOverride,
+                  });
+                  if (!read.success || !read.chunkDraft) {
+                    results.push({
+                      fileName: examLabel,
+                      ok: false,
+                      error: s > 0 ? `No se leyó la página ${p}` : 'No se pudo leer la hoja',
+                      nameCropUrl: nameCropUrl ?? undefined,
+                    });
+                    pdfFailed = true;
+                    break;
+                  }
+                  Object.assign(merged, read.chunkDraft);
+                  if (read.controlNumber) controlNumber = read.controlNumber ?? controlNumber;
+                  if (read.studentId) studentId = read.studentId;
+                  continue;
+                }
+                const canonical = prepareCanonicalCalifacilLetterCanvas(workCanvas, { fast: true });
+                if (!canonical) {
+                  if (s === 0 && !nameCropUrl) {
+                    nameCropUrl =
+                      cropZipGradeNameSnippetDataUrl(scanCanvas, 560) ??
+                      cropAnswerSheetNameSnippetDataUrl(scanCanvas, 420);
+                  }
                   results.push({
-                    fileName: label,
+                    fileName: examLabel,
                     ok: false,
-                    error: p > 1 ? `No se leyó la página ${p}` : 'No se pudo leer la hoja',
+                    error:
+                      s > 0
+                        ? `Página ${p}: no se ven los 4 cuadritos negros`
+                        : 'No se ven los 4 cuadritos negros de las esquinas',
                     nameCropUrl: nameCropUrl ?? undefined,
                   });
                   pdfFailed = true;
                   break;
                 }
+                if (s === 0) {
+                  nameCropUrl =
+                    cropAnswerSheetNameSnippetDataUrl(canonical.canvas, 420) ??
+                    cropZipGradeNameSnippetDataUrl(canonical.canvas, 560);
+                }
+                const read = await finalizeCapturedSheet(canonical.canvas, pdfPseudo(p), {
+                  skipReviewUi: true,
+                  silentBatch: true,
+                  skipSheetValidation: true,
+                  uploadKind: 'pdf',
+                  displaySource: canonical.canvas,
+                  preWarped: true,
+                  warpAlignment: canonical.alignment,
+                });
+                if (!read.success || !read.chunkDraft) {
+                  results.push({
+                    fileName: examLabel,
+                    ok: false,
+                    error: s > 0 ? `No se leyó la página ${p}` : 'No se pudo leer la hoja',
+                  });
+                  pdfFailed = true;
+                  break;
+                }
                 Object.assign(merged, read.chunkDraft);
                 if (read.controlNumber) controlNumber = read.controlNumber ?? controlNumber;
                 if (read.studentId) studentId = read.studentId;
-                continue;
               }
-              const canonical = prepareCanonicalCalifacilLetterCanvas(workCanvas, { fast: true });
-              if (!canonical) {
-                if (p === 1 && !nameCropUrl) {
-                  nameCropUrl =
-                    cropZipGradeNameSnippetDataUrl(scanCanvas, 560) ??
-                    cropAnswerSheetNameSnippetDataUrl(scanCanvas, 420);
-                }
-                results.push({
-                  fileName: label,
-                  ok: false,
-                  error:
-                    p > 1
-                      ? `Página ${p}: no se ven los 4 cuadritos negros`
-                      : 'No se ven los 4 cuadritos negros de las esquinas',
-                  nameCropUrl: nameCropUrl ?? undefined,
-                });
-                pdfFailed = true;
-                break;
-              }
-              if (p === 1) {
-                nameCropUrl =
-                  cropAnswerSheetNameSnippetDataUrl(canonical.canvas, 420) ??
-                  cropZipGradeNameSnippetDataUrl(canonical.canvas, 560);
-              }
-              const read = await finalizeCapturedSheet(canonical.canvas, pdfPseudo(p), {
-                skipReviewUi: true,
-                silentBatch: true,
-                skipSheetValidation: true,
-                uploadKind: 'pdf',
-                displaySource: canonical.canvas,
-                preWarped: true,
-                warpAlignment: canonical.alignment,
-              });
-              if (!read.success || !read.chunkDraft) {
-                results.push({
-                  fileName: label,
-                  ok: false,
-                  error: p > 1 ? `No se leyó la página ${p}` : 'No se pudo leer la hoja',
-                });
-                pdfFailed = true;
-                break;
-              }
-              Object.assign(merged, read.chunkDraft);
-              if (read.controlNumber) controlNumber = read.controlNumber ?? controlNumber;
-              if (read.studentId) studentId = read.studentId;
+              if (pdfFailed) continue;
+              await finishBatchItem(examLabel, merged, controlNumber, studentId, nameCropUrl);
             }
-            if (pdfFailed) continue;
-          } else {
-            sheetIndexRef.current = 0;
-            const img = await fileToImage(file);
-            if (gen !== gradeReadGenRef.current) return;
-            const rawCanvas = prepareCalifacilScanInput(img, { useGuideCrop: false });
-            if (rawCanvas) {
-              if (
-                isCustom20Exam(user?.email, exam?.title, questions) ||
-                isLenguaje45Exam(user?.email, exam?.title, questions)
-              ) {
-                const idCrop = isLenguaje45Exam(user?.email, exam?.title, questions)
-                  ? cropLenguajeHandwrittenId(rawCanvas)
-                  : cropCustom20HandwrittenId(rawCanvas);
-                nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
-              } else {
-                const canonical = prepareCanonicalCalifacilLetterCanvas(rawCanvas, {
-                  fast: true,
-                  forceWarp: true,
-                });
-                nameCropUrl = cropAnswerSheetNameSnippetDataUrl(
-                  canonical?.canvas ?? rawCanvas,
-                  420
-                );
-              }
-            }
-            const read = await finalizeCapturedSheet(img, file, {
-              skipReviewUi: true,
-              silentBatch: true,
-            });
-            if (!read.success || !read.chunkDraft) {
-              results.push({ fileName: label, ok: false, error: 'No se pudo leer la hoja' });
-              continue;
-            }
-            Object.assign(merged, read.chunkDraft);
-            controlNumber = read.controlNumber ?? null;
-            studentId = read.studentId ?? null;
-          }
-
-          if (!studentId && controlNumber) {
-            studentId = findStudentByControlNumber(sortedStudents, controlNumber)?.id ?? null;
-          }
-          let student = studentId
-            ? sortedStudents.find((s) => s.id === studentId) ?? null
-            : findStudentByControlNumber(sortedStudents, controlNumber);
-          if (!student) {
-            student = matchStudentFromScanFileName(label, sortedStudents);
-            if (student) studentId = student.id;
-          }
-          const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
-          if (!student) {
-            results.push({
-              fileName: label,
-              ok: false,
-              pendingStudent: true,
-              mergedDraft: { ...merged },
-              pct: previewStats.pct,
-              nameCropUrl,
-              error: 'Elige al alumno para guardar',
-            });
             continue;
           }
 
-          const stats = await persistStudentAnswers(merged, student.id);
-          results.push({
-            fileName: label,
-            ok: true,
-            studentName: student.name,
-            pct: stats.pct,
-            nameCropUrl,
+          const merged: Record<string, string> = {};
+          let controlNumber: string | null = null;
+          let studentId: string | null = null;
+          let nameCropUrl: string | null = null;
+          sheetIndexRef.current = 0;
+          const img = await fileToImage(file);
+          if (gen !== gradeReadGenRef.current) return;
+          const rawCanvas = prepareCalifacilScanInput(img, { useGuideCrop: false });
+          if (rawCanvas) {
+            if (
+              isCustom20Exam(user?.email, exam?.title, questions) ||
+              isLenguaje45Exam(user?.email, exam?.title, questions)
+            ) {
+              const idCrop = isLenguaje45Exam(user?.email, exam?.title, questions)
+                ? cropLenguajeHandwrittenId(rawCanvas)
+                : cropCustom20HandwrittenId(rawCanvas);
+              nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+            } else {
+              const canonical = prepareCanonicalCalifacilLetterCanvas(rawCanvas, {
+                fast: true,
+                forceWarp: true,
+              });
+              nameCropUrl =
+                cropAnswerSheetNameSnippetDataUrl(canonical?.canvas ?? rawCanvas, 420) ??
+                cropZipGradeNameSnippetDataUrl(rawCanvas, 560);
+            }
+          }
+          const read = await finalizeCapturedSheet(img, file, {
+            skipReviewUi: true,
+            silentBatch: true,
           });
+          if (!read.success || !read.chunkDraft) {
+            results.push({ fileName: label, ok: false, error: 'No se pudo leer la hoja' });
+            continue;
+          }
+          Object.assign(merged, read.chunkDraft);
+          controlNumber = read.controlNumber ?? null;
+          studentId = read.studentId ?? null;
+          await finishBatchItem(label, merged, controlNumber, studentId, nameCropUrl);
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Error al calificar';
           results.push({
@@ -4088,13 +4145,16 @@ export default function CalificarPage() {
 
   const ingestPickedDesktopFiles = async (picked: File[]) => {
     const all = picked.filter(isDesktopFolderGradeFile);
-    if (all.length === 1) {
-      const file = all[0]!;
-      if (isPdfGradeFile(file)) await ingestDesktopPdfFile(file);
-      else await ingestDesktopImageFile(file);
+    if (all.length === 0) {
+      toast.error('Elige PDF o imágenes (JPG/PNG) para calificar.');
       return;
     }
-    await gradeDesktopFolderFiles(picked);
+    // Una sola imagen → flujo interactivo. PDF(s) o varios archivos → lote.
+    if (all.length === 1 && !isPdfGradeFile(all[0]!)) {
+      await ingestDesktopImageFile(all[0]!);
+      return;
+    }
+    await gradeDesktopFolderFiles(all);
   };
 
   const persistPendingBatchStudent = async (rowIndex: number, studentId: string) => {
@@ -5499,6 +5559,7 @@ export default function CalificarPage() {
             ref={pdfInputRef}
             type="file"
             accept=".pdf,application/pdf"
+            multiple
             className="sr-only"
             aria-hidden
             onChange={handlePdfFile}
@@ -5535,7 +5596,7 @@ export default function CalificarPage() {
         <p className="mt-0.5 text-xs text-gray-600 sm:mt-1 sm:text-sm">
           {isMobile
             ? 'Cámara a pantalla completa: encuadra toda la hoja impresa. Captura automática al detectar respuestas, o pulsa el botón naranja.'
-            : 'En ordenador sube PDF escaneados, una carpeta (y eliges qué archivos), o archivos sueltos.'}
+            : 'En ordenador sube uno o varios PDF (o una carpeta / archivos sueltos).'}
         </p>
       </div>
 
@@ -5632,28 +5693,30 @@ export default function CalificarPage() {
               {!isMobile && exam && supportsCalifacil && canGradeStudents && phase === 'elegir' && (
                 <div className="space-y-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-4">
                   <p className="text-sm text-gray-700">
-                    Sube el escaneo de la hoja de respuestas en <strong>PDF</strong> (una
-                    página por hoja del examen), o elige una <strong>carpeta</strong> con
-                    todos los PDF para calificarlos de un tiro.
+                    Sube <strong>uno o varios PDF</strong> (Ctrl/Cmd + clic para marcar varios).
+                    Si un PDF trae muchas páginas y el examen es de una hoja, cada página se
+                    califica como un examen distinto.
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <Button
                       type="button"
-                      variant="outline"
-                      className="border-orange-300 text-orange-900 hover:bg-orange-50"
-                      disabled={scanBusy}
+                      className="bg-orange-600 hover:bg-orange-700"
+                      disabled={scanBusy || !canGradeStudents}
                       onClick={() => pdfInputRef.current?.click()}
                     >
-                      {scanBusy && desktopScanKind === 'pdf' ? (
+                      {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder') ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
                       ) : (
                         <FileUp className="mr-2 h-4 w-4" aria-hidden />
                       )}
-                      {scanBusy && desktopScanKind === 'pdf' ? 'Calificando examen…' : 'Subir PDF…'}
+                      {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder')
+                        ? 'Calificando…'
+                        : 'Subir PDF…'}
                     </Button>
                     <Button
                       type="button"
-                      className="bg-orange-600 hover:bg-orange-700"
+                      variant="outline"
+                      className="border-orange-300 text-orange-900 hover:bg-orange-50"
                       disabled={scanBusy || !canGradeStudents}
                       onClick={() => void pickGradeFolder()}
                     >
@@ -5662,9 +5725,7 @@ export default function CalificarPage() {
                       ) : (
                         <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
                       )}
-                      {scanBusy && desktopScanKind === 'folder'
-                        ? 'Calificando carpeta…'
-                        : 'Elegir carpeta…'}
+                      Elegir carpeta…
                     </Button>
                     <Button
                       type="button"
@@ -5678,8 +5739,8 @@ export default function CalificarPage() {
                     </Button>
                   </div>
                   <p className="text-[11px] text-gray-500">
-                    Carpeta: eliges la carpeta y luego qué PDF (o JPG/PNG) calificar. Archivos:
-                    entras a la carpeta y marcas los exámenes en el explorador.
+                    En el explorador puedes seleccionar varios PDF a la vez. También puedes usar
+                    carpeta o archivos sueltos (PDF/JPG/PNG).
                   </p>
                   {scanBusy && liveStatus ? (
                     <p className="text-xs font-medium text-orange-800">{liveStatus}</p>
@@ -5989,38 +6050,34 @@ export default function CalificarPage() {
                 <div className="space-y-3">
                   <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-6 text-center">
                     <p className="text-sm text-gray-700">
-                      Sube un <strong>PDF</strong> escaneado (una página por hoja), o elige una{' '}
-                      <strong>carpeta</strong> con todos los PDF para calificarlos de un tiro.
+                      Sube <strong>uno o varios PDF</strong>. Si el PDF tiene muchas páginas y el
+                      examen es de una hoja, cada página cuenta como un examen.
                     </p>
                     <div className="mt-4 flex flex-wrap justify-center gap-2">
                       <Button
                         type="button"
-                        variant="outline"
-                        className="border-orange-300 text-orange-900 hover:bg-orange-50"
-                        disabled={scanBusy}
+                        className="bg-orange-600 hover:bg-orange-700"
+                        disabled={scanBusy || !canGradeStudents}
                         onClick={() => pdfInputRef.current?.click()}
                       >
-                        {scanBusy && desktopScanKind === 'pdf' ? (
+                        {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder') ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
                         ) : (
                           <FileUp className="mr-2 h-4 w-4" aria-hidden />
                         )}
-                        {scanBusy && desktopScanKind === 'pdf' ? 'Calificando examen…' : 'Subir PDF…'}
+                        {scanBusy && (desktopScanKind === 'pdf' || desktopScanKind === 'folder')
+                          ? 'Calificando…'
+                          : 'Subir PDF…'}
                       </Button>
                       <Button
                         type="button"
-                        className="bg-orange-600 hover:bg-orange-700"
+                        variant="outline"
+                        className="border-orange-300 text-orange-900 hover:bg-orange-50"
                         disabled={scanBusy || !canGradeStudents}
                         onClick={() => void pickGradeFolder()}
                       >
-                        {scanBusy && desktopScanKind === 'folder' ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-                        ) : (
-                          <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
-                        )}
-                        {scanBusy && desktopScanKind === 'folder'
-                          ? 'Calificando carpeta…'
-                          : 'Elegir carpeta…'}
+                        <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                        Elegir carpeta…
                       </Button>
                       <Button
                         type="button"
@@ -6034,8 +6091,7 @@ export default function CalificarPage() {
                       </Button>
                     </div>
                     <p className="text-[11px] text-gray-500">
-                      Carpeta: eliges la carpeta y luego qué PDF calificar. Archivos: entras a la
-                      carpeta y marcas los exámenes en el explorador.
+                      Ctrl/Cmd + clic para marcar varios PDF en el explorador.
                     </p>
                   </div>
                 </div>

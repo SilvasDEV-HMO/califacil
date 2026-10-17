@@ -57,6 +57,7 @@ export function ExamCombobox({
 }: ExamComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
 
   const selected = exams.find((e) => e.id === value);
 
@@ -74,7 +75,15 @@ export function ExamCombobox({
   }, [exams, query]);
 
   React.useEffect(() => {
-    if (!open) setQuery('');
+    if (!open) {
+      setQuery('');
+      return;
+    }
+    // Al abrir, foco inmediato en el buscador para escribir sin segundo clic.
+    const focusSearch = () => searchInputRef.current?.focus({ preventScroll: true });
+    focusSearch();
+    const t = window.setTimeout(focusSearch, 0);
+    return () => window.clearTimeout(t);
   }, [open]);
 
   return (
@@ -104,12 +113,13 @@ export function ExamCombobox({
         align="start"
         sideOffset={6}
         onOpenAutoFocus={(e) => {
-          // En móvil el foco va al input al tocar; evita teclado al abrir solo.
           e.preventDefault();
+          searchInputRef.current?.focus({ preventScroll: true });
         }}
       >
         <Command shouldFilter={false} className="flex max-h-[min(70vh,24rem)] flex-col overflow-hidden rounded-md border border-orange-200/90 bg-popover">
           <CommandInput
+            ref={searchInputRef}
             value={query}
             onValueChange={setQuery}
             placeholder={searchPlaceholder}

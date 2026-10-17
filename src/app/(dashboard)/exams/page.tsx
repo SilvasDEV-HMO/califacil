@@ -43,6 +43,7 @@ import {
   Home,
   Pencil,
   FolderInput,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import type { Exam, ExamFolder, ExamWithQuestions } from '@/types';
@@ -57,6 +58,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
+import { downloadTeacherResultsExcel } from '@/lib/exportTeacherResultsExcel';
 
 function folderMoveOptions(
   folders: ExamFolder[],
@@ -98,6 +100,25 @@ export default function ExamsPage() {
   const [folderDialogName, setFolderDialogName] = useState('');
   const [editingFolder, setEditingFolder] = useState<ExamFolder | null>(null);
   const [folderSaving, setFolderSaving] = useState(false);
+  const [exportingResults, setExportingResults] = useState(false);
+
+  const handleDownloadResultsExcel = async () => {
+    if (exportingResults) return;
+    if (exams.length === 0) {
+      toast.error('No hay exámenes para exportar.');
+      return;
+    }
+    setExportingResults(true);
+    try {
+      const { rows } = await downloadTeacherResultsExcel(exams);
+      toast.success(`Excel listo: ${rows} alumno(s) con calificación.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo generar el Excel.';
+      toast.error(message);
+    } finally {
+      setExportingResults(false);
+    }
+  };
 
   useEffect(() => {
     const status = searchParams.get('status');
@@ -239,6 +260,19 @@ export default function ExamsPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+          <Button
+            variant="outline"
+            className="h-9 w-full sm:h-10 sm:w-auto"
+            disabled={exportingResults || examsLoading || exams.length === 0}
+            onClick={() => void handleDownloadResultsExcel()}
+          >
+            {exportingResults ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+            )}
+            {exportingResults ? 'Generando Excel…' : 'Descargar Resultados Excel'}
+          </Button>
           <Button
             variant="outline"
             className="h-9 w-full sm:h-10 sm:w-auto"
