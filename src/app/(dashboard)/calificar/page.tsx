@@ -31,6 +31,15 @@ import {
   yieldForBatchUi,
 } from '@/lib/batchYield';
 import {
+  acquireCalificarExamLock,
+  getOrCreateCalificarClientId,
+  HEARTBEAT_MS,
+  heartbeatCalificarExamLock,
+  listActiveCalificarExamLocks,
+  LIST_POLL_MS,
+  releaseCalificarExamLock,
+} from '@/lib/calificarExamLock';
+import {
   cropPaperDetailsNameApellidoDataUrl,
   isAdminCalifacilEmail,
   looksLikeZipGradePaperDetailsText,
@@ -860,6 +869,17 @@ export default function CalificarPage() {
   const omrCols = califacilOmrColumnCount(questions);
   const supportsCalifacil = exam ? examSupportsCalifacilOmr(questions) : false;
   const isAdminCalifacil = isAdminCalifacilEmail(user?.email);
+  /** Bloqueo por examen: varias personas en la misma cuenta (p. ej. admin) no revisan el mismo a la vez. */
+  const examLocksEnabled = isAdminCalifacil;
+  const calificarClientIdRef = useRef<string>('');
+  const heldExamLockRef = useRef<string | null>(null);
+  const [lockedByOthers, setLockedByOthers] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    if (!calificarClientIdRef.current) {
+      calificarClientIdRef.current = getOrCreateCalificarClientId();
+    }
+  }, []);
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
   const virtualKeyMaps = useMemo(() => buildVirtualKeyMaps(virtualKey.rows), [virtualKey.rows]);
   const examVirtualKeyByQuestionId = virtualKeyMaps.byQuestionId;
@@ -2405,6 +2425,119 @@ export default function CalificarPage() {
     setDetectedControlNumber(null);
     clearPendingPdfGrading();
   }, [stopLiveCamera, isMobile, clearMobileSnapshots, clearPendingPdfGrading]);
+
+  const releaseHeldExamLock = useCallback(async () => {
+    const held = heldExamLockRef.current;
+    const clientId = calificarClientIdRef.current;
+    if (!held || !clientId) return;
+    heldExamLockRef.current = null;
+    await releaseCalificarExamLock(held, clientId);
+  }, []);
+
+  const selectExamWithLock = useCallback(
+    async (id: string) => {
+      if (!id) {
+        await releaseHeldExamLock();
+        setExamId('');
+        resetFlow();
+        return;
+      }
+      if (id === examId) return;
+
+      if (examLocksEnabled) {
+        const clientId = calificarClientIdRef.current || getOrCreateCalificarClientId();
+        calificarClientIdRef.current = clientId;
+        const res = await acquireCalificarExamLock(id, clientId);
+        if (!res.ok && res.error === 'held') {
+          toast.error(
+            'Otro dispositivo ya está revisando este examen. Elige otro o espera a que lo liberen.'
+          );
+          return;
+        }
+        if (!res.ok && res.error !== 'held') {
+          // Migración aún no aplicada u otro error: no bloquear el flujo.
+          console.warn('[calificar-lock] acquire', res.error);
+        } else if (res.ok) {
+          if (heldExamLockRef.current && heldExamLockRef.current !== id) {
+            await releaseCalificarExamLock(heldExamLockRef.current, clientId);
+          }
+          heldExamLockRef.current = id;
+        }
+      }
+
+      setExamId(id);
+      resetFlow();
+    },
+    [examId, examLocksEnabled, releaseHeldExamLock, resetFlow]
+  );
+
+  // Heartbeat mientras este cliente tiene el examen seleccionado.
+  useEffect(() => {
+    if (!examLocksEnabled || !examId || !heldExamLockRef.current) return;
+    const clientId = calificarClientIdRef.current;
+    if (!clientId) return;
+
+    let cancelled = false;
+    const beat = async () => {
+      const res = await heartbeatCalificarExamLock(examId, clientId);
+      if (cancelled) return;
+      if (!res.ok && res.error === 'not_holder') {
+        heldExamLockRef.current = null;
+        toast.error('Perdiste el bloqueo de este examen (otra sesión lo tomó).');
+        setExamId('');
+        resetFlow();
+      }
+    };
+    void beat();
+    const id = window.setInterval(() => void beat(), HEARTBEAT_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [examId, examLocksEnabled, resetFlow]);
+
+  // Lista de exámenes bloqueados por otros (para el combobox).
+  useEffect(() => {
+    if (!examLocksEnabled || !user?.id) {
+      setLockedByOthers(new Set());
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      const locks = await listActiveCalificarExamLocks();
+      if (cancelled) return;
+      const mine = calificarClientIdRef.current;
+      const others = new Set(
+        locks.filter((l) => l.holder_client_id !== mine).map((l) => l.exam_id)
+      );
+      setLockedByOthers(others);
+    };
+    void refresh();
+    const id = window.setInterval(() => void refresh(), LIST_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [examLocksEnabled, user?.id]);
+
+  // Liberar bloqueo al salir de la página / cerrar pestaña.
+  useEffect(() => {
+    if (!examLocksEnabled) return;
+    const onPageHide = () => {
+      const held = heldExamLockRef.current;
+      const clientId = calificarClientIdRef.current;
+      if (!held || !clientId) return;
+      heldExamLockRef.current = null;
+      void releaseCalificarExamLock(held, clientId);
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+      void releaseHeldExamLock();
+    };
+  }, [examLocksEnabled, releaseHeldExamLock]);
 
   const handleStudentChange = (studentId: string) => {
     if (!canGradeStudents) {
@@ -5721,11 +5854,11 @@ export default function CalificarPage() {
           virtualKeyTotal={virtualKeyMcTotal}
           scanBusy={scanBusy}
           onSelectExam={(id) => {
-            setExamId(id);
-            resetFlow();
+            void selectExamWithLock(id);
           }}
           onSelectStudent={handleStudentChange}
           onScan={openMobileCapture}
+          lockedExamIds={examLocksEnabled ? lockedByOthers : undefined}
         />
       )}
 
@@ -5805,9 +5938,10 @@ export default function CalificarPage() {
               value={examId}
               loading={examsLoading}
               disabled={phase === 'guardando' || (isMobile && phase === 'ver_resultados')}
+              lockedExamIds={examLocksEnabled ? lockedByOthers : undefined}
+              lockedExamHint="En revisión"
               onValueChange={(id) => {
-                setExamId(id);
-                resetFlow();
+                void selectExamWithLock(id);
               }}
             />
           </div>

@@ -29,6 +29,8 @@ type Props = {
   onSelectExam: (id: string) => void;
   onSelectStudent: (id: string) => void;
   onScan: () => void;
+  /** Exámenes en revisión por otra sesión (misma cuenta). */
+  lockedExamIds?: ReadonlySet<string>;
 };
 
 function ConfigRow({
@@ -89,6 +91,7 @@ export function CalificarMobileHome({
   onSelectExam,
   onSelectStudent,
   onScan,
+  lockedExamIds,
 }: Props) {
   const [examPickerOpen, setExamPickerOpen] = useState(false);
   const [examSearch, setExamSearch] = useState('');
@@ -241,15 +244,20 @@ export function CalificarMobileHome({
                   Ningún examen coincide con la búsqueda.
                 </li>
               ) : (
-                filteredExams.map((e) => (
+                filteredExams.map((e) => {
+                  const locked = Boolean(lockedExamIds?.has(e.id) && e.id !== examId);
+                  return (
                   <li key={e.id}>
                     <button
                       type="button"
+                      disabled={locked}
                       className={cn(
                         'flex min-h-12 w-full items-center gap-3 border-b border-gray-100 px-4 py-3.5 text-left active:bg-orange-50/60',
-                        examId === e.id && 'bg-orange-50 text-orange-900'
+                        examId === e.id && 'bg-orange-50 text-orange-900',
+                        locked && 'cursor-not-allowed opacity-55'
                       )}
                       onClick={() => {
+                        if (locked) return;
                         onSelectExam(e.id);
                         setExamPickerOpen(false);
                         setExamSearch('');
@@ -259,12 +267,17 @@ export function CalificarMobileHome({
                       <span className="min-w-0 flex-1 truncate text-base text-gray-900">
                         {e.title}
                       </span>
-                      {examId === e.id ? (
+                      {locked ? (
+                        <span className="shrink-0 text-[10px] font-semibold uppercase text-amber-700">
+                          En revisión
+                        </span>
+                      ) : examId === e.id ? (
                         <CheckCircle2 className="h-5 w-5 shrink-0 text-orange-600" />
                       ) : null}
                     </button>
                   </li>
-                ))
+                  );
+                })
               )}
             </ul>
           </div>

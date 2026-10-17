@@ -42,6 +42,10 @@ export type ExamComboboxProps = {
   searchPlaceholder?: string;
   emptyText?: string;
   loading?: boolean;
+  /** Exámenes bloqueados por otra sesión (no se pueden elegir). */
+  lockedExamIds?: ReadonlySet<string>;
+  /** Texto opcional por examen bloqueado (p. ej. "En revisión"). */
+  lockedExamHint?: string;
 };
 
 export function ExamCombobox({
@@ -54,6 +58,8 @@ export function ExamCombobox({
   searchPlaceholder = 'Ej. 26ETV0375Q o 1-A',
   emptyText = 'Ningún examen coincide con la búsqueda.',
   loading = false,
+  lockedExamIds,
+  lockedExamHint = 'En revisión por otro dispositivo',
 }: ExamComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
@@ -129,21 +135,36 @@ export function ExamCombobox({
           <CommandList className="max-h-[min(50vh,16rem)] overflow-y-auto overscroll-contain px-2 py-2">
             <CommandEmpty className="py-8 text-muted-foreground">{emptyText}</CommandEmpty>
             <CommandGroup className="p-0 [&_[cmdk-item]]:my-0.5 [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:py-2.5">
-              {filtered.items.map((e) => (
-                <CommandItem
-                  key={e.id}
-                  value={e.id}
-                  onSelect={() => {
-                    onValueChange(e.id);
-                    setOpen(false);
-                  }}
-                >
-                  <Check
-                    className={cn('mr-2 h-4 w-4 shrink-0', value === e.id ? 'opacity-100' : 'opacity-0')}
-                  />
-                  <span className="min-w-0 truncate">{e.title}</span>
-                </CommandItem>
-              ))}
+              {filtered.items.map((e) => {
+                const locked = Boolean(lockedExamIds?.has(e.id) && e.id !== value);
+                return (
+                  <CommandItem
+                    key={e.id}
+                    value={e.id}
+                    disabled={locked}
+                    onSelect={() => {
+                      if (locked) return;
+                      onValueChange(e.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        'mr-2 h-4 w-4 shrink-0',
+                        value === e.id ? 'opacity-100' : 'opacity-0'
+                      )}
+                    />
+                    <span className={cn('min-w-0 flex-1 truncate', locked && 'text-muted-foreground')}>
+                      {e.title}
+                    </span>
+                    {locked ? (
+                      <span className="ml-2 shrink-0 text-[10px] font-medium uppercase tracking-wide text-amber-700">
+                        {lockedExamHint}
+                      </span>
+                    ) : null}
+                  </CommandItem>
+                );
+              })}
             </CommandGroup>
             {filtered.truncated ? (
               <p className="px-3 py-2 text-center text-xs text-muted-foreground">
