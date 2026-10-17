@@ -18,7 +18,7 @@ export function ExamMiniPreview({ title }: ExamMiniPreviewProps) {
           SEC Sonora
         </span>
         <span className="ml-auto text-[6px] font-medium uppercase tracking-wide text-gray-500">
-          Carta
+          Examen
         </span>
       </div>
       <div className="px-2 pb-2 pt-1.5">
