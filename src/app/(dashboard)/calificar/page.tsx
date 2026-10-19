@@ -3997,7 +3997,7 @@ export default function CalificarPage() {
             }
             let ocrHint = '';
             if (!student && nameCropUrl) {
-              ocrHint = await recognizeNameCrop(nameCropUrl);
+              ocrHint = await recognizeNameCrop(nameCropUrl, sortedStudents);
               student = matchStudentByLooseName(ocrHint, sortedStudents);
               if (student) sid = student.id;
             }

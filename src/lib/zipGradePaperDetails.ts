@@ -345,7 +345,7 @@ function tokensClose(ocr: string, student: string): boolean {
   const minLen = Math.min(ocr.length, student.length);
   if (minLen < 4 || maxLen - minLen > 2) return false;
   const d = editDistance(ocr, student);
-  if (maxLen >= 8) return d <= 2;
+  if (maxLen >= 6) return d <= 2;
   if (maxLen >= 5) return d <= 1;
   return false;
 }
