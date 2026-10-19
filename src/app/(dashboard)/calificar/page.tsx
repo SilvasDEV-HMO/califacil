@@ -283,6 +283,8 @@ type BatchGradeItem = {
   fileName: string;
   ok: boolean;
   studentName?: string;
+  /** Alumno ya guardado o preseleccionado; no se puede repetir en el lote. */
+  studentId?: string;
   pct?: number;
   error?: string;
   pendingStudent?: boolean;
@@ -3984,25 +3986,35 @@ export default function CalificarPage() {
             nameCropUrl: string | null,
             opts?: { pctOverride?: number | null }
           ) => {
+            const takenIds = new Set<string>();
+            studentsAlreadyGraded.forEach((id) => takenIds.add(id));
+            for (const row of results) {
+              if (row.studentId) takenIds.add(row.studentId);
+              if (row.selectedStudentId) takenIds.add(row.selectedStudentId);
+            }
+            const available = sortedStudents.filter((s) => !takenIds.has(s.id));
+
             let sid = studentId;
             if (!sid && controlNumber) {
-              sid = findStudentByControlNumber(sortedStudents, controlNumber)?.id ?? null;
+              sid = findStudentByControlNumber(available, controlNumber)?.id ?? null;
             }
-            let student = sid
-              ? sortedStudents.find((s) => s.id === sid) ?? null
-              : findStudentByControlNumber(sortedStudents, controlNumber);
+            let student = sid ? available.find((s) => s.id === sid) ?? null : null;
             if (!student) {
-              student = matchStudentFromScanFileName(examLabel, sortedStudents);
+              student = findStudentByControlNumber(available, controlNumber);
+            }
+            if (!student) {
+              student = matchStudentFromScanFileName(examLabel, available);
               if (student) sid = student.id;
             }
             let ocrHint = '';
             if (!student && nameCropUrl) {
-              const matched = await matchNameCropToGroup(nameCropUrl, sortedStudents);
+              const matched = await matchNameCropToGroup(nameCropUrl, available);
               ocrHint = matched.text;
               if (matched.student) student = matched.student;
-              else student = matchStudentByLooseName(ocrHint, sortedStudents);
+              else student = matchStudentByLooseName(ocrHint, available);
               if (student) sid = student.id;
             }
+            if (student && takenIds.has(student.id)) student = null;
             const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
             const displayPct =
               opts?.pctOverride != null && Number.isFinite(opts.pctOverride)
@@ -4026,6 +4038,7 @@ export default function CalificarPage() {
               fileName: examLabel,
               ok: true,
               studentName: student.name,
+              studentId: student.id,
               pct: opts?.pctOverride != null ? displayPct : stats.pct,
               nameCropUrl,
             });
@@ -4544,6 +4557,7 @@ export default function CalificarPage() {
         fileName: row.fileName,
         ok: true,
         studentName: student.name,
+        studentId: student.id,
         pct: stats.pct,
         nameCropUrl: row.nameCropUrl,
       };
@@ -4587,7 +4601,9 @@ export default function CalificarPage() {
       return;
     }
     const takenInBatch = (batchSummary ?? []).some(
-      (row, index) => index !== rowIndex && row.selectedStudentId === studentId
+      (row, index) =>
+        index !== rowIndex &&
+        (row.selectedStudentId === studentId || row.studentId === studentId)
     );
     if (takenInBatch) {
       toast.error('Esa CURP ya está en otra hoja. Solo puede haber un examen por alumno.');
@@ -4640,6 +4656,13 @@ export default function CalificarPage() {
     const chosenIds = pending.map(({ row }) => row.selectedStudentId!);
     if (new Set(chosenIds).size !== chosenIds.length) {
       toast.error('La misma CURP está en más de una hoja. Quita la repetida.');
+      return;
+    }
+    const savedInBatch = new Set(
+      rows.filter((row) => row.ok && row.studentId).map((row) => row.studentId!)
+    );
+    if (chosenIds.some((id) => savedInBatch.has(id))) {
+      toast.error('Ese alumno ya está en otra hoja de este lote.');
       return;
     }
     const already = chosenIds.filter((id) => studentsAlreadyGraded.has(id));
@@ -5839,9 +5862,12 @@ export default function CalificarPage() {
                             compact
                             students={sortedStudents.filter((student) => {
                               if (student.id === row.selectedStudentId) return true;
+                              if (studentsAlreadyGraded.has(student.id)) return false;
                               return !batchSummary.some(
                                 (other, otherIndex) =>
-                                  otherIndex !== idx && other.selectedStudentId === student.id
+                                  otherIndex !== idx &&
+                                  (other.selectedStudentId === student.id ||
+                                    other.studentId === student.id)
                               );
                             })}
                             value={row.selectedStudentId ?? ''}
