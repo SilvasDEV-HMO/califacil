@@ -6,6 +6,31 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+
+function loadEnvLocal() {
+  const p = path.join(process.cwd(), '.env.local');
+  if (!existsSync(p)) return;
+  const text = readFileSync(p, 'utf8').replace(/^\uFEFF/, '');
+  for (const line of text.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s || s.startsWith('#')) continue;
+    const i = s.indexOf('=');
+    if (i < 1) continue;
+    const k = s.slice(0, i).trim();
+    let v = s.slice(i + 1).trim();
+    if (
+      (v.startsWith('"') && v.endsWith('"')) ||
+      (v.startsWith("'") && v.endsWith("'"))
+    ) {
+      v = v.slice(1, -1);
+    }
+    if (!process.env[k]) process.env[k] = v;
+  }
+}
+
+loadEnvLocal();
 
 const url =
   process.env.SUPABASE_URL?.trim() ||
