@@ -311,38 +311,76 @@ function foldPersonName(value: string): string {
     .trim();
 }
 
-/** Busca alumno por nombre/apellido aproximado (para preseleccionar en el lote). */
+const NAME_STOPWORDS = new Set(['de', 'del', 'la', 'las', 'los', 'el', 'y', 'da', 'do', 'dos']);
+
+function nameTokens(value: string): string[] {
+  return foldPersonName(value)
+    .split(' ')
+    .filter((t) => t.length >= 3 && !NAME_STOPWORDS.has(t));
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const row = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) row[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let prev = i - 1;
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j]!;
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, prev + cost);
+      prev = cur;
+    }
+  }
+  return row[b.length]!;
+}
+
+/** Palabra contra palabara del alumno, no un trozo dentro de otro nombre. */
+function tokensClose(ocr: string, student: string): boolean {
+  if (ocr === student) return true;
+  const maxLen = Math.max(ocr.length, student.length);
+  const minLen = Math.min(ocr.length, student.length);
+  if (minLen < 4 || maxLen - minLen > 2) return false;
+  const d = editDistance(ocr, student);
+  if (maxLen >= 8) return d <= 2;
+  if (maxLen >= 5) return d <= 1;
+  return false;
+}
+
+/**
+ * Preselecciona solo si el OCR encaja de verdad con el grupo.
+ * Un nombre que no está en la lista (p. ej. Dominic Zepeda) queda pendiente.
+ */
 export function matchStudentByLooseName<T extends { id: string; name: string }>(
   hint: string | null | undefined,
   students: T[]
 ): T | null {
-  const raw = foldPersonName(hint ?? '');
-  if (raw.length < 3 || students.length === 0) return null;
-  const tokens = raw.split(' ').filter((t) => t.length >= 2);
-  if (tokens.length === 0) return null;
+  const ocrTokens = nameTokens(hint ?? '');
+  if (ocrTokens.length === 0 || students.length === 0) return null;
 
   const scored = students
     .map((s) => {
-      const name = foldPersonName(s.name);
-      let score = 0;
-      for (const t of tokens) {
-        if (name.includes(t)) score += t.length;
+      const stTokens = nameTokens(s.name);
+      let hits = 0;
+      for (const ot of ocrTokens) {
+        if (stTokens.some((st) => tokensClose(ot, st))) hits += 1;
       }
-      return { student: s, score, name };
+      return { student: s, hits };
     })
-    .filter((row) => row.score >= 5)
-    .sort((a, b) => b.score - a.score);
+    .filter((row) => row.hits > 0)
+    .sort((a, b) => b.hits - a.hits);
 
-  if (scored.length === 0) {
-    const uniqueHits = tokens
-      .filter((t) => t.length >= 5)
-      .map((t) => students.filter((s) => foldPersonName(s.name).includes(t)))
-      .filter((hits) => hits.length === 1);
-    if (uniqueHits.length === 1) return uniqueHits[0]![0] ?? null;
-    return null;
-  }
+  if (scored.length === 0) return null;
+
   const best = scored[0]!;
-  const tied = scored.filter((row) => row.score === best.score);
-  if (tied.length > 1) return null;
+  const runner = scored[1];
+  if (runner && runner.hits === best.hits) return null;
+
+  // Dos palabras del OCR tienen que coincidir con el alumno. Una sola
+  // (Camila, Carlos, Scott) no basta: muchos nombres se parecen o el OCR inventa.
+  if (ocrTokens.length < 2 || best.hits < 2) return null;
   return best.student;
 }

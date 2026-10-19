@@ -50,14 +50,17 @@ async function cropPieces(dataUrl: string): Promise<string[]> {
   const img = await loadImage(dataUrl);
   const w = img.naturalWidth || img.width;
   const h = img.naturalHeight || img.height;
-  const pieces = [drawScaled(img, 0, 0, w, h)];
   if (w >= h * 1.35) {
     const mid = Math.round(w * 0.5);
     const gap = Math.round(w * 0.03);
-    pieces.push(drawScaled(img, 0, 0, Math.max(1, mid - gap), h));
-    pieces.push(drawScaled(img, Math.min(w - 1, mid + gap), 0, Math.max(1, w - mid - gap), h));
+    return [
+      canvasToDataUrl(drawScaled(img, 0, 0, Math.max(1, mid - gap), h)),
+      canvasToDataUrl(
+        drawScaled(img, Math.min(w - 1, mid + gap), 0, Math.max(1, w - mid - gap), h)
+      ),
+    ];
   }
-  return pieces.map(canvasToDataUrl);
+  return [canvasToDataUrl(drawScaled(img, 0, 0, w, h))];
 }
 
 async function getWorker(): Promise<Worker> {
@@ -70,7 +73,9 @@ async function getWorker(): Promise<Worker> {
         gzip: true,
       });
       await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+        tessedit_pageseg_mode: PSM.SINGLE_LINE,
+        tessedit_char_whitelist:
+          'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ ',
       });
       return worker;
     })().catch((error) => {
