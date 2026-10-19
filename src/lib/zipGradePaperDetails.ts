@@ -378,9 +378,19 @@ export function matchStudentByLooseName<T extends { id: string; name: string }>(
   const best = scored[0]!;
   const runner = scored[1];
   if (runner && runner.hits === best.hits) return null;
+  if (best.hits >= 2) return best.student;
 
-  // Dos palabras del OCR tienen que coincidir con el alumno. Una sola
-  // (Camila, Carlos, Scott) no basta: muchos nombres se parecen o el OCR inventa.
-  if (ocrTokens.length < 2 || best.hits < 2) return null;
-  return best.student;
+  // Un apellido largo único del grupo (Valenzuela, Verduzco) sí basta.
+  // Camila/Carlos/Scott (≤6) no: el OCR los inventaba.
+  const longHits = ocrTokens.filter((t) => t.length >= 7);
+  const uniqueLong: T[] = [];
+  for (const t of longHits) {
+    const owners = students.filter((s) =>
+      nameTokens(s.name).some((st) => st.length >= 7 && tokensClose(t, st))
+    );
+    if (owners.length === 1 && !uniqueLong.some((s) => s.id === owners[0]!.id)) {
+      uniqueLong.push(owners[0]!);
+    }
+  }
+  return uniqueLong.length === 1 ? uniqueLong[0]! : null;
 }
