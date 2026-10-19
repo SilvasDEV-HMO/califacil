@@ -265,7 +265,7 @@ function rosterWhitelist(students: { name: string }[] | undefined): string {
       if (/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/.test(ch)) letters.add(ch);
     }
   }
-  return [...letters].join('');
+  return Array.from(letters).join('');
 }
 
 const OCR_MODES = [PSM.SINGLE_WORD, PSM.SINGLE_LINE, PSM.SPARSE_TEXT] as const;
@@ -282,7 +282,7 @@ async function readCell(worker: Worker, cell: HTMLCanvasElement): Promise<string
       if (w && (word.confidence ?? 0) >= 35) texts.add(w);
     }
   }
-  return [...texts];
+  return Array.from(texts);
 }
 
 /**
