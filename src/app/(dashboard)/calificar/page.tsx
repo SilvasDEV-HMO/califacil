@@ -4785,6 +4785,22 @@ export default function CalificarPage() {
       });
   }, [batchSummary]);
 
+  const focusNextUnassignedBatchStudent = (fromIdx: number) => {
+    const order = batchSummaryDisplayRows;
+    const pos = order.findIndex((item) => item.idx === fromIdx);
+    const rest = pos >= 0 ? order.slice(pos + 1).concat(order.slice(0, pos)) : order;
+    const next = rest.find(
+      (item) => item.idx !== fromIdx && item.row.pendingStudent && !item.row.selectedStudentId
+    );
+    if (!next) return;
+    window.setTimeout(() => {
+      const el = document.getElementById(`batch-student-${next.idx}`) as HTMLInputElement | null;
+      if (!el) return;
+      el.focus();
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 0);
+  };
+
   const pickGradeFolder = async () => {
     setDesktopScanKind('folder');
     const picker = window as Window & {
@@ -5968,6 +5984,7 @@ export default function CalificarPage() {
                         ) : row.pendingStudent ? (
                           <StudentCombobox
                             compact
+                            id={`batch-student-${idx}`}
                             students={sortedStudents.filter((student) => {
                               if (student.id === row.selectedStudentId) return true;
                               if (studentsAlreadyGraded.has(student.id)) return false;
@@ -5988,7 +6005,9 @@ export default function CalificarPage() {
                             searchPlaceholder="Nombre, apellido o CURP…"
                             emptyText="Ningún alumno coincide con la búsqueda."
                             onValueChange={(id) => {
-                              if (id) assignPendingBatchStudent(idx, id);
+                              if (!id) return;
+                              assignPendingBatchStudent(idx, id);
+                              focusNextUnassignedBatchStudent(idx);
                             }}
                           />
                         ) : (
