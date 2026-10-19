@@ -1,6 +1,6 @@
 'use client';
 
-import { createWorker, type Worker } from 'tesseract.js';
+import { createWorker, PSM, type Worker } from 'tesseract.js';
 
 let workerPromise: Promise<Worker> | null = null;
 
@@ -48,7 +48,7 @@ async function getWorker(): Promise<Worker> {
       await worker.setParameters({
         tessedit_char_whitelist:
           "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ '-",
-        tessedit_pageseg_mode: '6',
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
       });
       return worker;
     })();
