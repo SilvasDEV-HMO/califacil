@@ -64,18 +64,19 @@ export function parseZipGradePaperDetailsText(
   expectedQuestions: number
 ): ZipGradePaperDetailsParse {
   const text = rawText.replace(/\u00a0/g, ' ').replace(/\r/g, '');
-  const compact = text.replace(/[ \t]+/g, ' ');
+  const compact = text.replace(/[ \t]+/g, ' ').replace(/\n+/g, '\n');
+  const flat = compact.replace(/\s+/g, ' ');
 
   const pointsEarned = afterLabelNumber(
-    compact,
+    flat,
     /Points\s*Earned\s*[:\s]+(\d+(?:[.,]\d+)?)/i
   );
   const possiblePoints = afterLabelNumber(
-    compact,
+    flat,
     /Possible\s*Points\s*[:\s]+(\d+(?:[.,]\d+)?)/i
   );
   let percent = afterLabelNumber(
-    compact,
+    flat,
     /Percent\s*[:\s]+(\d+(?:[.,]\d+)?)\s*%?/i
   );
   if (percent != null && percent <= 1 && (pointsEarned == null || percent !== pointsEarned)) {
@@ -103,7 +104,7 @@ export function parseZipGradePaperDetailsText(
   const rowRe =
     /(?:^|\n|\s)(\d{1,3})\s+([A-Ea-e])\s+([A-Ea-e\-–])\s+([01])\s+([CXcх×x])\b/g;
   let m: RegExpExecArray | null;
-  while ((m = rowRe.exec(text)) !== null) {
+  while ((m = rowRe.exec(flat)) !== null) {
     const qNum = Number(m[1]);
     if (!Number.isFinite(qNum) || qNum < 1 || qNum > nExpect) continue;
     const stu = m[3]!.toUpperCase();
@@ -118,7 +119,7 @@ export function parseZipGradePaperDetailsText(
   const answeredSoFar = studentAnswers.reduce((n, a) => n + (a != null ? 1 : 0), 0);
   if (answeredSoFar === 0) {
     const altRe = /(?:^|\n|\s)(\d{1,3})\s+([A-Ea-e])\s+([A-Ea-e])\b/g;
-    while ((m = altRe.exec(text)) !== null) {
+    while ((m = altRe.exec(flat)) !== null) {
       const qNum = Number(m[1]);
       if (!Number.isFinite(qNum) || qNum < 1 || qNum > nExpect) continue;
       const stu = m[3]!.toUpperCase();
@@ -299,6 +300,18 @@ export function cropPaperDetailsNameApellidoDataUrl(
   } catch {
     return null;
   }
+}
+
+/** Nombre impreso o etiquetado en el PDF Paper Details (antes de OCR). */
+export function extractStudentNameFromPaperDetailsText(rawText: string): string {
+  const text = rawText.replace(/\u00a0/g, ' ').replace(/\r/g, '');
+  const labeled = text.match(
+    /(?:student\s*name|nombre(?:s)?(?:\s*y\s*apellidos?)?|alumno|name)\s*[:\-]\s*([A-ZÁÉÍÓÚÜÑa-záéíóúüñ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s,'\.-]{3,80})/i
+  );
+  if (labeled?.[1]) {
+    return labeled[1].replace(/\s+/g, ' ').replace(/\b(key|percent|points|class)\b.*/i, '').trim();
+  }
+  return '';
 }
 
 function foldPersonName(value: string): string {

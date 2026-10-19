@@ -29,6 +29,7 @@ import {
   mapPool,
   requestBatchWakeLock,
   yieldForBatchUi,
+  yieldMacrotask,
 } from '@/lib/batchYield';
 import { publishCalificarBatchProgress } from '@/lib/calificarBatchProgress';
 import {
@@ -45,6 +46,7 @@ import {
   cropPaperDetailsNameApellidoDataUrl,
   isAdminCalifacilEmail,
   looksLikeZipGradePaperDetailsText,
+  extractStudentNameFromPaperDetailsText,
   mapPaperDetailsToMcDraft,
   matchStudentByLooseName,
   parseZipGradePaperDetailsText,
@@ -4027,7 +4029,7 @@ export default function CalificarPage() {
             controlNumber: string | null,
             studentId: string | null,
             nameCropUrl: string | null,
-            opts?: { pctOverride?: number | null }
+            opts?: { pctOverride?: number | null; pdfText?: string }
           ) => {
             const takenIds = new Set<string>();
             studentsAlreadyGraded.forEach((id) => takenIds.add(id));
@@ -4050,6 +4052,14 @@ export default function CalificarPage() {
               if (student) sid = student.id;
             }
             let ocrHint = '';
+            if (!student && opts?.pdfText) {
+              const fromPdf = extractStudentNameFromPaperDetailsText(opts.pdfText);
+              if (fromPdf) {
+                ocrHint = fromPdf;
+                student = matchStudentByLooseName(fromPdf, available);
+                if (student) sid = student.id;
+              }
+            }
             if (!student && nameCropUrl) {
               const matched = await matchNameCropToGroup(nameCropUrl, available);
               ocrHint = matched.text;
@@ -4127,22 +4137,22 @@ export default function CalificarPage() {
             // Ruta rápida admin: texto + recorte nombre en paralelo (sin OMR).
             if (prep.paperDetails && adminPaperDetails && pagesPerExam === 1) {
               const pageNumbers = Array.from({ length: maxExams }, (_, k) => k + 1);
-              const NAME_RENDER_MAX_SIDE = 900;
-              const CONCURRENCY = document.hidden ? 4 : 3;
+              const NAME_RENDER_MAX_SIDE = 1100;
+              const cores =
+                typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) || 4 : 4;
+              const CONCURRENCY = Math.min(8, Math.max(4, cores));
               let statusTick = 0;
               const pageOutcomes = await mapPool(pageNumbers, CONCURRENCY, async (p) => {
                 if (gen !== gradeReadGenRef.current) {
                   return { p, aborted: true as const };
                 }
                 statusTick += 1;
-                if (statusTick === 1 || statusTick % 3 === 0 || !document.hidden) {
+                if (statusTick === 1 || statusTick % 5 === 0) {
                   setLiveStatus(
                     `Calificando ${results.length + statusTick}/${batchExamTotal} · ${label} · p.${p}`
                   );
-                  await yieldForBatchUi(false);
-                } else {
-                  await yieldForBatchUi(false);
                 }
+                await yieldMacrotask();
                 try {
                   const [textRes, canvasRes] = await Promise.all([
                     extractPdfPagePlainText(file, p, { timeoutMs: 25000 }),
@@ -4153,14 +4163,31 @@ export default function CalificarPage() {
                   if (gen !== gradeReadGenRef.current) {
                     return { p, aborted: true as const };
                   }
-                  const parsed = parseZipGradePaperDetailsText(textRes.text, questions.length);
+                  let pageText = textRes.text;
+                  let parsed = parseZipGradePaperDetailsText(pageText, questions.length);
+                  if (!parsed.ok) {
+                    try {
+                      const again = await extractPdfPagePlainText(file, p, {
+                        timeoutMs: 25000,
+                        preferServer: true,
+                      });
+                      pageText = again.text || pageText;
+                      parsed = parseZipGradePaperDetailsText(pageText, questions.length);
+                    } catch {
+                      /* keep first parse */
+                    }
+                  }
                   const nameCropUrl = cropPaperDetailsNameApellidoDataUrl(canvasRes.canvas, 640);
+                  const merged = mapPaperDetailsToMcDraft(questions, parsed);
                   if (!parsed.ok) {
                     return {
                       p,
                       aborted: false as const,
                       ok: false as const,
                       nameCropUrl,
+                      merged,
+                      pdfText: pageText,
+                      pct: parsed.percent,
                       error: 'No se pudo leer Percent / respuestas del PDF Paper Details',
                     };
                   }
@@ -4169,7 +4196,8 @@ export default function CalificarPage() {
                     aborted: false as const,
                     ok: true as const,
                     nameCropUrl,
-                    merged: mapPaperDetailsToMcDraft(questions, parsed),
+                    merged,
+                    pdfText: pageText,
                     pct: parsed.percent,
                   };
                 } catch (err) {
@@ -4189,22 +4217,24 @@ export default function CalificarPage() {
                 if (results.length >= FOLDER_BATCH_MAX_EXAMS) break;
                 const examLabel =
                   numPages > 1 || files.length > 1 ? `${label} · p.${out.p}` : label;
-                if (!out.ok) {
+                if (!out.ok && !out.merged) {
                   results.push({
                     fileName: examLabel,
                     ok: false,
-                    error: out.error,
+                    pendingStudent: true,
+                    mergedDraft: {},
                     nameCropUrl: out.nameCropUrl ?? undefined,
+                    error: out.error,
                   });
                   continue;
                 }
                 await finishBatchItem(
                   examLabel,
-                  out.merged,
+                  out.merged ?? {},
                   null,
                   null,
                   out.nameCropUrl,
-                  { pctOverride: out.pct }
+                  { pctOverride: out.pct, pdfText: out.pdfText }
                 );
               }
               continue;
@@ -4219,6 +4249,7 @@ export default function CalificarPage() {
               let nameCropUrl: string | null = null;
               let pdfFailed = false;
               let paperDetailsPct: number | null = null;
+              let paperDetailsText = '';
               const basePage = examIdx * pagesPerExam + 1;
               const examLabel =
                 numPages > pagesPerExam || files.length > 1
@@ -4239,7 +4270,7 @@ export default function CalificarPage() {
                   const clientId = calificarClientIdRef.current;
                   if (clientId) void heartbeatCalificarExamLock(examId, clientId);
                 }
-                await yieldForBatchUi(false);
+                await yieldMacrotask();
                 const raw = (
                   await renderPdfGradingPageCanvas(file, p, undefined, { timeoutMs: 25000 })
                 ).canvas;
@@ -4255,6 +4286,7 @@ export default function CalificarPage() {
                   try {
                     const extracted = await extractPdfPagePlainText(file, p, { timeoutMs: 25000 });
                     pageText = extracted.text;
+                    paperDetailsText = pageText;
                   } catch {
                     pageText = '';
                   }
@@ -4445,6 +4477,7 @@ export default function CalificarPage() {
               if (pdfFailed) continue;
               await finishBatchItem(examLabel, merged, controlNumber, studentId, nameCropUrl, {
                 pctOverride: paperDetailsPct,
+                pdfText: paperDetailsText,
               });
             }
             continue;

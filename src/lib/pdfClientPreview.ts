@@ -27,6 +27,9 @@ type PdfDocument = {
 
 type PdfPage = {
   getViewport: (opts: { scale: number }) => { width: number; height: number };
+  getTextContent?: () => Promise<{
+    items?: Array<{ str?: string; transform?: number[] }>;
+  }>;
   render: (params: {
     canvasContext: CanvasRenderingContext2D;
     viewport: { width: number; height: number };
@@ -110,6 +113,51 @@ async function countPdfPagesInBrowser(file: File): Promise<number> {
   return Math.max(0, Number(pdf.numPages ?? 0));
 }
 
+async function extractPdfPageTextInBrowser(
+  file: File,
+  pageNumber: number
+): Promise<{ text: string; numPages: number }> {
+  const pdf = await getClientPdfDocument(file);
+  const numPages = Math.max(0, Number(pdf.numPages ?? 0));
+  if (pageNumber < 1 || pageNumber > numPages) {
+    return { text: '', numPages };
+  }
+  const page = await pdf.getPage(pageNumber);
+  if (typeof page.getTextContent !== 'function') {
+    return { text: '', numPages };
+  }
+  const content = await page.getTextContent();
+  const placed: { str: string; x: number; y: number }[] = [];
+  for (const item of content.items ?? []) {
+    const str = typeof item?.str === 'string' ? item.str : '';
+    if (!str) continue;
+    const t = item.transform ?? [];
+    placed.push({
+      str,
+      x: Number(t[4] ?? 0),
+      y: Number(t[5] ?? 0),
+    });
+  }
+  placed.sort((a, b) => {
+    const dy = b.y - a.y;
+    if (Math.abs(dy) > 2.5) return dy;
+    return a.x - b.x;
+  });
+  const lines: string[] = [];
+  let current: string[] = [];
+  let lastY: number | null = null;
+  for (const item of placed) {
+    if (lastY != null && Math.abs(lastY - item.y) > 3) {
+      lines.push(current.join(' '));
+      current = [];
+    }
+    current.push(item.str);
+    lastY = item.y;
+  }
+  if (current.length) lines.push(current.join(' '));
+  return { text: lines.join('\n'), numPages };
+}
+
 async function renderPdfPageCanvasInBrowser(
   file: File,
   pageNumber: number,
@@ -160,6 +208,11 @@ export async function countPdfGradingPages(
       `El PDF supera el límite de ${Math.round(PDF_GRADE_MAX_FILE_BYTES / (1024 * 1024))} MB.`
     );
   }
+  try {
+    return await countPdfPagesInBrowser(file);
+  } catch {
+    /* servidor si pdf.js no carga */
+  }
   const timeoutMs = opts?.timeoutMs ?? 20000;
   const controller = new AbortController();
   const onAbort = () => controller.abort();
@@ -184,13 +237,6 @@ export async function countPdfGradingPages(
     }
     const data = (await res.json()) as { numPages?: number };
     return Math.max(0, Number(data.numPages ?? 0));
-  } catch (err) {
-    if (opts?.signal?.aborted) throw err;
-    try {
-      return await countPdfPagesInBrowser(file);
-    } catch {
-      throw err;
-    }
   } finally {
     window.clearTimeout(timeoutId);
     opts?.signal?.removeEventListener('abort', onAbort);
@@ -252,7 +298,7 @@ export async function canvasToJpegFile(
 export async function extractPdfPagePlainText(
   file: File,
   pageNumber: number,
-  opts?: { signal?: AbortSignal; timeoutMs?: number }
+  opts?: { signal?: AbortSignal; timeoutMs?: number; preferServer?: boolean }
 ): Promise<{ text: string; numPages: number }> {
   if (typeof window === 'undefined') {
     throw new Error('La extracción de texto PDF solo está disponible en el navegador');
@@ -261,6 +307,14 @@ export async function extractPdfPagePlainText(
     throw new Error(
       `El PDF supera el límite de ${Math.round(PDF_GRADE_MAX_FILE_BYTES / (1024 * 1024))} MB.`
     );
+  }
+  if (!opts?.preferServer) {
+    try {
+      const local = await extractPdfPageTextInBrowser(file, pageNumber);
+      if (local.text.trim().length > 0) return local;
+    } catch {
+      /* servidor */
+    }
   }
   const timeoutMs = opts?.timeoutMs ?? 25000;
   const controller = new AbortController();
@@ -344,13 +398,9 @@ export function createPdfGradingHandle(file: File, numPages: number): PdfGrading
     numPages,
     async renderPageAsCanvas(pageNumber, opts) {
       if (pageNumber < 1 || pageNumber > numPages) return null;
-      await yieldToBrowser();
-      const { canvas } = await fetchPdfPageCanvas(
-        file,
-        pageNumber,
-        opts?.maxSide,
-        opts?.signal
-      );
+      const { canvas } = await renderPdfGradingPageCanvas(file, pageNumber, opts?.maxSide, {
+        signal: opts?.signal,
+      });
       return canvas;
     },
     dispose() {},
@@ -373,6 +423,13 @@ export async function renderPdfGradingPageCanvas(
     );
   }
   await yieldToBrowser();
+  try {
+    if (!opts?.signal?.aborted) {
+      return await renderPdfPageCanvasInBrowser(file, pageNumber, maxSide);
+    }
+  } catch {
+    /* servidor */
+  }
   const timeoutMs = opts?.timeoutMs ?? 25000;
   const controller = new AbortController();
   const onAbort = () => controller.abort();
@@ -381,16 +438,10 @@ export async function renderPdfGradingPageCanvas(
   try {
     return await fetchPdfPageCanvas(file, pageNumber, maxSide, controller.signal);
   } catch (err) {
-    if (opts?.signal?.aborted) throw err;
-    try {
-      await yieldToBrowser();
-      return await renderPdfPageCanvasInBrowser(file, pageNumber, maxSide);
-    } catch {
-      if (controller.signal.aborted) {
-        throw new Error('La lectura del PDF tardó demasiado. Prueba un archivo más liviano.');
-      }
-      throw err;
+    if (controller.signal.aborted) {
+      throw new Error('La lectura del PDF tardó demasiado. Prueba un archivo más liviano.');
     }
+    throw err;
   } finally {
     window.clearTimeout(timeoutId);
     opts?.signal?.removeEventListener('abort', onAbort);
