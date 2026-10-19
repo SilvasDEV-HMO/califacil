@@ -267,7 +267,7 @@ export default function DashboardLayout({
                 !isCalificarRoute && 'hidden'
               )}
               aria-hidden={!isCalificarRoute}
-              {...(!isCalificarRoute ? { inert: '' } : {})}
+              {...(!isCalificarRoute ? { inert: true } : {})}
             >
               <CalificarPage />
             </div>
