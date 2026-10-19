@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "node scripts/copy-pdfjs-client.mjs",
+    "postinstall": "node scripts/copy-pdfjs-client.mjs && node scripts/copy-tesseract-client.mjs",
     "test:omr-mobile": "node scripts/omr-mobile-golden.mjs",
     "test:omr-print": "npx tsx scripts/assert-omr-print-n.mts",
     "test:grading": "npx tsx scripts/assert-calificar-grading.mts",

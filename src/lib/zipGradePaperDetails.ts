@@ -328,12 +328,19 @@ export function matchStudentByLooseName<T extends { id: string; name: string }>(
       for (const t of tokens) {
         if (name.includes(t)) score += t.length;
       }
-      return { student: s, score };
+      return { student: s, score, name };
     })
-    .filter((row) => row.score >= 6)
+    .filter((row) => row.score >= 5)
     .sort((a, b) => b.score - a.score);
 
-  if (scored.length === 0) return null;
+  if (scored.length === 0) {
+    const uniqueHits = tokens
+      .filter((t) => t.length >= 5)
+      .map((t) => students.filter((s) => foldPersonName(s.name).includes(t)))
+      .filter((hits) => hits.length === 1);
+    if (uniqueHits.length === 1) return uniqueHits[0]![0] ?? null;
+    return null;
+  }
   const best = scored[0]!;
   const tied = scored.filter((row) => row.score === best.score);
   if (tied.length > 1) return null;

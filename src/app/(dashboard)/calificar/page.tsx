@@ -290,6 +290,7 @@ type BatchGradeItem = {
   /** Recorte del nombre manuscrito en la hoja. */
   nameCropUrl?: string | null;
   selectedStudentId?: string;
+  ocrHint?: string;
 };
 
 /**
@@ -3994,9 +3995,10 @@ export default function CalificarPage() {
               student = matchStudentFromScanFileName(examLabel, sortedStudents);
               if (student) sid = student.id;
             }
+            let ocrHint = '';
             if (!student && nameCropUrl) {
-              const hint = await recognizeNameCrop(nameCropUrl);
-              student = matchStudentByLooseName(hint, sortedStudents);
+              ocrHint = await recognizeNameCrop(nameCropUrl);
+              student = matchStudentByLooseName(ocrHint, sortedStudents);
               if (student) sid = student.id;
             }
             const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
@@ -4012,6 +4014,7 @@ export default function CalificarPage() {
                 mergedDraft: { ...merged },
                 pct: displayPct,
                 nameCropUrl,
+                ocrHint: ocrHint || undefined,
                 error: 'Elige al alumno para guardar',
               });
               return;
@@ -5841,7 +5844,11 @@ export default function CalificarPage() {
                             })}
                             value={row.selectedStudentId ?? ''}
                             disabled={scanBusy}
-                            placeholder="Escribe nombre o apellido…"
+                            placeholder={
+                              row.ocrHint
+                                ? `Leí: ${row.ocrHint}. Elige al alumno…`
+                                : 'Escribe nombre o apellido…'
+                            }
                             searchPlaceholder="Nombre, apellido o CURP…"
                             emptyText="Ningún alumno coincide con la búsqueda."
                             onValueChange={(id) => {

@@ -42,6 +42,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Tesseract se copia en postinstall (worker + idiomas)
+public/tesseract/
+
 # testing
 coverage
 
