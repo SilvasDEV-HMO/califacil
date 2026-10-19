@@ -4773,6 +4773,18 @@ export default function CalificarPage() {
     }
   };
 
+  const batchSummaryDisplayRows = useMemo(() => {
+    if (!batchSummary?.length) return [];
+    return batchSummary
+      .map((row, idx) => ({ row, idx }))
+      .sort((a, b) => {
+        const aManual = a.row.pendingStudent && !a.row.selectedStudentId ? 0 : 1;
+        const bManual = b.row.pendingStudent && !b.row.selectedStudentId ? 0 : 1;
+        if (aManual !== bManual) return aManual - bManual;
+        return a.idx - b.idx;
+      });
+  }, [batchSummary]);
+
   const pickGradeFolder = async () => {
     setDesktopScanKind('folder');
     const picker = window as Window & {
@@ -5927,8 +5939,14 @@ export default function CalificarPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {batchSummary.map((row, idx) => (
-                    <tr key={`${row.fileName}-${idx}`} className="border-t">
+                  {batchSummaryDisplayRows.map(({ row, idx }) => (
+                    <tr
+                      key={`${row.fileName}-${idx}`}
+                      className={cn(
+                        'border-t',
+                        row.pendingStudent && !row.selectedStudentId && 'bg-orange-50/70'
+                      )}
+                    >
                       <td className="px-2 py-1.5">
                         {row.nameCropUrl ? (
                           /* eslint-disable-next-line @next/next/no-img-element */
