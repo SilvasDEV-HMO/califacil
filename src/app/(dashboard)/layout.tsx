@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,9 @@ import { cn } from '@/lib/utils';
 import { toSpanishAuthMessage } from '@/lib/authErrors';
 import { supabase } from '@/lib/supabase';
 import { isCalifacilSuperUserEmail, isSubscriptionActive } from '@/lib/billing';
+import { useCalificarBatchProgress } from '@/lib/calificarBatchProgress';
+
+const CalificarPage = dynamic(() => import('./calificar/page'), { ssr: false });
 
 function navActive(pathname: string, href: string): boolean {
   if (href === '/dashboard') return pathname === '/dashboard';
@@ -93,9 +97,11 @@ export default function DashboardLayout({
 
   const isCalificarRoute =
     pathname === '/calificar' || pathname.startsWith('/calificar/');
+  const batchProgress = useCalificarBatchProgress();
 
   // null = aún no medimos; true = viewport móvil (< lg).
   const [isMobileViewport, setIsMobileViewport] = useState<boolean | null>(null);
+  const [keepCalificarMounted, setKeepCalificarMounted] = useState(false);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1023px)');
@@ -111,10 +117,18 @@ export default function DashboardLayout({
     router.replace('/dashboard');
   }, [isCalificarRoute, isMobileViewport, router]);
 
+  useEffect(() => {
+    if (isCalificarRoute && isMobileViewport === false) {
+      setKeepCalificarMounted(true);
+    }
+  }, [isCalificarRoute, isMobileViewport]);
+
   const suppressCalificarOnMobile =
     isCalificarRoute && isMobileViewport !== false;
+  const showKeptCalificar =
+    isMobileViewport === false && (keepCalificarMounted || isCalificarRoute);
 
-  if (loading || !billingReady) {
+  if ((loading || !billingReady) && !showKeptCalificar) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
         <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-orange-600" />
@@ -246,8 +260,37 @@ export default function DashboardLayout({
                 : 'app-scroll overflow-y-auto overflow-x-hidden'
           )}
         >
-          {suppressCalificarOnMobile ? null : children}
+          {showKeptCalificar ? (
+            <div
+              className={cn(
+                'flex min-h-0 w-full flex-1 flex-col',
+                !isCalificarRoute && 'hidden'
+              )}
+              aria-hidden={!isCalificarRoute}
+              {...(!isCalificarRoute ? { inert: '' } : {})}
+            >
+              <CalificarPage />
+            </div>
+          ) : null}
+          {isCalificarRoute
+            ? suppressCalificarOnMobile || showKeptCalificar
+              ? null
+              : children
+            : children}
         </main>
+
+        {batchProgress.running && !isCalificarRoute ? (
+          <button
+            type="button"
+            onClick={() => router.push('/calificar')}
+            className="fixed bottom-20 left-1/2 z-50 flex max-w-[min(92vw,28rem)] -translate-x-1/2 cursor-pointer items-center gap-2 rounded-full border border-orange-200 bg-white px-4 py-2 text-left text-sm font-medium text-orange-800 shadow-lg lg:bottom-6"
+          >
+            <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-orange-500" />
+            <span className="min-w-0 truncate">
+              {batchProgress.status.trim() || 'Calificando en segundo plano…'}
+            </span>
+          </button>
+        ) : null}
 
         {/* Móvil: barra inferior tipo app */}
         <nav

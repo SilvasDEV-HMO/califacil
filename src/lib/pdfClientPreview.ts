@@ -147,6 +147,21 @@ export async function countPdfGradingPages(
 }
 
 async function jpegBlobToCanvas(blob: Blob): Promise<HTMLCanvasElement> {
+  if (typeof createImageBitmap === 'function') {
+    const bmp = await createImageBitmap(blob);
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = bmp.width;
+      canvas.height = bmp.height;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) throw new Error('No se pudo crear el lienzo de vista previa');
+      ctx.drawImage(bmp, 0, 0);
+      return canvas;
+    } finally {
+      bmp.close();
+    }
+  }
+
   const url = URL.createObjectURL(blob);
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {

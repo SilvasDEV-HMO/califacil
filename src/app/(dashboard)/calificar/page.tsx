@@ -11,7 +11,7 @@ import {
 } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { AlertCircle, FileUp, Files, FolderOpen, Info, LayoutDashboard, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
@@ -30,6 +30,7 @@ import {
   requestBatchWakeLock,
   yieldForBatchUi,
 } from '@/lib/batchYield';
+import { publishCalificarBatchProgress } from '@/lib/calificarBatchProgress';
 import {
   acquireCalificarExamLock,
   getOrCreateCalificarClientId,
@@ -607,6 +608,9 @@ function clearMobileScanPreview(
 
 export default function CalificarPage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const calificarRouteActive =
+    pathname === '/calificar' || pathname.startsWith('/calificar/');
   const isMobile = useIsMobile();
   // Cámara solo en móvil táctil; en escritorio (ratón) solo subida de archivos.
   const useLiveCameraUi = useCalificarLiveCamera();
@@ -2264,6 +2268,20 @@ export default function CalificarPage() {
   }, [scanBusy]);
 
   useEffect(() => {
+    publishCalificarBatchProgress({ running: scanBusy, status: liveStatus });
+    return () => {
+      if (!scanBusyRef.current) {
+        publishCalificarBatchProgress({ running: false, status: '' });
+      }
+    };
+  }, [scanBusy, liveStatus]);
+
+  useEffect(() => {
+    if (calificarRouteActive) return;
+    stopLiveCamera();
+  }, [calificarRouteActive, stopLiveCamera]);
+
+  useEffect(() => {
     return () => {
       stopLiveCamera();
     };
@@ -2506,6 +2524,11 @@ export default function CalificarPage() {
       const res = await heartbeatCalificarExamLock(examId, clientId);
       if (cancelled) return;
       if (!res.ok && res.error === 'not_holder') {
+        if (scanBusyRef.current) {
+          const again = await acquireCalificarExamLock(examId, clientId);
+          if (again.ok) heldExamLockRef.current = examId;
+          return;
+        }
         heldExamLockRef.current = null;
         toast.error('Perdiste el bloqueo de este examen (otra sesión lo tomó).');
         setExamId('');
@@ -2548,6 +2571,7 @@ export default function CalificarPage() {
   useEffect(() => {
     if (!examLocksEnabled) return;
     const onPageHide = () => {
+      if (scanBusyRef.current) return;
       const held = heldExamLockRef.current;
       const clientId = calificarClientIdRef.current;
       if (!held || !clientId) return;
@@ -2559,7 +2583,9 @@ export default function CalificarPage() {
     return () => {
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('beforeunload', onPageHide);
-      void releaseHeldExamLock();
+      if (!scanBusyRef.current) {
+        void releaseHeldExamLock();
+      }
     };
   }, [examLocksEnabled, releaseHeldExamLock]);
 
@@ -4188,6 +4214,10 @@ export default function CalificarPage() {
                     `Calificando ${results.length + 1}/${batchExamTotal} · ${examLabel}`
                   );
                 }
+                if (examLocksEnabled && examId && examIdx % 4 === 0) {
+                  const clientId = calificarClientIdRef.current;
+                  if (clientId) void heartbeatCalificarExamLock(examId, clientId);
+                }
                 await yieldForBatchUi(false);
                 const raw = (
                   await renderPdfGradingPageCanvas(file, p, undefined, { timeoutMs: 25000 })
@@ -4639,12 +4669,18 @@ export default function CalificarPage() {
       setBatchSummary(null);
       return;
     }
-    const missing = pending.filter(({ row }) => !row.selectedStudentId);
-    if (missing.length > 0) {
-      toast.error('Elige un alumno en cada hoja pendiente antes de guardar.');
+    const toSave = pending.filter(({ row }) => row.selectedStudentId);
+    const discardedCount = pending.length - toSave.length;
+    if (toSave.length === 0) {
+      setBatchSummary(null);
+      toast.message(
+        discardedCount === 1
+          ? 'No se guardó ninguna hoja: se descartó 1 sin alumno.'
+          : `No se guardó ninguna hoja: se descartaron ${discardedCount} sin alumno.`
+      );
       return;
     }
-    const chosenIds = pending.map(({ row }) => row.selectedStudentId!);
+    const chosenIds = toSave.map(({ row }) => row.selectedStudentId!);
     if (new Set(chosenIds).size !== chosenIds.length) {
       toast.error('La misma CURP está en más de una hoja. Quita la repetida.');
       return;
@@ -4663,10 +4699,14 @@ export default function CalificarPage() {
     }
     try {
       setScanBusy(true);
-      for (const { row, idx } of pending) {
+      for (const { row, idx } of toSave) {
         await persistPendingBatchStudent(idx, row.selectedStudentId!);
       }
-      toast.success('Resultados guardados.');
+      toast.success(
+        discardedCount > 0
+          ? `Resultados guardados (${toSave.length}). Se descartaron ${discardedCount} sin alumno.`
+          : 'Resultados guardados.'
+      );
       setBatchSummary(null);
       await clearExamAfterBatchSave();
     } catch {
@@ -5807,7 +5847,7 @@ export default function CalificarPage() {
                   batchSummary && batchSummary.length > 0
                     ? ` ${assigned} con alumno; ${pending} a mano${failed > 0 ? `; ${failed} con error` : ''}.`
                     : '';
-                return `Identifica al alumno con el recorte de nombre y apellido de la hoja.${counts} Escríbelos en el buscador, elige al alumno y pulsa Guardar. Cancelar no guarda nada. Si una hoja no se leyó, pulsa Quitar para no incluirla.`;
+                return `Identifica al alumno con el recorte de nombre y apellido de la hoja.${counts} Elige al alumno y pulsa Guardar. Las hojas sin alumno en la lista se descartan. Cancelar no guarda nada. Si una hoja no se leyó, pulsa Quitar para no incluirla.`;
               })()}
             </DialogDescription>
           </DialogHeader>

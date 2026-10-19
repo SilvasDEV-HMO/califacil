@@ -29,9 +29,10 @@ export function yieldMacrotask(): Promise<void> {
  * En background: yield rápido (MessageChannel).
  * En foreground: un frame + micro-espera corta (sin doble rAF + 16ms fijos).
  */
-export function yieldForBatchUi(forcePaint = false): Promise<void> {
+export function yieldForBatchUi(_forcePaint = false): Promise<void> {
   if (typeof window === 'undefined') return Promise.resolve();
-  if (!forcePaint && isDocumentHidden()) {
+  // Nunca rAF con pestaña oculta: el navegador lo baja a ~1 fps y el lote se congela.
+  if (isDocumentHidden()) {
     return yieldMacrotask();
   }
   return new Promise((resolve) => {
@@ -40,7 +41,6 @@ export function yieldForBatchUi(forcePaint = false): Promise<void> {
       return;
     }
     requestAnimationFrame(() => {
-      // Un solo frame basta; evita cascada rAF+rAF+16ms (~50ms+ por página).
       resolve();
     });
   });
