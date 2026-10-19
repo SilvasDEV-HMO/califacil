@@ -90,6 +90,50 @@ export const PDF_OMR_RENDER_MAX_SIDE = 1600;
 
 export const PDF_GRADE_MAX_FILE_BYTES = 25 * 1024 * 1024;
 
+const pdfDocByFile = new WeakMap<File, Promise<PdfDocument>>();
+
+function getClientPdfDocument(file: File): Promise<PdfDocument> {
+  let pending = pdfDocByFile.get(file);
+  if (!pending) {
+    pending = (async () => {
+      const pdfjs = await getPdfJs();
+      const bytes = await file.arrayBuffer();
+      return pdfjs.getDocument({ data: bytes.slice(0) }).promise;
+    })();
+    pdfDocByFile.set(file, pending);
+  }
+  return pending;
+}
+
+async function countPdfPagesInBrowser(file: File): Promise<number> {
+  const pdf = await getClientPdfDocument(file);
+  return Math.max(0, Number(pdf.numPages ?? 0));
+}
+
+async function renderPdfPageCanvasInBrowser(
+  file: File,
+  pageNumber: number,
+  maxSide = PDF_OMR_RENDER_MAX_SIDE
+): Promise<{ canvas: HTMLCanvasElement; numPages: number }> {
+  const pdf = await getClientPdfDocument(file);
+  const numPages = Math.max(0, Number(pdf.numPages ?? 0));
+  if (pageNumber < 1 || pageNumber > numPages) {
+    throw new Error('Esa página no existe en el PDF');
+  }
+  const page = await pdf.getPage(pageNumber);
+  const base = page.getViewport({ scale: 1 });
+  const longSide = Math.max(base.width, base.height);
+  const scale = longSide > 0 ? Math.min(maxSide / longSide, 2.4) : 1;
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.floor(viewport.width));
+  canvas.height = Math.max(1, Math.floor(viewport.height));
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('No se pudo crear el lienzo de la página');
+  await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+  return { canvas, numPages };
+}
+
 function yieldToBrowser(): Promise<void> {
   // No usar rAF: en pestaña oculta se congela / ralenta todo el lote.
   return new Promise((resolve) => {
@@ -140,6 +184,13 @@ export async function countPdfGradingPages(
     }
     const data = (await res.json()) as { numPages?: number };
     return Math.max(0, Number(data.numPages ?? 0));
+  } catch (err) {
+    if (opts?.signal?.aborted) throw err;
+    try {
+      return await countPdfPagesInBrowser(file);
+    } catch {
+      throw err;
+    }
   } finally {
     window.clearTimeout(timeoutId);
     opts?.signal?.removeEventListener('abort', onAbort);
@@ -330,10 +381,16 @@ export async function renderPdfGradingPageCanvas(
   try {
     return await fetchPdfPageCanvas(file, pageNumber, maxSide, controller.signal);
   } catch (err) {
-    if (controller.signal.aborted) {
-      throw new Error('La lectura del PDF tardó demasiado. Prueba un archivo más liviano.');
+    if (opts?.signal?.aborted) throw err;
+    try {
+      await yieldToBrowser();
+      return await renderPdfPageCanvasInBrowser(file, pageNumber, maxSide);
+    } catch {
+      if (controller.signal.aborted) {
+        throw new Error('La lectura del PDF tardó demasiado. Prueba un archivo más liviano.');
+      }
+      throw err;
     }
-    throw err;
   } finally {
     window.clearTimeout(timeoutId);
     opts?.signal?.removeEventListener('abort', onAbort);

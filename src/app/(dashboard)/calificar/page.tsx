@@ -3936,7 +3936,12 @@ export default function CalificarPage() {
       // Contar exámenes reales (páginas) antes de calificar — no usar el tope 800 como total.
       setLiveStatus(`Contando hojas en ${files.length} archivo(s)…`);
       await yieldForSpinnerPaint();
-      type PdfPrep = { numPages: number; firstCanvas?: HTMLCanvasElement; paperDetails?: boolean };
+      type PdfPrep = {
+        numPages: number;
+        firstCanvas?: HTMLCanvasElement;
+        paperDetails?: boolean;
+        error?: string;
+      };
       const pdfPrepByIndex = new Map<number, PdfPrep>();
       let plannedExams = 0;
       const adminPaperDetails = isAdminCalifacilEmail(user?.email);
@@ -3975,13 +3980,25 @@ export default function CalificarPage() {
             pagesPerExam === 1
               ? numPages
               : Math.floor(numPages / pagesPerExam);
-        } catch {
-          /* se reporta al calificar */
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'No se pudo leer el PDF';
+          pdfPrepByIndex.set(i, {
+            numPages: 0,
+            error: message.length < 140 ? message : 'No se pudo leer el PDF',
+          });
         }
       }
       const batchExamTotal = Math.min(plannedExams, FOLDER_BATCH_MAX_EXAMS);
       if (plannedExams === 0) {
-        toast.error('No se encontraron páginas legibles en los PDF.');
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i]!;
+          const prep = pdfPrepByIndex.get(i);
+          results.push({
+            fileName: folderFileLabel(file),
+            ok: false,
+            error: prep?.error ?? 'No se encontraron páginas legibles en el PDF',
+          });
+        }
         return;
       }
       if (plannedExams > FOLDER_BATCH_MAX_EXAMS) {
@@ -4064,6 +4081,10 @@ export default function CalificarPage() {
 
           if (isPdf) {
             let prep = pdfPrepByIndex.get(i);
+            if (prep?.error) {
+              results.push({ fileName: label, ok: false, error: prep.error });
+              continue;
+            }
             if (!prep) {
               try {
                 const numPages = await countPdfGradingPages(file, { timeoutMs: 20000 });
@@ -4490,18 +4511,21 @@ export default function CalificarPage() {
       if (gen === gradeReadGenRef.current) {
         setScanBusy(false);
         setLiveStatus('');
-        setBatchSummary(results);
-        const saved = results.filter((r) => r.ok).length;
-        const pending = results.filter((r) => r.pendingStudent).length;
-        const failed = results.length - saved - pending;
-        toast.message(
-          failed === 0 && pending === 0
-            ? `Carpeta lista: ${saved} calificación(es) guardada(s).`
-            : `Carpeta lista: ${saved} guardada(s), ${pending} sin alumno, ${failed} con error.`
-        );
-        // Sin pendientes: si se guardó algo, sacar el examen de la lista de Calificar.
-        if (pending === 0 && saved > 0 && examId) {
-          void clearExamAfterBatchSave();
+        if (results.length === 0) {
+          setBatchSummary(null);
+        } else {
+          setBatchSummary(results);
+          const saved = results.filter((r) => r.ok).length;
+          const pending = results.filter((r) => r.pendingStudent).length;
+          const failed = results.length - saved - pending;
+          toast.message(
+            failed === 0 && pending === 0
+              ? `Carpeta lista: ${saved} calificación(es) guardada(s).`
+              : `Carpeta lista: ${saved} guardada(s), ${pending} sin alumno, ${failed} con error.`
+          );
+          if (pending === 0 && saved > 0 && examId) {
+            void clearExamAfterBatchSave();
+          }
         }
       }
     }
