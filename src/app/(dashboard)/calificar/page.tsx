@@ -49,7 +49,7 @@ import {
   parseZipGradePaperDetailsText,
   shouldImportZipGradePaperDetails,
 } from '@/lib/zipGradePaperDetails';
-import { recognizeNameCrop } from '@/lib/ocrHandwrittenName';
+import { matchNameCropToGroup } from '@/lib/ocrHandwrittenName';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
@@ -3997,8 +3997,10 @@ export default function CalificarPage() {
             }
             let ocrHint = '';
             if (!student && nameCropUrl) {
-              ocrHint = await recognizeNameCrop(nameCropUrl, sortedStudents);
-              student = matchStudentByLooseName(ocrHint, sortedStudents);
+              const matched = await matchNameCropToGroup(nameCropUrl, sortedStudents);
+              ocrHint = matched.text;
+              if (matched.student) student = matched.student;
+              else student = matchStudentByLooseName(ocrHint, sortedStudents);
               if (student) sid = student.id;
             }
             const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
