@@ -343,11 +343,11 @@ function tokensClose(ocr: string, student: string): boolean {
   if (ocr === student) return true;
   const maxLen = Math.max(ocr.length, student.length);
   const minLen = Math.min(ocr.length, student.length);
-  if (minLen < 4 || maxLen - minLen > 2) return false;
+  // Marian ≠ Marin: en nombres cortos solo vale coincidencia exacta.
+  if (maxLen < 8) return false;
+  if (minLen < 6 || maxLen - minLen > 2) return false;
   const d = editDistance(ocr, student);
-  if (maxLen >= 6) return d <= 2;
-  if (maxLen >= 5) return d <= 1;
-  return false;
+  return d <= 2;
 }
 
 /**
@@ -380,13 +380,13 @@ export function matchStudentByLooseName<T extends { id: string; name: string }>(
   if (runner && runner.hits === best.hits) return null;
   if (best.hits >= 2) return best.student;
 
-  // Un apellido largo único del grupo (Valenzuela, Verduzco) sí basta.
-  // Camila/Carlos/Scott (≤6) no: el OCR los inventaba.
-  const longHits = ocrTokens.filter((t) => t.length >= 7);
+  // Una palabra única del grupo (Marian, Anahi, Michel, Amparano) sí basta
+  // si nadie más la tiene. José/Carlos empatan y quedan pendientes.
+  const longHits = ocrTokens.filter((t) => t.length >= 5);
   const uniqueLong: T[] = [];
   for (const t of longHits) {
     const owners = students.filter((s) =>
-      nameTokens(s.name).some((st) => st.length >= 7 && tokensClose(t, st))
+      nameTokens(s.name).some((st) => st.length >= 5 && tokensClose(t, st))
     );
     if (owners.length === 1 && !uniqueLong.some((s) => s.id === owners[0]!.id)) {
       uniqueLong.push(owners[0]!);

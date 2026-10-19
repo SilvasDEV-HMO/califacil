@@ -7,7 +7,7 @@ export const maxDuration = 30;
 const MAX_IMAGE_CHARS = 900_000;
 const MAX_STUDENTS = 250;
 
-type RosterStudent = { id: string; name: string };
+type RosterStudent = { id: string; name: string; control?: string };
 
 function isDataImageUrl(value: string): boolean {
   return value.startsWith('data:image/');
@@ -28,13 +28,17 @@ export async function POST(request: NextRequest) {
 
     const body = (await request.json()) as {
       image?: string;
-      students?: RosterStudent[];
+      students?: { id?: string; name?: string; control?: string; control_number?: string }[];
     };
     const image = (body.image ?? '').trim();
-    const students = Array.isArray(body.students)
+    const students: RosterStudent[] = Array.isArray(body.students)
       ? body.students
           .filter((s) => s && typeof s.id === 'string' && typeof s.name === 'string')
-          .map((s) => ({ id: s.id.trim(), name: s.name.trim() }))
+          .map((s) => ({
+            id: s.id!.trim(),
+            name: s.name!.trim(),
+            control: String(s.control ?? s.control_number ?? '').trim(),
+          }))
           .filter((s) => s.id && s.name)
           .slice(0, MAX_STUDENTS)
       : [];
@@ -49,8 +53,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Falta la lista del grupo' }, { status: 400 });
     }
 
-    const ids = new Set(students.map((s) => s.id));
-    const roster = students.map((s) => `${s.id} | ${s.name}`).join('\n');
+    const roster = students
+      .map((s, i) => {
+        const curp = s.control ? ` CURP ${s.control}` : '';
+        return `${i + 1}. ${s.name}${curp}`;
+      })
+      .join('\n');
 
     const openai = new OpenAI({ apiKey });
     const completion = await openai.chat.completions.create({
@@ -59,46 +67,52 @@ export async function POST(request: NextRequest) {
         {
           role: 'system',
           content:
-            'Respondes solo JSON válido. Eliges un alumno de la lista o null. No inventes ids.',
+            'Respondes solo JSON. n es el número de lista del alumno o null. readText es lo escrito en la hoja.',
         },
         {
           role: 'user',
           content: [
             {
               type: 'text',
-              text: `La imagen es el recorte Nombre | Apellido manuscrito de una hoja.
-Lee lo escrito (aunque la letra sea irregular).
-Compara con la lista del grupo (formato: id | NOMBRE EN MAYÚSCULAS, a veces apellidos primero).
-Si hay un único alumno que encaje (p. ej. "Miriam Amador" → AMADOR … MIRIAM …), devuelve su id.
-Si el nombre no está en la lista, hay empate, o no se lee, studentId = null.
-No elijas a alguien solo porque un nombre de pila coincida (Carlos, José).
+              text: `Recorte de hoja: caja izquierda = nombre(s), caja derecha = apellido(s).
+Lee ambas cajas. La lista del grupo está en APELLIDOS + NOMBRES (mayúsculas).
+Elige el número n si nombre y/o apellidos apuntan a UN solo alumno.
+Ejemplos: "Marian"+"Arce" → ARCE … MARIAN …; "Anahi"+"Amparano" → AMPARANO … ANAHI; "Michel"+"Lopez" → LOPEZ … MICHEL; "Geovanny"+"Marin Miranda" → MARIN MIRANDA GEOVANNY.
+Si no está en la lista o hay empate, n = null. Siempre llena readText con lo que leíste (nombre y apellido).
 
 Lista:
 ${roster}
 
-JSON: {"studentId":"<id o null>","readText":"<nombre leído>"}`,
+JSON: {"n":<número o null>,"readText":"<nombre y apellido leídos>"}`,
             },
-            { type: 'image_url', image_url: { url: image, detail: 'low' } },
+            { type: 'image_url', image_url: { url: image, detail: 'high' } },
           ],
         },
       ],
       temperature: 0,
-      max_tokens: 200,
+      max_tokens: 220,
       response_format: { type: 'json_object' },
     });
 
     const raw = completion.choices[0]?.message?.content?.trim() || '{}';
-    let parsed: { studentId?: unknown; readText?: unknown } = {};
+    let parsed: { n?: unknown; studentId?: unknown; readText?: unknown } = {};
     try {
-      parsed = JSON.parse(raw) as { studentId?: unknown; readText?: unknown };
+      parsed = JSON.parse(raw) as { n?: unknown; studentId?: unknown; readText?: unknown };
     } catch {
       parsed = {};
     }
 
     const readText = typeof parsed.readText === 'string' ? parsed.readText.trim() : '';
-    const sidRaw =
-      parsed.studentId == null || parsed.studentId === 'null' ? '' : String(parsed.studentId).trim();
-    const studentId = sidRaw && ids.has(sidRaw) ? sidRaw : null;
+    let studentId: string | null = null;
+    const n = Number(parsed.n);
+    if (Number.isInteger(n) && n >= 1 && n <= students.length) {
+      studentId = students[n - 1]!.id;
+    } else {
+      const sidRaw =
+        parsed.studentId == null || parsed.studentId === 'null' ? '' : String(parsed.studentId).trim();
+      const ids = new Set(students.map((s) => s.id));
+      if (sidRaw && ids.has(sidRaw)) studentId = sidRaw;
+    }
 
     return NextResponse.json({ studentId, readText, model: 'gpt-4o-mini' });
   } catch (e: unknown) {

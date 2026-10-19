@@ -8,11 +8,29 @@ export type NameCropMatch<T extends { id: string; name: string }> = {
   student: T | null;
 };
 
+type RosterRow = { id: string; name: string; control_number?: string | null };
+
+async function postMatchName(image: string, students: RosterRow[]) {
+  const headers = await dashboardAuthJsonHeaders();
+  return fetch('/api/calificar/match-name', {
+    method: 'POST',
+    headers: { ...headers },
+    credentials: 'include',
+    body: JSON.stringify({
+      image,
+      students: students.map((s) => ({
+        id: s.id,
+        name: s.name,
+        control: s.control_number ?? '',
+      })),
+    }),
+  });
+}
+
 /**
  * Lee el recorte Nombre|Apellido con visión (gpt-4o-mini) y lo cruza con el grupo.
- * Tesseract no lee esta letra manuscrita; si la API falla, no se asigna alumno.
  */
-export async function matchNameCropToGroup<T extends { id: string; name: string }>(
+export async function matchNameCropToGroup<T extends RosterRow>(
   dataUrl: string | null | undefined,
   students: T[]
 ): Promise<NameCropMatch<T>> {
@@ -22,16 +40,11 @@ export async function matchNameCropToGroup<T extends { id: string; name: string 
   }
 
   try {
-    const headers = await dashboardAuthJsonHeaders();
-    const res = await fetch('/api/calificar/match-name', {
-      method: 'POST',
-      headers: { ...headers },
-      credentials: 'include',
-      body: JSON.stringify({
-        image: src,
-        students: students.map((s) => ({ id: s.id, name: s.name })),
-      }),
-    });
+    let res = await postMatchName(src, students);
+    if (!res.ok && (res.status === 429 || res.status >= 500)) {
+      await new Promise((r) => setTimeout(r, 600));
+      res = await postMatchName(src, students);
+    }
     if (!res.ok) {
       console.warn('OCR nombre manuscrito HTTP', res.status);
       return { text: '', student: null };
