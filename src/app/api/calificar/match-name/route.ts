@@ -53,12 +53,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Falta la lista del grupo' }, { status: 400 });
     }
 
-    const roster = students
-      .map((s, i) => {
-        const curp = s.control ? ` CURP ${s.control}` : '';
-        return `${i + 1}. ${s.name}${curp}`;
-      })
-      .join('\n');
+    const roster = students.map((s, i) => `${i + 1}. ${s.name}`).join('\n');
 
     const openai = new OpenAI({ apiKey });
     const completion = await openai.chat.completions.create({
@@ -66,31 +61,26 @@ export async function POST(request: NextRequest) {
       messages: [
         {
           role: 'system',
-          content:
-            'Respondes solo JSON. n es el número de lista del alumno o null. readText es lo escrito en la hoja.',
+          content: 'JSON only: n = roster number or null; readText = handwritten name.',
         },
         {
           role: 'user',
           content: [
             {
               type: 'text',
-              text: `Recorte de hoja: caja izquierda = nombre(s), caja derecha = apellido(s).
-Lee ambas cajas. La lista del grupo está en APELLIDOS + NOMBRES (mayúsculas).
-Elige el número n si nombre y/o apellidos apuntan a UN solo alumno.
-Ejemplos: "Marian"+"Arce" → ARCE … MARIAN …; "Anahi"+"Amparano" → AMPARANO … ANAHI; "Michel"+"Lopez" → LOPEZ … MICHEL; "Geovanny"+"Marin Miranda" → MARIN MIRANDA GEOVANNY.
-Si no está en la lista o hay empate, n = null. Siempre llena readText con lo que leíste (nombre y apellido).
+              text: `Left box = given name(s), right box = surname(s). Roster is SURNAMES then GIVEN NAMES.
+Pick n if uniquely matches. Else n=null. Always set readText.
 
-Lista:
 ${roster}
 
-JSON: {"n":<número o null>,"readText":"<nombre y apellido leídos>"}`,
+{"n":null,"readText":""}`,
             },
-            { type: 'image_url', image_url: { url: image, detail: 'high' } },
+            { type: 'image_url', image_url: { url: image, detail: 'low' } },
           ],
         },
       ],
       temperature: 0,
-      max_tokens: 220,
+      max_tokens: 80,
       response_format: { type: 'json_object' },
     });
 

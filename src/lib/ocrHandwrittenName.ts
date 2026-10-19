@@ -10,6 +10,34 @@ export type NameCropMatch<T extends { id: string; name: string }> = {
 
 type RosterRow = { id: string; name: string; control_number?: string | null };
 
+/** Recorte pequeño: gpt-4o-mini cobra la imagen por tamaño/detalle. */
+async function shrinkNameCrop(dataUrl: string): Promise<string> {
+  if (typeof document === 'undefined') return dataUrl;
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('crop'));
+      el.src = dataUrl;
+    });
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const maxW = 420;
+    const scale = w > maxW ? maxW / w : 1;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(8, Math.round(w * scale));
+    canvas.height = Math.max(8, Math.round(h * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.62);
+  } catch {
+    return dataUrl;
+  }
+}
+
 async function postMatchName(image: string, students: RosterRow[]) {
   const headers = await dashboardAuthJsonHeaders();
   return fetch('/api/calificar/match-name', {
@@ -21,7 +49,6 @@ async function postMatchName(image: string, students: RosterRow[]) {
       students: students.map((s) => ({
         id: s.id,
         name: s.name,
-        control: s.control_number ?? '',
       })),
     }),
   });
@@ -40,10 +67,11 @@ export async function matchNameCropToGroup<T extends RosterRow>(
   }
 
   try {
-    let res = await postMatchName(src, students);
-    if (!res.ok && (res.status === 429 || res.status >= 500)) {
-      await new Promise((r) => setTimeout(r, 600));
-      res = await postMatchName(src, students);
+    const small = await shrinkNameCrop(src);
+    let res = await postMatchName(small, students);
+    if (!res.ok && res.status === 429) {
+      await new Promise((r) => setTimeout(r, 800));
+      res = await postMatchName(small, students);
     }
     if (!res.ok) {
       console.warn('OCR nombre manuscrito HTTP', res.status);
