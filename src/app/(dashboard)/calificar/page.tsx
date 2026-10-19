@@ -4020,27 +4020,19 @@ export default function CalificarPage() {
               opts?.pctOverride != null && Number.isFinite(opts.pctOverride)
                 ? Math.round(opts.pctOverride)
                 : previewStats.pct;
-            if (!student) {
-              results.push({
-                fileName: examLabel,
-                ok: false,
-                pendingStudent: true,
-                mergedDraft: { ...merged },
-                pct: displayPct,
-                nameCropUrl,
-                ocrHint: ocrHint || undefined,
-                error: 'Elige al alumno para guardar',
-              });
-              return;
-            }
-            const stats = await persistStudentAnswers(merged, student.id);
+            // No persistir hasta Guardar: Cancelar/Cerrar no deja nada en la base.
             results.push({
               fileName: examLabel,
-              ok: true,
-              studentName: student.name,
-              studentId: student.id,
-              pct: opts?.pctOverride != null ? displayPct : stats.pct,
+              ok: false,
+              pendingStudent: true,
+              mergedDraft: { ...merged },
+              pct: displayPct,
               nameCropUrl,
+              ocrHint: ocrHint || undefined,
+              selectedStudentId: student?.id,
+              studentId: student?.id,
+              studentName: student?.name,
+              error: 'Elige al alumno para guardar',
             });
           };
 
@@ -4645,7 +4637,6 @@ export default function CalificarPage() {
       .filter(({ row }) => row.pendingStudent && row.mergedDraft);
     if (pending.length === 0) {
       setBatchSummary(null);
-      void clearExamAfterBatchSave();
       return;
     }
     const missing = pending.filter(({ row }) => !row.selectedStudentId);
@@ -5806,15 +5797,17 @@ export default function CalificarPage() {
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
               {(() => {
-                const saved = batchSummary?.filter((r) => r.ok).length ?? 0;
-                const pending = batchSummary?.filter((r) => r.pendingStudent).length ?? 0;
+                const assigned =
+                  batchSummary?.filter((r) => r.pendingStudent && r.selectedStudentId).length ?? 0;
+                const pending =
+                  batchSummary?.filter((r) => r.pendingStudent && !r.selectedStudentId).length ?? 0;
                 const failed =
-                  (batchSummary?.length ?? 0) - saved - pending;
+                  (batchSummary?.filter((r) => !r.pendingStudent && !r.ok).length ?? 0);
                 const counts =
                   batchSummary && batchSummary.length > 0
-                    ? ` ${saved} con alumno; ${pending} a mano${failed > 0 ? `; ${failed} con error` : ''}.`
+                    ? ` ${assigned} con alumno; ${pending} a mano${failed > 0 ? `; ${failed} con error` : ''}.`
                     : '';
-                return `Identifica al alumno con el recorte de nombre y apellido de la hoja.${counts} Escríbelos en el buscador, elige al alumno y pulsa Guardar. Si una hoja no se leyó, pulsa Quitar para no incluirla.`;
+                return `Identifica al alumno con el recorte de nombre y apellido de la hoja.${counts} Escríbelos en el buscador, elige al alumno y pulsa Guardar. Cancelar no guarda nada. Si una hoja no se leyó, pulsa Quitar para no incluirla.`;
               })()}
             </DialogDescription>
           </DialogHeader>
@@ -5914,7 +5907,7 @@ export default function CalificarPage() {
           )}
           <DialogFooter className="gap-2 sm:justify-end">
             <Button type="button" variant="outline" onClick={() => setBatchSummary(null)}>
-              Cerrar
+              Cancelar
             </Button>
             {(batchSummary?.some((r) => r.pendingStudent) ?? false) ? (
               <Button
