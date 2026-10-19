@@ -45,9 +45,11 @@ import {
   isAdminCalifacilEmail,
   looksLikeZipGradePaperDetailsText,
   mapPaperDetailsToMcDraft,
+  matchStudentByLooseName,
   parseZipGradePaperDetailsText,
   shouldImportZipGradePaperDetails,
 } from '@/lib/zipGradePaperDetails';
+import { recognizeNameCrop } from '@/lib/ocrHandwrittenName';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
@@ -3992,6 +3994,11 @@ export default function CalificarPage() {
               student = matchStudentFromScanFileName(examLabel, sortedStudents);
               if (student) sid = student.id;
             }
+            if (!student && nameCropUrl) {
+              const hint = await recognizeNameCrop(nameCropUrl);
+              student = matchStudentByLooseName(hint, sortedStudents);
+              if (student) sid = student.id;
+            }
             const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
             const displayPct =
               opts?.pctOverride != null && Number.isFinite(opts.pctOverride)
@@ -5770,8 +5777,17 @@ export default function CalificarPage() {
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
-              Identifica al alumno con el recorte de nombre y apellido de la hoja. Escríbelos en el buscador, elige al alumno y pulsa
-              Guardar. Si una hoja no se leyó, pulsa Quitar para no incluirla.
+              {(() => {
+                const saved = batchSummary?.filter((r) => r.ok).length ?? 0;
+                const pending = batchSummary?.filter((r) => r.pendingStudent).length ?? 0;
+                const failed =
+                  (batchSummary?.length ?? 0) - saved - pending;
+                const counts =
+                  batchSummary && batchSummary.length > 0
+                    ? ` ${saved} con alumno; ${pending} a mano${failed > 0 ? `; ${failed} con error` : ''}.`
+                    : '';
+                return `Identifica al alumno con el recorte de nombre y apellido de la hoja.${counts} Escríbelos en el buscador, elige al alumno y pulsa Guardar. Si una hoja no se leyó, pulsa Quitar para no incluirla.`;
+              })()}
             </DialogDescription>
           </DialogHeader>
           {batchSummary && batchSummary.length > 0 ? (

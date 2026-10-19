@@ -301,38 +301,41 @@ export function cropPaperDetailsNameApellidoDataUrl(
   }
 }
 
-/** Busca alumno por nombre/apellido aproximado (para preseleccionar en el lote). */
-export function matchStudentByLooseName<T extends { id: string; name: string }>(
-  hint: string | null | undefined,
-  students: T[]
-): T | null {
-  const raw = (hint ?? '')
+function foldPersonName(value: string): string {
+  return value
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** Busca alumno por nombre/apellido aproximado (para preseleccionar en el lote). */
+export function matchStudentByLooseName<T extends { id: string; name: string }>(
+  hint: string | null | undefined,
+  students: T[]
+): T | null {
+  const raw = foldPersonName(hint ?? '');
   if (raw.length < 3 || students.length === 0) return null;
   const tokens = raw.split(' ').filter((t) => t.length >= 2);
   if (tokens.length === 0) return null;
 
-  let best: T | null = null;
-  let bestScore = 0;
-  for (const s of students) {
-    const name = s.name
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase();
-    let score = 0;
-    for (const t of tokens) {
-      if (name.includes(t)) score += t.length;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      best = s;
-    }
-  }
-  // Exigir al menos ~6 caracteres de coincidencia
-  return bestScore >= 6 ? best : null;
+  const scored = students
+    .map((s) => {
+      const name = foldPersonName(s.name);
+      let score = 0;
+      for (const t of tokens) {
+        if (name.includes(t)) score += t.length;
+      }
+      return { student: s, score };
+    })
+    .filter((row) => row.score >= 6)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) return null;
+  const best = scored[0]!;
+  const tied = scored.filter((row) => row.score === best.score);
+  if (tied.length > 1) return null;
+  return best.student;
 }
