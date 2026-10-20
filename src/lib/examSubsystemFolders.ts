@@ -8,6 +8,11 @@ export const SUBSYSTEM_FOLDER_SPECS = [
   { codes: ['ETV'] as const, name: 'Teles' },
 ];
 
+export const SUBJECT_SUBFOLDER_SPECS = [
+  { kind: 'lenguaje' as const, name: 'Lenguaje' },
+  { kind: 'matematicas' as const, name: 'Matemáticas' },
+];
+
 export type SubsystemFolderCode = (typeof SUBSYSTEM_FOLDER_SPECS)[number]['codes'][number];
 
 function normalizeName(value: string): string {
@@ -44,6 +49,58 @@ function findRootFolderByName(folders: ExamFolder[], name: string): ExamFolder |
   return folders.find((f) => !f.parent_id && normalizeName(f.name) === want);
 }
 
+function findChildFolderByName(
+  folders: ExamFolder[],
+  parentId: string,
+  name: string
+): ExamFolder | undefined {
+  const want = normalizeName(name);
+  return folders.find((f) => f.parent_id === parentId && normalizeName(f.name) === want);
+}
+
+export function descendantFolderIds(folders: ExamFolder[], rootId: string): Set<string> {
+  const ids = new Set<string>([rootId]);
+  let added = true;
+  while (added) {
+    added = false;
+    for (const folder of folders) {
+      if (folder.parent_id && ids.has(folder.parent_id) && !ids.has(folder.id)) {
+        ids.add(folder.id);
+        added = true;
+      }
+    }
+  }
+  return ids;
+}
+
+export function examsInFolderTree(
+  exams: Exam[],
+  folders: ExamFolder[],
+  folderId: string
+): Exam[] {
+  const ids = descendantFolderIds(folders, folderId);
+  return exams.filter((exam) => exam.folder_id && ids.has(exam.folder_id));
+}
+
+async function ensureFolder(
+  teacherId: string,
+  parentId: string | null,
+  name: string,
+  nextFolders: ExamFolder[]
+): Promise<{ folder: ExamFolder | null; created: boolean }> {
+  const existing = parentId
+    ? findChildFolderByName(nextFolders, parentId, name)
+    : findRootFolderByName(nextFolders, name);
+  if (existing) return { folder: existing, created: false };
+  const { data, error } = await supabase
+    .from('exam_folders')
+    .insert([{ teacher_id: teacherId, parent_id: parentId, name }])
+    .select()
+    .single();
+  if (error || !data) return { folder: null, created: false };
+  return { folder: data as ExamFolder, created: true };
+}
+
 export async function ensureSubsystemFoldersAndAssignExams(
   teacherId: string,
   folders: ExamFolder[],
@@ -52,23 +109,28 @@ export async function ensureSubsystemFoldersAndAssignExams(
   let nextFolders = [...folders];
   let foldersChanged = false;
 
-  for (const spec of SUBSYSTEM_FOLDER_SPECS) {
-    if (findRootFolderByName(nextFolders, spec.name)) continue;
-    const { data, error } = await supabase
-      .from('exam_folders')
-      .insert([{ teacher_id: teacherId, parent_id: null, name: spec.name }])
-      .select()
-      .single();
-    if (error || !data) continue;
-    nextFolders.push(data as ExamFolder);
-    foldersChanged = true;
-  }
+  const parentIdByCode: Partial<Record<SubsystemFolderCode, string>> = {};
+  const subjectFolderIdByParent: Record<string, { lenguaje?: string; matematicas?: string }> = {};
 
-  const folderIdByCode: Partial<Record<SubsystemFolderCode, string | null>> = {};
   for (const spec of SUBSYSTEM_FOLDER_SPECS) {
-    const folderId = findRootFolderByName(nextFolders, spec.name)?.id ?? null;
-    for (const code of spec.codes) {
-      folderIdByCode[code] = folderId;
+    const parent = await ensureFolder(teacherId, null, spec.name, nextFolders);
+    if (parent.created && parent.folder) {
+      nextFolders.push(parent.folder);
+      foldersChanged = true;
+    }
+    const parentId = parent.folder?.id;
+    if (!parentId) continue;
+    for (const code of spec.codes) parentIdByCode[code] = parentId;
+
+    for (const subject of SUBJECT_SUBFOLDER_SPECS) {
+      const child = await ensureFolder(teacherId, parentId, subject.name, nextFolders);
+      if (child.created && child.folder) {
+        nextFolders.push(child.folder);
+        foldersChanged = true;
+      }
+      if (!child.folder) continue;
+      if (!subjectFolderIdByParent[parentId]) subjectFolderIdByParent[parentId] = {};
+      subjectFolderIdByParent[parentId][subject.kind] = child.folder.id;
     }
   }
 
@@ -76,7 +138,11 @@ export async function ensureSubsystemFoldersAndAssignExams(
   for (const exam of exams) {
     const code = subsystemCodeFromExamTitle(exam.title);
     if (!code) continue;
-    const folderId = folderIdByCode[code];
+    const parentId = parentIdByCode[code];
+    if (!parentId) continue;
+    const kind = examSubjectKind(exam.title);
+    const folderId =
+      (kind ? subjectFolderIdByParent[parentId]?.[kind] : undefined) ?? parentId;
     if (!folderId || exam.folder_id === folderId) continue;
     moves.push({ id: exam.id, folder_id: folderId });
   }

@@ -63,8 +63,10 @@ import { downloadTeacherResultsExcel } from '@/lib/exportTeacherResultsExcel';
 import {
   emptyFolderExamGradeStats,
   ensureSubsystemFoldersAndAssignExams,
+  examsInFolderTree,
   fetchFolderExamGradeStats,
   listExamIdsWithAnswers,
+  SUBJECT_SUBFOLDER_SPECS,
   SUBSYSTEM_FOLDER_SPECS,
 } from '@/lib/examSubsystemFolders';
 import { TwoStepDeleteDialog } from '@/components/two-step-delete-dialog';
@@ -159,7 +161,10 @@ export default function ExamsPage() {
     const list = folders.filter((f) =>
       currentFolderId ? f.parent_id === currentFolderId : f.parent_id === null
     );
-    const order = SUBSYSTEM_FOLDER_SPECS.map((s) => s.name) as string[];
+    const order = [
+      ...SUBSYSTEM_FOLDER_SPECS.map((s) => s.name),
+      ...SUBJECT_SUBFOLDER_SPECS.map((s) => s.name),
+    ] as string[];
     return [...list].sort((a, b) => {
       const ai = order.indexOf(a.name);
       const bi = order.indexOf(b.name);
@@ -172,8 +177,8 @@ export default function ExamsPage() {
 
   const folderExams = useMemo(() => {
     if (!currentFolderId) return [];
-    return exams.filter((exam) => exam.folder_id === currentFolderId);
-  }, [exams, currentFolderId]);
+    return examsInFolderTree(exams, folders, currentFolderId);
+  }, [exams, folders, currentFolderId]);
 
   const [folderStats, setFolderStats] = useState(emptyFolderExamGradeStats);
   const [folderStatsLoading, setFolderStatsLoading] = useState(false);
@@ -517,10 +522,8 @@ export default function ExamsPage() {
             <FolderCard
               key={folder.id}
               folder={folder}
-              examCount={exams.filter(
-                (e) =>
-                  e.folder_id === folder.id &&
-                  (filterStatus === 'all' || e.status === filterStatus)
+              examCount={examsInFolderTree(exams, folders, folder.id).filter(
+                (e) => filterStatus === 'all' || e.status === filterStatus
               ).length}
               subfolderCount={folders.filter((f) => f.parent_id === folder.id).length}
               onOpen={() => navigateToFolder(folder.id)}
