@@ -3860,6 +3860,10 @@ export default function CalificarPage() {
     if (!studentId || !persistExam || !persistExamId) {
       throw new Error('missing_context');
     }
+    const alreadySet = active?.alreadyGraded ?? studentsAlreadyGraded;
+    if (alreadySet.has(studentId)) {
+      throw new Error('already_graded');
+    }
     const effectiveKey = persistKeyMaps.byQuestionId;
     const mcQuestions = persistQuestions.filter((q) => q.type === 'multiple_choice');
     const mcTotal = mcQuestions.length;
@@ -3896,6 +3900,19 @@ export default function CalificarPage() {
       onConflict: 'exam_id,student_id,question_id',
     });
     if (answersError) throw answersError;
+    active?.alreadyGraded.add(studentId);
+    if (persistExamId === examId) {
+      setStudentsAlreadyGraded((prev) => {
+        const next = new Set(prev);
+        next.add(studentId);
+        return next;
+      });
+    }
+    setBatchGradedByExamId((prev) => {
+      const cur = new Set(prev[persistExamId] ?? []);
+      cur.add(studentId);
+      return { ...prev, [persistExamId]: Array.from(cur) };
+    });
 
     const pct = calculatePercentage(correctCount, mcTotal);
     const wrong = Math.max(0, mcTotal - correctCount);
@@ -3963,6 +3980,7 @@ export default function CalificarPage() {
     setScanBusy(true);
     setBatchSummary(null);
     const results: BatchGradeItem[] = [];
+    let skippedAlreadyGraded = 0;
 
     const pdfPseudo = (pageNumber: number) => pdfPaginaPseudoFile(pageNumber);
     const fileExamIdByIndex = new Map<number, string>();
@@ -4023,6 +4041,26 @@ export default function CalificarPage() {
 
     const pagesPerExamDefault = Math.max(1, subjectMode ? 1 : totalSheets);
 
+    const takenStudentIdsForExam = (
+      examKey: string | undefined,
+      bundle: CalificarExamBundle | null
+    ) => {
+      const taken = new Set<string>();
+      if (bundle) bundle.alreadyGraded.forEach((id) => taken.add(id));
+      else studentsAlreadyGraded.forEach((id) => taken.add(id));
+      for (const row of results) {
+        if (examKey && row.examId && row.examId !== examKey) continue;
+        if (row.studentId) taken.add(row.studentId);
+        if (row.selectedStudentId) taken.add(row.selectedStudentId);
+      }
+      return taken;
+    };
+    const examFullyGraded = (bundle: CalificarExamBundle | null) => {
+      if (!bundle || bundle.students.length === 0) return false;
+      const taken = takenStudentIdsForExam(bundle.examId, bundle);
+      return bundle.students.every((s) => taken.has(s.id));
+    };
+
     const wake = await requestBatchWakeLock();
     try {
       // Contar exámenes reales (páginas) antes de calificar — no usar el tope 800 como total.
@@ -4040,6 +4078,13 @@ export default function CalificarPage() {
       for (let i = 0; i < files.length; i++) {
         if (gen !== gradeReadGenRef.current) return;
         if (fileMatchErrorByIndex.has(i)) continue;
+        if (subjectMode) {
+          const countedExamId = fileExamIdByIndex.get(i);
+          const countedBundle = countedExamId
+            ? batchBundlesByIdRef.current.get(countedExamId) ?? null
+            : null;
+          if (examFullyGraded(countedBundle)) continue;
+        }
         const file = files[i]!;
         const isPdf =
           file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
@@ -4128,6 +4173,10 @@ export default function CalificarPage() {
             continue;
           }
           batchBundleRef.current = fileBundle;
+          if (examFullyGraded(fileBundle)) {
+            skippedAlreadyGraded += Math.max(1, pdfPrepByIndex.get(i)?.numPages ?? 1);
+            continue;
+          }
         }
         const activeQuestions = fileBundle?.questions ?? questions;
         const activeStudents = fileBundle?.students ?? sortedStudents;
@@ -4153,26 +4202,20 @@ export default function CalificarPage() {
             nameCropUrl: string | null,
             opts?: { pctOverride?: number | null; pdfText?: string }
           ) => {
-            const takenIds = new Set<string>();
-            const gradedHere = fileBundle?.alreadyGraded ?? studentsAlreadyGraded;
-            gradedHere.forEach((id) => takenIds.add(id));
-            for (const row of results) {
-              if (fileBundle && row.examId && row.examId !== fileBundle.examId) continue;
-              if (row.studentId) takenIds.add(row.studentId);
-              if (row.selectedStudentId) takenIds.add(row.selectedStudentId);
-            }
+            const takenIds = takenStudentIdsForExam(fileBundle?.examId, fileBundle);
             const available = activeStudents.filter((s) => !takenIds.has(s.id));
+            const matchPool = activeStudents;
 
             let sid = studentId;
             if (!sid && controlNumber) {
-              sid = findStudentByControlNumber(available, controlNumber)?.id ?? null;
+              sid = findStudentByControlNumber(matchPool, controlNumber)?.id ?? null;
             }
-            let student = sid ? available.find((s) => s.id === sid) ?? null : null;
+            let student = sid ? matchPool.find((s) => s.id === sid) ?? null : null;
             if (!student) {
-              student = findStudentByControlNumber(available, controlNumber);
+              student = findStudentByControlNumber(matchPool, controlNumber);
             }
             if (!student) {
-              student = matchStudentFromScanFileName(examLabel, available);
+              student = matchStudentFromScanFileName(examLabel, matchPool);
               if (student) sid = student.id;
             }
             let ocrHint = '';
@@ -4180,24 +4223,30 @@ export default function CalificarPage() {
               const fromPdf = extractStudentNameFromPaperDetailsText(opts.pdfText);
               if (fromPdf) {
                 ocrHint = fromPdf;
-                student = matchStudentByLooseName(fromPdf, available);
+                student = matchStudentByLooseName(fromPdf, matchPool);
                 if (student) sid = student.id;
               }
             }
             if (!student && nameCropUrl) {
-              const matched = await matchNameCropToGroup(nameCropUrl, available);
+              const matched = await matchNameCropToGroup(nameCropUrl, matchPool);
               ocrHint = matched.text;
               if (matched.student) student = matched.student;
-              else student = matchStudentByLooseName(ocrHint, available);
+              else student = matchStudentByLooseName(ocrHint, matchPool);
               if (student) sid = student.id;
             }
-            if (student && takenIds.has(student.id)) student = null;
+            if (student && takenIds.has(student.id)) {
+              skippedAlreadyGraded += 1;
+              return;
+            }
+            if (!student && matchPool.length > 0 && available.length === 0) {
+              skippedAlreadyGraded += 1;
+              return;
+            }
             const previewStats = gradeMcDraftAgainstVirtualKey(merged, activeQuestions, activeKeyMaps);
             const displayPct =
               opts?.pctOverride != null && Number.isFinite(opts.pctOverride)
                 ? Math.round(opts.pctOverride)
                 : previewStats.pct;
-            // No persistir hasta Guardar: Cancelar/Cerrar no deja nada en la base.
             results.push({
               fileName: examLabel,
               ok: false,
@@ -4684,15 +4733,24 @@ export default function CalificarPage() {
         setLiveStatus('');
         if (results.length === 0) {
           setBatchSummary(null);
+          toast.message(
+            skippedAlreadyGraded > 0
+              ? `Nada nuevo: se omitieron ${skippedAlreadyGraded} hoja(s) que ya estaban calificadas. Las notas no se tocaron.`
+              : 'No hubo hojas nuevas para revisar.'
+          );
         } else {
           setBatchSummary(results);
           const saved = results.filter((r) => r.ok).length;
           const pending = results.filter((r) => r.pendingStudent).length;
           const failed = results.length - saved - pending;
+          const skippedBit =
+            skippedAlreadyGraded > 0
+              ? ` Se omitieron ${skippedAlreadyGraded} ya calificadas.`
+              : '';
           toast.message(
             failed === 0 && pending === 0
-              ? `Carpeta lista: ${saved} calificación(es) guardada(s).`
-              : `Carpeta lista: ${saved} guardada(s), ${pending} sin alumno, ${failed} con error.`
+              ? `Carpeta lista: ${saved} calificación(es) guardada(s).${skippedBit}`
+              : `Carpeta lista: ${saved} guardada(s), ${pending} para revisar, ${failed} con error.${skippedBit}`
           );
           if (pending === 0 && saved > 0 && examId) {
             void clearExamAfterBatchSave();
@@ -4769,6 +4827,7 @@ export default function CalificarPage() {
     const pool = bundle?.students ?? sortedStudents;
     const student = pool.find((s) => s.id === studentId);
     if (!student) return;
+    if ((bundle?.alreadyGraded ?? studentsAlreadyGraded).has(student.id)) return;
     if (bundle) batchBundleRef.current = bundle;
     const stats = await persistStudentAnswers(row.mergedDraft, student.id, bundle);
     setBatchSummary((prev) => {
@@ -6120,7 +6179,7 @@ export default function CalificarPage() {
                   batchSummary && batchSummary.length > 0
                     ? ` ${assigned} con alumno; ${pending} a mano${failed > 0 ? `; ${failed} con error` : ''}.`
                     : '';
-                return `Identifica al alumno con el recorte de nombre y apellido de la hoja.${counts} Elige al alumno y pulsa Guardar. Las hojas sin alumno en la lista se descartan. Cancelar no guarda nada. Si una hoja no se leyó, pulsa Quitar para no incluirla.`;
+                return `Solo aparecen hojas que aún no están calificadas.${counts} Si la IA no reconoció el nombre, elige al alumno en la lista. Las que ya tenían nota no se muestran ni se cambian. Guardar solo escribe las filas con alumno. Cancelar no guarda nada.`;
               })()}
             </DialogDescription>
           </DialogHeader>
