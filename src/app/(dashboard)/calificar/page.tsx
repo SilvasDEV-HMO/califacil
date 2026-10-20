@@ -53,6 +53,15 @@ import {
   shouldImportZipGradePaperDetails,
 } from '@/lib/zipGradePaperDetails';
 import { matchNameCropToGroup } from '@/lib/ocrHandwrittenName';
+import {
+  loadCalificarExamBundle,
+  type CalificarExamBundle,
+} from '@/lib/calificarExamBundle';
+import {
+  matchRafPdfToExam,
+  rafSubjectFromTitle,
+  type RafSubject,
+} from '@/lib/rafPdfExamMatch';
 import { supabase } from '@/lib/supabase';
 import {
   buildCalifacilVirtualKey,
@@ -296,6 +305,8 @@ type BatchGradeItem = {
   nameCropUrl?: string | null;
   selectedStudentId?: string;
   ocrHint?: string;
+  examId?: string;
+  examTitle?: string;
 };
 
 /**
@@ -621,6 +632,13 @@ export default function CalificarPage() {
 
   const [examId, setExamId] = useState<string>('');
   const { exam, loading: examLoading } = useExam(examId || undefined);
+  const [batchSubject, setBatchSubject] = useState<RafSubject | ''>('');
+  const batchBundleRef = useRef<CalificarExamBundle | null>(null);
+  const batchBundlesByIdRef = useRef<Map<string, CalificarExamBundle>>(new Map());
+  const [batchStudentsByExamId, setBatchStudentsByExamId] = useState<Record<string, Student[]>>(
+    {}
+  );
+  const [batchGradedByExamId, setBatchGradedByExamId] = useState<Record<string, string[]>>({});
 
   const [selectedStudentId, setSelectedStudentId] = useState(CALIFICAR_AUTO_STUDENT_ID);
   const [detectedControlNumber, setDetectedControlNumber] = useState<string | null>(null);
@@ -1469,6 +1487,7 @@ export default function CalificarPage() {
         readingOverride?: CalifacilOmrReadingResult;
         /** Fuerza scanner document/PDF (p. ej. móvil tras warp a carta). */
         uploadKind?: DesktopUploadKind;
+        gradeBundle?: CalificarExamBundle;
       }
     ): Promise<{
       success: boolean;
@@ -1489,7 +1508,14 @@ export default function CalificarPage() {
           if (!silentBatch) toast.success(msg);
         },
       };
-      if (!examId || !exam || !supportsCalifacil) {
+      const gradeBundle = opts?.gradeBundle ?? batchBundleRef.current;
+      const activeExamId = gradeBundle?.examId ?? examId;
+      const activeExam = gradeBundle?.exam ?? exam;
+      const activeQuestions = gradeBundle?.questions ?? questions;
+      const activeSheets = gradeBundle?.sheets ?? sheets;
+      const activeSupports = gradeBundle?.supportsCalifacil ?? supportsCalifacil;
+      const activeStudents = gradeBundle?.students ?? sortedStudents;
+      if (!activeExamId || !activeExam || !activeSupports) {
         notify.error('Selecciona un examen válido antes de escanear.');
         return { success: false };
       }
@@ -1497,7 +1523,7 @@ export default function CalificarPage() {
       const genAtStart = gradeReadGenRef.current;
       const isStaleRead = () => genAtStart !== gradeReadGenRef.current;
       const preWarped = Boolean(opts?.preWarped);
-      const chunk = sheets[sheetIndexRef.current] ?? [];
+      const chunk = activeSheets[sheetIndexRef.current] ?? [];
       if (chunk.length === 0) {
         notify.error('No hay preguntas para escanear en esta hoja.');
         return { success: false };
@@ -1522,8 +1548,8 @@ export default function CalificarPage() {
 
       let classifiedUploadKind: DesktopUploadKind | undefined;
 
-      const mateSheet = isCustom20Exam(user?.email, exam?.title, questions);
-      const lenguajeSheet = isLenguaje45Exam(user?.email, exam?.title, questions);
+      const mateSheet = isCustom20Exam(user?.email, activeExam?.title, activeQuestions);
+      const lenguajeSheet = isLenguaje45Exam(user?.email, activeExam?.title, activeQuestions);
       if (mateSheet || lenguajeSheet) {
         const rawCanvas =
           source instanceof HTMLCanvasElement
@@ -1732,7 +1758,7 @@ export default function CalificarPage() {
           source: gradeSource,
           oriented: examCanvas,
           chunk,
-          examId,
+          examId: activeExamId,
           omrCols,
           omrRowCount,
           chunkQuestionOffset,
@@ -1868,10 +1894,10 @@ export default function CalificarPage() {
 
       let gradeStudentId = silentBatch
         ? ''
-        : (resolveCalificarStudentId(selectedStudentId, undefined, sortedStudents) ?? '');
+        : (resolveCalificarStudentId(selectedStudentId, undefined, activeStudents) ?? '');
       if (meta.controlNumber) {
         if (!silentBatch) setDetectedControlNumber(meta.controlNumber);
-        const matched = findStudentByControlNumber(sortedStudents, meta.controlNumber);
+        const matched = findStudentByControlNumber(activeStudents, meta.controlNumber);
         if (matched) {
           gradeStudentId = matched.id;
           if (!silentBatch) {
@@ -2807,7 +2833,7 @@ export default function CalificarPage() {
     setDesktopScanKind('pdf');
     const files = Array.from(list);
     // Examen multi-hoja + un solo PDF: flujo página a página. Resto → lote.
-    if (files.length === 1 && totalSheets > 1) {
+    if (!batchSubject && files.length === 1 && totalSheets > 1) {
       await ingestDesktopPdfFile(files[0]!);
       return;
     }
@@ -3821,14 +3847,21 @@ export default function CalificarPage() {
 
   const persistStudentAnswers = async (
     merged: Record<string, string>,
-    studentIdOverride?: string
+    studentIdOverride?: string,
+    bundle?: CalificarExamBundle | null
   ) => {
-    const studentId = resolveCalificarStudentId(selectedStudentId, studentIdOverride, sortedStudents);
-    if (!studentId || !exam || !examId) {
+    const active = bundle ?? batchBundleRef.current;
+    const persistExamId = active?.examId ?? examId;
+    const persistExam = active?.exam ?? exam;
+    const persistQuestions = active?.questions ?? questions;
+    const persistStudents = active?.students ?? sortedStudents;
+    const persistKeyMaps = active?.virtualKeyMaps ?? virtualKeyMaps;
+    const studentId = resolveCalificarStudentId(selectedStudentId, studentIdOverride, persistStudents);
+    if (!studentId || !persistExam || !persistExamId) {
       throw new Error('missing_context');
     }
-    const effectiveKey = examVirtualKeyByQuestionId;
-    const mcQuestions = questions.filter((q) => q.type === 'multiple_choice');
+    const effectiveKey = persistKeyMaps.byQuestionId;
+    const mcQuestions = persistQuestions.filter((q) => q.type === 'multiple_choice');
     const mcTotal = mcQuestions.length;
     if (Object.keys(effectiveKey).length !== mcTotal) {
       throw new Error('incomplete_key');
@@ -3837,9 +3870,9 @@ export default function CalificarPage() {
     let correctCount = 0;
     let earnedPoints = 0;
     let maxMcPoints = 0;
-    const rows = questions.map((question: Question) => {
+    const rows = persistQuestions.map((question: Question) => {
       const answerText = (merged[question.id] ?? '').trim();
-      const { isCorrect, score } = gradeMcQuestionForPersist(question, answerText, virtualKeyMaps);
+      const { isCorrect, score } = gradeMcQuestionForPersist(question, answerText, persistKeyMaps);
       const pts = questionPoints(question);
       if (question.type === 'multiple_choice') {
         maxMcPoints += pts;
@@ -3850,7 +3883,7 @@ export default function CalificarPage() {
       }
 
       return {
-        exam_id: examId,
+        exam_id: persistExamId,
         student_id: studentId,
         question_id: question.id,
         answer_text: answerText,
@@ -3896,11 +3929,12 @@ export default function CalificarPage() {
   };
 
   const gradeDesktopFolderFiles = async (picked: File[]) => {
-    if (!examId || !exam || !supportsCalifacil) {
-      toast.error('Selecciona primero un examen válido.');
+    const subjectMode = Boolean(batchSubject) && !isMobile;
+    if (!subjectMode && (!examId || !exam || !supportsCalifacil)) {
+      toast.error(batchSubject ? 'Selecciona Lenguaje o Matemáticas.' : 'Selecciona primero un examen válido.');
       return;
     }
-    if (!canGradeStudents) {
+    if (!subjectMode && !canGradeStudents) {
       toast.error('Calificación bloqueada: la clave automática del examen no está completa.');
       return;
     }
@@ -3931,7 +3965,63 @@ export default function CalificarPage() {
     const results: BatchGradeItem[] = [];
 
     const pdfPseudo = (pageNumber: number) => pdfPaginaPseudoFile(pageNumber);
-    const pagesPerExam = Math.max(1, totalSheets);
+    const fileExamIdByIndex = new Map<number, string>();
+    const fileMatchErrorByIndex = new Map<number, string>();
+    if (subjectMode && batchSubject) {
+      setLiveStatus('Relacionando PDF con exámenes…');
+      await yieldForSpinnerPaint();
+      const uniqueIds: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]!;
+        const matched = matchRafPdfToExam(file.name, batchSubject, publishedExams);
+        if (!matched) {
+          fileMatchErrorByIndex.set(
+            i,
+            'No se relacionó con un examen de esta materia (nombre RAF / grupo).'
+          );
+          continue;
+        }
+        if (lockedByOthers.has(matched.id)) {
+          fileMatchErrorByIndex.set(i, 'Ese examen está en revisión en otro dispositivo.');
+          continue;
+        }
+        fileExamIdByIndex.set(i, matched.id);
+        if (!uniqueIds.includes(matched.id)) uniqueIds.push(matched.id);
+      }
+      batchBundlesByIdRef.current = new Map();
+      const studentsMap: Record<string, Student[]> = {};
+      const gradedMap: Record<string, string[]> = {};
+      for (const id of uniqueIds) {
+        const examRow = publishedExams.find((e) => e.id === id);
+        if (!examRow) continue;
+        try {
+          const bundle = await loadCalificarExamBundle(examRow, user?.email);
+          if (!bundle.canGrade) {
+            for (const [idx, examKey] of Array.from(fileExamIdByIndex.entries())) {
+              if (examKey === id) {
+                fileMatchErrorByIndex.set(idx, 'La clave automática de ese examen está incompleta.');
+                fileExamIdByIndex.delete(idx);
+              }
+            }
+            continue;
+          }
+          batchBundlesByIdRef.current.set(id, bundle);
+          studentsMap[id] = bundle.students;
+          gradedMap[id] = Array.from(bundle.alreadyGraded);
+        } catch {
+          for (const [idx, examKey] of Array.from(fileExamIdByIndex.entries())) {
+            if (examKey === id) {
+              fileMatchErrorByIndex.set(idx, 'No se pudieron cargar preguntas o alumnos de ese grupo.');
+              fileExamIdByIndex.delete(idx);
+            }
+          }
+        }
+      }
+      setBatchStudentsByExamId(studentsMap);
+      setBatchGradedByExamId(gradedMap);
+    }
+
+    const pagesPerExamDefault = Math.max(1, subjectMode ? 1 : totalSheets);
 
     const wake = await requestBatchWakeLock();
     try {
@@ -3949,6 +4039,7 @@ export default function CalificarPage() {
       const adminPaperDetails = isAdminCalifacilEmail(user?.email);
       for (let i = 0; i < files.length; i++) {
         if (gen !== gradeReadGenRef.current) return;
+        if (fileMatchErrorByIndex.has(i)) continue;
         const file = files[i]!;
         const isPdf =
           file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
@@ -3978,6 +4069,9 @@ export default function CalificarPage() {
             }
           }
           pdfPrepByIndex.set(i, { numPages, paperDetails });
+          const pagesPerExam =
+            batchBundlesByIdRef.current.get(fileExamIdByIndex.get(i) ?? '')?.sheets.length ??
+            pagesPerExamDefault;
           plannedExams +=
             pagesPerExam === 1
               ? numPages
@@ -3998,7 +4092,10 @@ export default function CalificarPage() {
           results.push({
             fileName: folderFileLabel(file),
             ok: false,
-            error: prep?.error ?? 'No se encontraron páginas legibles en el PDF',
+            error:
+              fileMatchErrorByIndex.get(i) ??
+              prep?.error ??
+              'No se encontraron páginas legibles en el PDF',
           });
         }
         return;
@@ -4014,6 +4111,31 @@ export default function CalificarPage() {
         if (results.length >= FOLDER_BATCH_MAX_EXAMS) break;
         const file = files[i]!;
         const label = folderFileLabel(file);
+        const matchError = fileMatchErrorByIndex.get(i);
+        if (matchError) {
+          results.push({ fileName: label, ok: false, error: matchError });
+          continue;
+        }
+        const fileExamId = fileExamIdByIndex.get(i);
+        const fileBundle = fileExamId ? batchBundlesByIdRef.current.get(fileExamId) ?? null : null;
+        if (subjectMode) {
+          if (!fileBundle) {
+            results.push({
+              fileName: label,
+              ok: false,
+              error: 'No se relacionó con un examen de esta materia (nombre RAF / grupo).',
+            });
+            continue;
+          }
+          batchBundleRef.current = fileBundle;
+        }
+        const activeQuestions = fileBundle?.questions ?? questions;
+        const activeStudents = fileBundle?.students ?? sortedStudents;
+        const activeKeyMaps = fileBundle?.virtualKeyMaps ?? virtualKeyMaps;
+        const pagesPerExam = Math.max(
+          1,
+          fileBundle?.sheets.length ?? pagesPerExamDefault
+        );
         setLiveStatus(
           `Calificando ${results.length + 1}/${batchExamTotal} · ${file.name}`
         );
@@ -4032,12 +4154,14 @@ export default function CalificarPage() {
             opts?: { pctOverride?: number | null; pdfText?: string }
           ) => {
             const takenIds = new Set<string>();
-            studentsAlreadyGraded.forEach((id) => takenIds.add(id));
+            const gradedHere = fileBundle?.alreadyGraded ?? studentsAlreadyGraded;
+            gradedHere.forEach((id) => takenIds.add(id));
             for (const row of results) {
+              if (fileBundle && row.examId && row.examId !== fileBundle.examId) continue;
               if (row.studentId) takenIds.add(row.studentId);
               if (row.selectedStudentId) takenIds.add(row.selectedStudentId);
             }
-            const available = sortedStudents.filter((s) => !takenIds.has(s.id));
+            const available = activeStudents.filter((s) => !takenIds.has(s.id));
 
             let sid = studentId;
             if (!sid && controlNumber) {
@@ -4068,7 +4192,7 @@ export default function CalificarPage() {
               if (student) sid = student.id;
             }
             if (student && takenIds.has(student.id)) student = null;
-            const previewStats = gradeMcDraftAgainstVirtualKey(merged, questions, virtualKeyMaps);
+            const previewStats = gradeMcDraftAgainstVirtualKey(merged, activeQuestions, activeKeyMaps);
             const displayPct =
               opts?.pctOverride != null && Number.isFinite(opts.pctOverride)
                 ? Math.round(opts.pctOverride)
@@ -4086,6 +4210,8 @@ export default function CalificarPage() {
               studentId: student?.id,
               studentName: student?.name,
               error: 'Elige al alumno para guardar',
+              examId: fileBundle?.examId,
+              examTitle: fileBundle?.exam.title,
             });
           };
 
@@ -4164,7 +4290,7 @@ export default function CalificarPage() {
                     return { p, aborted: true as const };
                   }
                   let pageText = textRes.text;
-                  let parsed = parseZipGradePaperDetailsText(pageText, questions.length);
+                  let parsed = parseZipGradePaperDetailsText(pageText, activeQuestions.length);
                   if (!parsed.ok) {
                     try {
                       const again = await extractPdfPagePlainText(file, p, {
@@ -4172,13 +4298,13 @@ export default function CalificarPage() {
                         preferServer: true,
                       });
                       pageText = again.text || pageText;
-                      parsed = parseZipGradePaperDetailsText(pageText, questions.length);
+                      parsed = parseZipGradePaperDetailsText(pageText, activeQuestions.length);
                     } catch {
                       /* keep first parse */
                     }
                   }
                   const nameCropUrl = cropPaperDetailsNameApellidoDataUrl(canvasRes.canvas, 640);
-                  const merged = mapPaperDetailsToMcDraft(questions, parsed);
+                  const merged = mapPaperDetailsToMcDraft(activeQuestions, parsed);
                   if (!parsed.ok) {
                     return {
                       p,
@@ -4266,7 +4392,7 @@ export default function CalificarPage() {
                     `Calificando ${results.length + 1}/${batchExamTotal} · ${examLabel}`
                   );
                 }
-                if (examLocksEnabled && examId && examIdx % 4 === 0) {
+                if (examLocksEnabled && examId && examIdx % 4 === 0 && !subjectMode) {
                   const clientId = calificarClientIdRef.current;
                   if (clientId) void heartbeatCalificarExamLock(examId, clientId);
                 }
@@ -4292,8 +4418,8 @@ export default function CalificarPage() {
                   }
                   const chunkQs =
                     pagesPerExam === 1
-                      ? questions
-                      : (sheets[sheetIndexRef.current] ?? questions);
+                      ? activeQuestions
+                      : ((fileBundle?.sheets ?? sheets)[sheetIndexRef.current] ?? activeQuestions);
                   const parsed = parseZipGradePaperDetailsText(pageText, chunkQs.length);
                   if (!parsed.ok) {
                     results.push({
@@ -4314,11 +4440,15 @@ export default function CalificarPage() {
                 }
 
                 if (
-                  isCustom20Exam(user?.email, exam?.title, questions) ||
-                  isLenguaje45Exam(user?.email, exam?.title, questions)
+                  isCustom20Exam(user?.email, fileBundle?.exam.title ?? exam?.title, activeQuestions) ||
+                  isLenguaje45Exam(user?.email, fileBundle?.exam.title ?? exam?.title, activeQuestions)
                 ) {
                   if (s === 0) {
-                    const idCrop = isLenguaje45Exam(user?.email, exam?.title, questions)
+                    const idCrop = isLenguaje45Exam(
+                      user?.email,
+                      fileBundle?.exam.title ?? exam?.title,
+                      activeQuestions
+                    )
                       ? cropLenguajeHandwrittenId(scanCanvas)
                       : cropCustom20HandwrittenId(scanCanvas);
                     nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
@@ -4329,6 +4459,7 @@ export default function CalificarPage() {
                     skipSheetValidation: true,
                     uploadKind: 'pdf',
                     displaySource: scanCanvas,
+                    gradeBundle: fileBundle ?? undefined,
                   });
                   if (!read.success || !read.chunkDraft) {
                     results.push({
@@ -4367,7 +4498,7 @@ export default function CalificarPage() {
                     cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
                     zgResolved.nameCropUrl;
                 }
-                  const chunk = sheets[sheetIndexRef.current] ?? [];
+                  const chunk = (fileBundle?.sheets ?? sheets)[sheetIndexRef.current] ?? [];
                   const chunkRows = chunk.length;
                   let zgScan =
                     chunkRows > 0
@@ -4408,6 +4539,7 @@ export default function CalificarPage() {
                     silentBatch: true,
                     skipSheetValidation: true,
                     uploadKind: 'pdf',
+                    gradeBundle: fileBundle ?? undefined,
                     displaySource: gradeCanvas,
                     preWarped: usedWarp,
                     warpAlignment: usedWarp ? zgWarp.alignment : null,
@@ -4457,6 +4589,7 @@ export default function CalificarPage() {
                   silentBatch: true,
                   skipSheetValidation: true,
                   uploadKind: 'pdf',
+                  gradeBundle: fileBundle ?? undefined,
                   displaySource: canonical.canvas,
                   preWarped: true,
                   warpAlignment: canonical.alignment,
@@ -4493,10 +4626,14 @@ export default function CalificarPage() {
           const rawCanvas = prepareCalifacilScanInput(img, { useGuideCrop: false });
           if (rawCanvas) {
             if (
-              isCustom20Exam(user?.email, exam?.title, questions) ||
-              isLenguaje45Exam(user?.email, exam?.title, questions)
+              isCustom20Exam(user?.email, fileBundle?.exam.title ?? exam?.title, activeQuestions) ||
+              isLenguaje45Exam(user?.email, fileBundle?.exam.title ?? exam?.title, activeQuestions)
             ) {
-              const idCrop = isLenguaje45Exam(user?.email, exam?.title, questions)
+              const idCrop = isLenguaje45Exam(
+                user?.email,
+                fileBundle?.exam.title ?? exam?.title,
+                activeQuestions
+              )
                 ? cropLenguajeHandwrittenId(rawCanvas)
                 : cropCustom20HandwrittenId(rawCanvas);
               nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
@@ -4513,6 +4650,7 @@ export default function CalificarPage() {
           const read = await finalizeCapturedSheet(img, file, {
             skipReviewUi: true,
             silentBatch: true,
+            gradeBundle: fileBundle ?? undefined,
           });
           if (!read.success || !read.chunkDraft) {
             results.push({ fileName: label, ok: false, error: 'No se pudo leer la hoja' });
@@ -4561,6 +4699,7 @@ export default function CalificarPage() {
           }
         }
       }
+      batchBundleRef.current = null;
     }
   };
 
@@ -4616,7 +4755,7 @@ export default function CalificarPage() {
       return;
     }
     // Una sola imagen → flujo interactivo. PDF(s) o varios archivos → lote.
-    if (all.length === 1 && !isPdfGradeFile(all[0]!)) {
+    if (!batchSubject && all.length === 1 && !isPdfGradeFile(all[0]!)) {
       await ingestDesktopImageFile(all[0]!);
       return;
     }
@@ -4626,9 +4765,12 @@ export default function CalificarPage() {
   const persistPendingBatchStudent = async (rowIndex: number, studentId: string) => {
     const row = batchSummary?.[rowIndex];
     if (!row?.pendingStudent || !row.mergedDraft) return;
-    const student = sortedStudents.find((s) => s.id === studentId);
+    const bundle = row.examId ? batchBundlesByIdRef.current.get(row.examId) : null;
+    const pool = bundle?.students ?? sortedStudents;
+    const student = pool.find((s) => s.id === studentId);
     if (!student) return;
-    const stats = await persistStudentAnswers(row.mergedDraft, student.id);
+    if (bundle) batchBundleRef.current = bundle;
+    const stats = await persistStudentAnswers(row.mergedDraft, student.id, bundle);
     setBatchSummary((prev) => {
       if (!prev) return prev;
       const next = [...prev];
@@ -4645,21 +4787,39 @@ export default function CalificarPage() {
   };
 
   useEffect(() => {
-    if (!batchSummary || !examId) return;
+    const examIds = Array.from(
+      new Set(
+        (batchSummary ?? [])
+          .map((row) => row.examId)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+    if (examIds.length === 0 && !examId) return;
+    const idsToLoad = examIds.length > 0 ? examIds : examId ? [examId] : [];
+    if (idsToLoad.length === 0) return;
     let cancelled = false;
     void (async () => {
       const pageSize = 1000;
-      const ids = new Set<string>();
-      for (let from = 0; ; from += pageSize) {
-        const { data } = await supabase
-          .from('answers')
-          .select('student_id')
-          .eq('exam_id', examId)
-          .range(from, from + pageSize - 1);
-        for (const row of data ?? []) ids.add(String(row.student_id));
-        if (!data || data.length < pageSize || cancelled) break;
+      const byExam: Record<string, string[]> = {};
+      const single = new Set<string>();
+      for (const id of idsToLoad) {
+        const ids = new Set<string>();
+        for (let from = 0; ; from += pageSize) {
+          const { data } = await supabase
+            .from('answers')
+            .select('student_id')
+            .eq('exam_id', id)
+            .range(from, from + pageSize - 1);
+          for (const row of data ?? []) ids.add(String(row.student_id));
+          if (!data || data.length < pageSize || cancelled) break;
+        }
+        byExam[id] = Array.from(ids);
+        if (id === examId) ids.forEach((sid) => single.add(sid));
       }
-      if (!cancelled) setStudentsAlreadyGraded(ids);
+      if (cancelled) return;
+      setBatchGradedByExamId((prev) => ({ ...prev, ...byExam }));
+      if (examId && byExam[examId]) setStudentsAlreadyGraded(new Set(byExam[examId]));
+      else if (idsToLoad.length === 1 && examId) setStudentsAlreadyGraded(single);
     })();
     return () => {
       cancelled = true;
@@ -4675,13 +4835,19 @@ export default function CalificarPage() {
   };
 
   const assignPendingBatchStudent = (rowIndex: number, studentId: string) => {
-    if (studentsAlreadyGraded.has(studentId)) {
+    const target = batchSummary?.[rowIndex];
+    const examKey = target?.examId;
+    const gradedForExam = new Set(
+      examKey ? batchGradedByExamId[examKey] ?? [] : Array.from(studentsAlreadyGraded)
+    );
+    if (gradedForExam.has(studentId)) {
       toast.error('Esa CURP ya tiene un examen en este grupo. Solo puede haber uno por alumno.');
       return;
     }
     const takenInBatch = (batchSummary ?? []).some(
       (row, index) =>
         index !== rowIndex &&
+        (!examKey || row.examId === examKey) &&
         (row.selectedStudentId === studentId || row.studentId === studentId)
     );
     if (takenInBatch) {
@@ -4699,23 +4865,33 @@ export default function CalificarPage() {
   };
 
   /** Tras Guardar nombres del lote: sacar el examen de la lista de Calificar. */
-  const clearExamAfterBatchSave = useCallback(async () => {
-    if (!examId) return;
+  const clearExamAfterBatchSave = useCallback(async (examIds?: string[]) => {
+    const fromArg = (examIds ?? []).filter(Boolean);
+    const fromBatch = Array.from(
+      new Set((batchSummary ?? []).map((row) => row.examId).filter((id): id is string => Boolean(id)))
+    );
+    const ids = fromArg.length > 0 ? fromArg : fromBatch.length > 0 ? fromBatch : examId ? [examId] : [];
+    if (ids.length === 0) return;
     setCompletedExamIds((prev) => {
       const next = new Set<string>();
       prev.forEach((id) => next.add(id));
-      next.add(examId);
+      ids.forEach((id) => next.add(id));
       return next;
     });
     void refreshCompletedExamIds();
-    toast.success('Examen calificado. Ya no aparece en la lista.');
+    toast.success(
+      ids.length === 1
+        ? 'Examen calificado. Ya no aparece en la lista.'
+        : `${ids.length} exámenes calificados. Ya no aparecen en la lista.`
+    );
     if (examLocksEnabled) {
       await releaseHeldExamLock();
       heldExamLockRef.current = null;
     }
     setExamId('');
+    batchBundleRef.current = null;
     resetFlow();
-  }, [examLocksEnabled, examId, refreshCompletedExamIds, releaseHeldExamLock, resetFlow]);
+  }, [examLocksEnabled, examId, batchSummary, refreshCompletedExamIds, releaseHeldExamLock, resetFlow]);
 
   const savePendingBatchStudents = async () => {
     const rows = batchSummary ?? [];
@@ -4737,19 +4913,28 @@ export default function CalificarPage() {
       );
       return;
     }
-    const chosenIds = toSave.map(({ row }) => row.selectedStudentId!);
-    if (new Set(chosenIds).size !== chosenIds.length) {
+    const dupKey = (examKey: string | undefined, studentKey: string) =>
+      `${examKey ?? '_'}::${studentKey}`;
+    const chosenKeys = toSave.map(({ row }) => dupKey(row.examId, row.selectedStudentId!));
+    if (new Set(chosenKeys).size !== chosenKeys.length) {
       toast.error('La misma CURP está en más de una hoja. Quita la repetida.');
       return;
     }
     const savedInBatch = new Set(
-      rows.filter((row) => row.ok && row.studentId).map((row) => row.studentId!)
+      rows
+        .filter((row) => row.ok && row.studentId)
+        .map((row) => dupKey(row.examId, row.studentId!))
     );
-    if (chosenIds.some((id) => savedInBatch.has(id))) {
+    if (chosenKeys.some((key) => savedInBatch.has(key))) {
       toast.error('Ese alumno ya está en otra hoja de este lote.');
       return;
     }
-    const already = chosenIds.filter((id) => studentsAlreadyGraded.has(id));
+    const already = toSave.filter(({ row }) => {
+      const graded = new Set(
+        row.examId ? batchGradedByExamId[row.examId] ?? [] : Array.from(studentsAlreadyGraded)
+      );
+      return graded.has(row.selectedStudentId!);
+    });
     if (already.length > 0) {
       toast.error('Una de esas CURP ya tiene un examen guardado. Quita esa hoja.');
       return;
@@ -4764,8 +4949,11 @@ export default function CalificarPage() {
           ? `Resultados guardados (${toSave.length}). Se descartaron ${discardedCount} sin alumno.`
           : 'Resultados guardados.'
       );
+      const savedExamIds = Array.from(
+        new Set(toSave.map(({ row }) => row.examId).filter((id): id is string => Boolean(id)))
+      );
       setBatchSummary(null);
-      await clearExamAfterBatchSave();
+      await clearExamAfterBatchSave(savedExamIds);
     } catch {
       toast.error('No se pudieron guardar todas las hojas.');
     } finally {
@@ -5947,6 +6135,7 @@ export default function CalificarPage() {
                         ? 'CURP en la hoja'
                         : 'Nombre en la hoja'}
                     </th>
+                    <th className="px-2 py-1.5 font-medium">Grupo</th>
                     <th className="px-2 py-1.5 font-medium">Alumno</th>
                     <th className="px-2 py-1.5 font-medium">Nota</th>
                     <th className="px-2 py-1.5 font-medium">
@@ -5979,18 +6168,34 @@ export default function CalificarPage() {
                         )}
                       </td>
                       <td className="px-2 py-1.5">
+                        <span className="block max-w-[12rem] truncate text-xs text-gray-600" title={row.examTitle}>
+                          {row.examTitle ?? '—'}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1.5">
                         {row.ok ? (
                           row.studentName ?? '—'
                         ) : row.pendingStudent ? (
                           <StudentCombobox
                             compact
                             id={`batch-student-${idx}`}
-                            students={sortedStudents.filter((student) => {
+                            students={(row.examId
+                              ? batchStudentsByExamId[row.examId] ??
+                                batchBundlesByIdRef.current.get(row.examId)?.students ??
+                                []
+                              : sortedStudents
+                            ).filter((student) => {
                               if (student.id === row.selectedStudentId) return true;
-                              if (studentsAlreadyGraded.has(student.id)) return false;
+                              const graded = new Set(
+                                row.examId
+                                  ? batchGradedByExamId[row.examId] ?? []
+                                  : Array.from(studentsAlreadyGraded)
+                              );
+                              if (graded.has(student.id)) return false;
                               return !batchSummary.some(
                                 (other, otherIndex) =>
                                   otherIndex !== idx &&
+                                  (!row.examId || other.examId === row.examId) &&
                                   (other.selectedStudentId === student.id ||
                                     other.studentId === student.id)
                               );
@@ -6163,13 +6368,14 @@ export default function CalificarPage() {
           <CardTitle className="text-base sm:text-lg">Examen y clave automática</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 sm:space-y-4">
+          {isMobile ? (
           <div className="space-y-2">
             <Label>Examen</Label>
             <ExamCombobox
               exams={publishedExams}
               value={examId}
               loading={examsLoading}
-              disabled={phase === 'guardando' || (isMobile && phase === 'ver_resultados')}
+              disabled={phase === 'guardando' || phase === 'ver_resultados'}
               lockedExamIds={examLocksEnabled ? lockedByOthers : undefined}
               lockedExamHint="En revisión"
               onValueChange={(id) => {
@@ -6177,6 +6383,51 @@ export default function CalificarPage() {
               }}
             />
           </div>
+          ) : (
+          <div className="space-y-2">
+            <Label>Materia</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant={batchSubject === 'lenguaje' ? 'default' : 'outline'}
+                className={batchSubject === 'lenguaje' ? 'bg-orange-600 hover:bg-orange-700' : ''}
+                disabled={scanBusy}
+                onClick={() => {
+                  setBatchSubject('lenguaje');
+                  void selectExamWithLock('');
+                }}
+              >
+                Lenguaje
+              </Button>
+              <Button
+                type="button"
+                variant={batchSubject === 'matematicas' ? 'default' : 'outline'}
+                className={batchSubject === 'matematicas' ? 'bg-orange-600 hover:bg-orange-700' : ''}
+                disabled={scanBusy}
+                onClick={() => {
+                  setBatchSubject('matematicas');
+                  void selectExamWithLock('');
+                }}
+              >
+                Matemáticas
+              </Button>
+            </div>
+            {batchSubject ? (
+              <p className="text-xs text-gray-600">
+                {
+                  publishedExams.filter((e) => rafSubjectFromTitle(e.title) === batchSubject).length
+                }{' '}
+                exámenes publicados de{' '}
+                {batchSubject === 'lenguaje' ? 'Lenguaje (30 reactivos)' : 'Matemáticas (20 reactivos)'}.
+                Cada PDF RAFL/RAFM se asigna al grupo de su nombre.
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500">
+                Elige Lenguaje o Matemáticas y sube todos los PDF de esa materia.
+              </p>
+            )}
+          </div>
+          )}
 
           {examId && examLoading && (
             <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -6208,10 +6459,50 @@ export default function CalificarPage() {
             </div>
           )}
 
-          {!examId && (
+          {isMobile && !examId && (
             <p className="text-xs text-gray-500">
               Selecciona un examen para habilitar las opciones de captura y calificación.
             </p>
+          )}
+
+          {!isMobile && batchSubject && phase === 'elegir' && (
+            <div className="space-y-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/90 p-4">
+              <p className="text-sm text-gray-700">
+                Sube <strong>todos los PDF</strong> de{' '}
+                {batchSubject === 'lenguaje' ? 'Lenguaje' : 'Matemáticas'}. El nombre del archivo
+                (RAFL… / RAFM…) se relaciona con el examen del grupo; los alumnos de la lista son
+                solo de ese grupo.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  className="bg-orange-600 hover:bg-orange-700"
+                  disabled={scanBusy}
+                  onClick={() => void pickGradeFileList()}
+                >
+                  {scanBusy && desktopScanKind === 'folder' ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                  ) : (
+                    <Files className="mr-2 h-4 w-4" aria-hidden />
+                  )}
+                  {scanBusy && desktopScanKind === 'folder' ? 'Calificando…' : 'Elegir archivos…'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-orange-300 text-orange-900 hover:bg-orange-50"
+                  disabled={scanBusy}
+                  onClick={() => void pickGradeFolder()}
+                >
+                  {scanBusy && desktopScanKind === 'folder' ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                  ) : (
+                    <FolderOpen className="mr-2 h-4 w-4" aria-hidden />
+                  )}
+                  Elegir carpeta…
+                </Button>
+              </div>
+            </div>
           )}
 
           {examId && (

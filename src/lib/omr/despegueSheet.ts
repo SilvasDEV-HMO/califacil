@@ -18,10 +18,22 @@ export function despegueSheetKind(
 ): DespegueSheetKind | null {
   if ((email ?? '').trim().toLowerCase() !== DESPEGUE_ADMIN_EMAIL) return null;
   const name = normalizeTitle(title ?? '');
-  if (name.startsWith('matematicas despegue 2026') || name.startsWith('mate desp 2026') || name.startsWith('mate despegue 2026')) {
+  if (
+    name.startsWith('matematicas despegue 2026') ||
+    name.startsWith('mate desp 2026') ||
+    name.startsWith('mate despegue 2026') ||
+    name.startsWith('matematicas ·') ||
+    name.startsWith('matematicas·')
+  ) {
     return 'matematicas';
   }
-  if (name.startsWith('lenguaje despegue 2026') || name.startsWith('lenguaje desp 2026') || name.startsWith('leng desp 2026')) {
+  if (
+    name.startsWith('lenguaje despegue 2026') ||
+    name.startsWith('lenguaje desp 2026') ||
+    name.startsWith('leng desp 2026') ||
+    name.startsWith('lenguaje ·') ||
+    name.startsWith('lenguaje·')
+  ) {
     return 'lenguaje';
   }
   return null;
