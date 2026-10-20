@@ -3,8 +3,8 @@ import type { Exam, ExamFolder } from '@/types';
 
 export const SUBSYSTEM_FOLDER_SPECS = [
   { codes: ['DST'] as const, name: 'Técnicas' },
-  { codes: ['EST'] as const, name: 'Estatales' },
-  { codes: ['EES', 'DES'] as const, name: 'Generales' },
+  { codes: ['EST', 'EES'] as const, name: 'Estatales' },
+  { codes: ['DES'] as const, name: 'Generales' },
   { codes: ['ETV'] as const, name: 'Teles' },
 ];
 
