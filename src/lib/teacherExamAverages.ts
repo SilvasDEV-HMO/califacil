@@ -45,13 +45,94 @@ function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-export async function fetchTeacherGlobalAveragePercent(): Promise<number | null> {
+async function fetchAnswersForExams(examIds: string[]): Promise<StudentAnswerRow[]> {
+  const viaRpc = await fetchStudentPointsViaRpc(examIds);
+  if (viaRpc) return viaRpc;
+
+  const answers: StudentAnswerRow[] = [];
+  for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
+    const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data: answersData, error: answersError } = await supabase
+        .from('answers')
+        .select('exam_id,student_id,score')
+        .in('exam_id', examSlice)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (answersError) throw answersError;
+      const batch = (answersData || []) as StudentAnswerRow[];
+      answers.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+    }
+  }
+  return answers;
+}
+
+async function fetchMaxScoreByExam(examIds: string[]): Promise<Map<string, number>> {
+  const maxScoreByExam = new Map<string, number>();
+  for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
+    const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
+    const { data: questionsData, error: questionsError } = await supabase
+      .from('questions')
+      .select('exam_id,points')
+      .in('exam_id', examSlice);
+    if (questionsError) throw questionsError;
+    for (const row of questionsData || []) {
+      const examId = String((row as { exam_id: string; points?: number | null }).exam_id);
+      const pts = (row as { points?: number | null }).points ?? 1;
+      maxScoreByExam.set(examId, (maxScoreByExam.get(examId) ?? 0) + pts);
+    }
+  }
+  return maxScoreByExam;
+}
+
+/**
+ * Media de los % de cada examen que ya tiene al menos una calificación:
+ * (suma de promedios de exámenes evaluados) / (cantidad de esos exámenes).
+ */
+export async function fetchTeacherGlobalAveragePercent(
+  exams: Exam[]
+): Promise<number | null> {
   const { data, error } = await supabase.rpc('teacher_global_grade_average');
-  if (error) return null;
-  const payload = data as { ok?: boolean; percent?: number | null } | null;
-  if (!payload?.ok) return null;
-  if (payload.percent == null) return null;
-  return clampPercent(Number(payload.percent));
+  if (!error) {
+    const payload = data as { ok?: boolean; percent?: number | null } | null;
+    if (payload?.ok) {
+      if (payload.percent == null) return null;
+      return clampPercent(Number(payload.percent));
+    }
+  }
+
+  if (exams.length === 0) return null;
+  const examIds = exams.map((e) => e.id);
+  const answers = await fetchAnswersForExams(examIds);
+  if (answers.length === 0) return null;
+  const maxScoreByExam = await fetchMaxScoreByExam(examIds);
+
+  const pointsByExamStudent = new Map<string, Map<string, number>>();
+  for (const answer of answers) {
+    let byStudent = pointsByExamStudent.get(answer.exam_id);
+    if (!byStudent) {
+      byStudent = new Map<string, number>();
+      pointsByExamStudent.set(answer.exam_id, byStudent);
+    }
+    const prev = byStudent.get(answer.student_id) ?? 0;
+    byStudent.set(answer.student_id, prev + (typeof answer.score === 'number' ? answer.score : 0));
+  }
+
+  const examPercents: number[] = [];
+  for (const exam of exams) {
+    const byStudent = pointsByExamStudent.get(exam.id);
+    if (!byStudent || byStudent.size === 0) continue;
+    const maxScore = Math.max(1, maxScoreByExam.get(exam.id) ?? 0);
+    let total = 0;
+    for (const points of byStudent.values()) {
+      total += clampPercent(calculatePercentage(points, maxScore));
+    }
+    examPercents.push(clampPercent(total / byStudent.size));
+  }
+
+  if (examPercents.length === 0) return null;
+  return clampPercent(examPercents.reduce((sum, pct) => sum + pct, 0) / examPercents.length);
 }
 
 async function fetchStudentPointsViaRpc(
@@ -94,41 +175,8 @@ export async function fetchTeacherExamAverageSummaries(
   }
 
   const examIds = exams.map((e) => e.id);
-
-  let answers = await fetchStudentPointsViaRpc(examIds);
-  if (!answers) {
-    answers = [];
-    for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
-      const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
-      for (let from = 0; ; from += PAGE_SIZE) {
-        const { data: answersData, error: answersError } = await supabase
-          .from('answers')
-          .select('exam_id,student_id,score')
-          .in('exam_id', examSlice)
-          .order('id', { ascending: true })
-          .range(from, from + PAGE_SIZE - 1);
-        if (answersError) throw answersError;
-        const batch = (answersData || []) as StudentAnswerRow[];
-        answers.push(...batch);
-        if (batch.length < PAGE_SIZE) break;
-      }
-    }
-  }
-
-  const maxScoreByExam = new Map<string, number>();
-  for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
-    const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
-    const { data: questionsData, error: questionsError } = await supabase
-      .from('questions')
-      .select('exam_id,points')
-      .in('exam_id', examSlice);
-    if (questionsError) throw questionsError;
-    for (const row of questionsData || []) {
-      const examId = String((row as { exam_id: string; points?: number | null }).exam_id);
-      const pts = (row as { points?: number | null }).points ?? 1;
-      maxScoreByExam.set(examId, (maxScoreByExam.get(examId) ?? 0) + pts);
-    }
-  }
+  const answers = await fetchAnswersForExams(examIds);
+  const maxScoreByExam = await fetchMaxScoreByExam(examIds);
 
   const studentIds = Array.from(new Set(answers.map((a) => a.student_id)));
   const studentsById = new Map<string, StudentRow>();

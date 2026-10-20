@@ -34,7 +34,7 @@ export default function DashboardPage() {
     totalStudents: 0,
   });
   const [globalGradePercent, setGlobalGradePercent] = useState<number | null>(null);
-  const [globalGradeLoading, setGlobalGradeLoading] = useState(false);
+  const [globalGradeLoading, setGlobalGradeLoading] = useState(true);
 
   useEffect(() => {
     if (exams && groups) {
@@ -48,12 +48,20 @@ export default function DashboardPage() {
   }, [exams, groups]);
 
   useEffect(() => {
-    if (!user?.id || examsLoading) return;
-    let cancelled = false;
-    (async () => {
+    if (!user?.id) {
+      setGlobalGradePercent(null);
+      setGlobalGradeLoading(false);
+      return;
+    }
+    if (examsLoading) {
       setGlobalGradeLoading(true);
+      return;
+    }
+    let cancelled = false;
+    setGlobalGradeLoading(true);
+    (async () => {
       try {
-        const globalAveragePercent = await fetchTeacherGlobalAveragePercent();
+        const globalAveragePercent = await fetchTeacherGlobalAveragePercent(exams);
         if (!cancelled) setGlobalGradePercent(globalAveragePercent);
       } catch {
         if (!cancelled) setGlobalGradePercent(null);
@@ -145,9 +153,9 @@ export default function DashboardPage() {
             <TrendingUp className="h-3.5 w-3.5 shrink-0 text-orange-600 sm:h-4 sm:w-4" />
           </CardHeader>
           <CardContent className="pb-3 pt-0">
-            <div className="text-xl font-bold tabular-nums sm:text-2xl">
+            <div className="flex min-h-[1.75rem] items-center text-xl font-bold tabular-nums sm:min-h-[2rem] sm:text-2xl">
               {examsLoading || globalGradeLoading ? (
-                <Loader2 className="h-5 w-5 animate-spin sm:h-6 sm:w-6" />
+                <Loader2 className="h-5 w-5 animate-spin text-orange-600 sm:h-6 sm:w-6" />
               ) : globalGradePercent != null ? (
                 `${globalGradePercent}%`
               ) : (
@@ -155,7 +163,7 @@ export default function DashboardPage() {
               )}
             </div>
             <p className="mt-0.5 line-clamp-2 min-h-[2.25rem] text-[10px] text-gray-500 sm:text-xs">
-              Todos los exámenes
+              Exámenes evaluados
             </p>
           </CardContent>
         </Card>
