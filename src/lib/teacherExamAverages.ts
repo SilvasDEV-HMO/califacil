@@ -40,9 +40,15 @@ const EXAM_ID_CHUNK = 80;
 const STUDENT_ID_CHUNK = 200;
 const PAGE_SIZE = 1000;
 
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 /**
- * Misma lógica que la página Promedios: porcentaje por alumno = puntos / nº preguntas del examen.
- * `globalAveragePercent` agrupa todas las calificaciones (alumno–examen) del maestro en un único % 0–100.
+ * Porcentaje por alumno = puntos / máximo del examen, acotado a 0–100.
+ * `globalAveragePercent` = media de los porcentajes de cada examen que ya tiene
+ * al menos una calificación (suma de % de exámenes calificados / cantidad de esos exámenes).
  */
 export async function fetchTeacherExamAverageSummaries(
   exams: Exam[],
@@ -118,9 +124,6 @@ export async function fetchTeacherExamAverageSummaries(
     assignedGroupIdsByExam.get(row.exam_id)!.add(row.group_id);
   }
 
-  let globalPctSum = 0;
-  let globalGradedCount = 0;
-
   const rows: ExamAverageSummaryRow[] = exams.map((exam) => {
     const maxScore = Math.max(1, maxScoreByExam.get(exam.id) ?? 0);
     const byStudent = new Map<string, number>();
@@ -138,11 +141,9 @@ export async function fetchTeacherExamAverageSummaries(
     for (const [studentId, points] of Array.from(byStudent.entries())) {
       const student = studentsById.get(studentId);
       if (!student) continue;
-      const pct = calculatePercentage(points, maxScore);
+      const pct = clampPercent(calculatePercentage(points, maxScore));
       overallTotal += pct;
       overallCount += 1;
-      globalPctSum += pct;
-      globalGradedCount += 1;
       const prev = groupCollector.get(student.group_id) ?? { total: 0, count: 0 };
       groupCollector.set(student.group_id, {
         total: prev.total + pct,
@@ -175,13 +176,23 @@ export async function fetchTeacherExamAverageSummaries(
       examTitle: exam.title,
       createdAt: exam.created_at,
       groupAverages,
-      overallAverage: overallCount > 0 ? Math.round(overallTotal / overallCount) : 0,
+      overallAverage: overallCount > 0 ? clampPercent(overallTotal / overallCount) : 0,
       totalStudents: overallCount,
     };
   });
 
+  const gradedExamPercents = rows
+    .filter((row) => row.totalStudents > 0)
+    .map((row) => row.overallAverage);
+  const globalAveragePercent =
+    gradedExamPercents.length > 0
+      ? clampPercent(
+          gradedExamPercents.reduce((sum, pct) => sum + pct, 0) / gradedExamPercents.length
+        )
+      : null;
+
   return {
     rows,
-    globalAveragePercent: globalGradedCount > 0 ? Math.round(globalPctSum / globalGradedCount) : null,
+    globalAveragePercent,
   };
 }

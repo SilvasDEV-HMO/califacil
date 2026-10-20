@@ -33,8 +33,9 @@ export function generateExamUrl(examId: string): string {
 }
 
 export function calculatePercentage(score: number, maxScore: number): number {
-  if (maxScore === 0) return 0;
-  return Math.round((score / maxScore) * 100);
+  if (maxScore <= 0 || !Number.isFinite(score) || !Number.isFinite(maxScore)) return 0;
+  const pct = Math.round((score / maxScore) * 100);
+  return Math.max(0, Math.min(100, pct));
 }
 
 export function normalizeQuestionText(text: string): string {
