@@ -111,6 +111,28 @@ export function emptyFolderExamGradeStats(): FolderExamGradeStats {
   };
 }
 
+export async function listExamIdsWithAnswers(examIds: string[]): Promise<Set<string>> {
+  const examSet = new Set<string>();
+  const idChunk = 80;
+  for (let i = 0; i < examIds.length; i += idChunk) {
+    const slice = examIds.slice(i, i + idChunk);
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase
+        .from('answers')
+        .select('exam_id')
+        .in('exam_id', slice)
+        .range(from, from + 999);
+      if (error) break;
+      const batch = data ?? [];
+      for (const row of batch) {
+        if (row.exam_id) examSet.add(String(row.exam_id));
+      }
+      if (batch.length < 1000) break;
+    }
+  }
+  return examSet;
+}
+
 export async function fetchFolderExamGradeStats(exams: Exam[]): Promise<FolderExamGradeStats> {
   const stats = emptyFolderExamGradeStats();
   const lenguajeIds: string[] = [];

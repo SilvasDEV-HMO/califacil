@@ -44,6 +44,7 @@ import {
   Pencil,
   FolderInput,
   FileSpreadsheet,
+  CircleCheck,
 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import type { Exam, ExamFolder, ExamWithQuestions } from '@/types';
@@ -63,6 +64,7 @@ import {
   emptyFolderExamGradeStats,
   ensureSubsystemFoldersAndAssignExams,
   fetchFolderExamGradeStats,
+  listExamIdsWithAnswers,
   SUBSYSTEM_FOLDER_SPECS,
 } from '@/lib/examSubsystemFolders';
 import { TwoStepDeleteDialog } from '@/components/two-step-delete-dialog';
@@ -175,6 +177,7 @@ export default function ExamsPage() {
 
   const [folderStats, setFolderStats] = useState(emptyFolderExamGradeStats);
   const [folderStatsLoading, setFolderStatsLoading] = useState(false);
+  const [gradedExamIds, setGradedExamIds] = useState<ReadonlySet<string>>(() => new Set());
   const subsystemSyncingRef = useRef(false);
 
   useEffect(() => {
@@ -210,6 +213,21 @@ export default function ExamsPage() {
       cancelled = true;
     };
   }, [currentFolderId, folderExams]);
+
+  useEffect(() => {
+    if (exams.length === 0) {
+      setGradedExamIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const ids = await listExamIdsWithAnswers(exams.map((exam) => exam.id));
+      if (!cancelled) setGradedExamIds(ids);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [exams]);
 
   const visibleExams = useMemo(() => {
     return exams.filter((exam) => {
@@ -515,6 +533,7 @@ export default function ExamsPage() {
               key={exam.id}
               exam={exam}
               folders={folders}
+              graded={gradedExamIds.has(exam.id)}
               onDelete={() => setExamPendingDelete(exam.id)}
               onMove={(folderId) => void handleMoveExam(exam.id, folderId)}
             />
@@ -678,11 +697,13 @@ async function fetchExamWithQuestions(examId: string): Promise<ExamWithQuestions
 function ExamCard({
   exam,
   folders,
+  graded,
   onDelete,
   onMove,
 }: {
   exam: Exam;
   folders: ExamFolder[];
+  graded: boolean;
   onDelete: () => void;
   onMove: (folderId: string | null) => void;
 }) {
@@ -779,7 +800,15 @@ function ExamCard({
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <CardTitle className="line-clamp-1 text-lg font-semibold">{exam.title}</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+              <span className="min-w-0 line-clamp-1">{exam.title}</span>
+              {graded ? (
+                <CircleCheck
+                  className="h-5 w-5 shrink-0 text-green-600"
+                  aria-label="Examen calificado"
+                />
+              ) : null}
+            </CardTitle>
             <CardDescription className="mt-1 line-clamp-2">
               {exam.description || 'Sin descripción'}
             </CardDescription>
