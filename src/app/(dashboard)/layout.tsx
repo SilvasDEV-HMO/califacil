@@ -112,10 +112,12 @@ export default function DashboardLayout({
   }, []);
 
   // En móvil Calificar no existe: no montar la página (evita pedir cámara) y redirigir.
+  // Si ya se abrió en escritorio, no desmontar/redirigir al hacer zoom (el viewport puede caer bajo lg).
   useEffect(() => {
     if (!isCalificarRoute || isMobileViewport !== true) return;
+    if (keepCalificarMounted) return;
     router.replace('/dashboard');
-  }, [isCalificarRoute, isMobileViewport, router]);
+  }, [isCalificarRoute, isMobileViewport, router, keepCalificarMounted]);
 
   useEffect(() => {
     if (isCalificarRoute && isMobileViewport === false) {
@@ -124,9 +126,9 @@ export default function DashboardLayout({
   }, [isCalificarRoute, isMobileViewport]);
 
   const suppressCalificarOnMobile =
-    isCalificarRoute && isMobileViewport !== false;
+    isCalificarRoute && isMobileViewport !== false && !keepCalificarMounted;
   const showKeptCalificar =
-    isMobileViewport === false && (keepCalificarMounted || isCalificarRoute);
+    keepCalificarMounted || (isMobileViewport === false && isCalificarRoute);
 
   if ((loading || !billingReady) && !showKeptCalificar) {
     return (

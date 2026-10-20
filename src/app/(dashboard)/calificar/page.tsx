@@ -798,6 +798,11 @@ export default function CalificarPage() {
   const [folderFileChooser, setFolderFileChooser] = useState<File[] | null>(null);
   const [folderFileChosen, setFolderFileChosen] = useState<Record<number, boolean>>({});
   const [batchSummary, setBatchSummary] = useState<BatchGradeItem[] | null>(null);
+  const [nameCropHover, setNameCropHover] = useState<{
+    url: string;
+    left: number;
+    top: number;
+  } | null>(null);
   const [studentsAlreadyGraded, setStudentsAlreadyGraded] = useState<Set<string>>(new Set());
   const pdfInputRef = useRef<HTMLInputElement>(null);
   /** Cancela lecturas desktop JPG/PDF tardías (timeout / nueva subida). */
@@ -4039,6 +4044,21 @@ export default function CalificarPage() {
       setBatchGradedByExamId(gradedMap);
     }
 
+    const skipGradedFileIdx = new Set<number>();
+    if (subjectMode) {
+      for (const [idx, id] of Array.from(fileExamIdByIndex.entries())) {
+        const bundle = batchBundlesByIdRef.current.get(id);
+        if (
+          !bundle ||
+          bundle.students.length === 0 ||
+          !bundle.students.every((s) => bundle.alreadyGraded.has(s.id))
+        ) {
+          continue;
+        }
+        skipGradedFileIdx.add(idx);
+      }
+    }
+
     const pagesPerExamDefault = Math.max(1, subjectMode ? 1 : totalSheets);
 
     const takenStudentIdsForExam = (
@@ -4078,6 +4098,7 @@ export default function CalificarPage() {
       for (let i = 0; i < files.length; i++) {
         if (gen !== gradeReadGenRef.current) return;
         if (fileMatchErrorByIndex.has(i)) continue;
+        if (skipGradedFileIdx.has(i)) continue;
         if (subjectMode) {
           const countedExamId = fileExamIdByIndex.get(i);
           const countedBundle = countedExamId
@@ -4132,15 +4153,30 @@ export default function CalificarPage() {
       const batchExamTotal = Math.min(plannedExams, FOLDER_BATCH_MAX_EXAMS);
       if (plannedExams === 0) {
         for (let i = 0; i < files.length; i++) {
+          if (skipGradedFileIdx.has(i)) {
+            skippedAlreadyGraded += Math.max(1, pdfPrepByIndex.get(i)?.numPages ?? 1);
+            continue;
+          }
+          const countedExamId = fileExamIdByIndex.get(i);
+          const countedBundle = countedExamId
+            ? batchBundlesByIdRef.current.get(countedExamId) ?? null
+            : null;
+          if (examFullyGraded(countedBundle)) {
+            skippedAlreadyGraded += Math.max(1, pdfPrepByIndex.get(i)?.numPages ?? 1);
+            continue;
+          }
           const file = files[i]!;
           const prep = pdfPrepByIndex.get(i);
+          const err =
+            fileMatchErrorByIndex.get(i) ??
+            prep?.error ??
+            'No se encontraron páginas legibles en el PDF';
           results.push({
             fileName: folderFileLabel(file),
             ok: false,
-            error:
-              fileMatchErrorByIndex.get(i) ??
-              prep?.error ??
-              'No se encontraron páginas legibles en el PDF',
+            error: err,
+            examId: countedExamId,
+            examTitle: countedBundle?.exam.title,
           });
         }
         return;
@@ -4156,6 +4192,10 @@ export default function CalificarPage() {
         if (results.length >= FOLDER_BATCH_MAX_EXAMS) break;
         const file = files[i]!;
         const label = folderFileLabel(file);
+        if (skipGradedFileIdx.has(i)) {
+          skippedAlreadyGraded += Math.max(1, pdfPrepByIndex.get(i)?.numPages ?? 1);
+          continue;
+        }
         const matchError = fileMatchErrorByIndex.get(i);
         if (matchError) {
           results.push({ fileName: label, ok: false, error: matchError });
@@ -4238,7 +4278,13 @@ export default function CalificarPage() {
               skippedAlreadyGraded += 1;
               return;
             }
-            if (!student && matchPool.length > 0 && available.length === 0) {
+            const unidentifiedPending = results.filter(
+              (row) =>
+                row.examId === fileBundle?.examId &&
+                row.pendingStudent &&
+                !row.selectedStudentId
+            ).length;
+            if (!student && (available.length === 0 || unidentifiedPending >= available.length)) {
               skippedAlreadyGraded += 1;
               return;
             }
@@ -4731,7 +4777,15 @@ export default function CalificarPage() {
       if (gen === gradeReadGenRef.current) {
         setScanBusy(false);
         setLiveStatus('');
-        if (results.length === 0) {
+        const popupRows = results.filter((row) => {
+          if (row.pendingStudent) return true;
+          if (row.ok) return false;
+          if (!row.examId) return true;
+          const bundle = batchBundlesByIdRef.current.get(row.examId);
+          if (!bundle || bundle.students.length === 0) return true;
+          return bundle.students.some((s) => !bundle.alreadyGraded.has(s.id));
+        });
+        if (popupRows.length === 0) {
           setBatchSummary(null);
           toast.message(
             skippedAlreadyGraded > 0
@@ -4739,10 +4793,10 @@ export default function CalificarPage() {
               : 'No hubo hojas nuevas para revisar.'
           );
         } else {
-          setBatchSummary(results);
-          const saved = results.filter((r) => r.ok).length;
-          const pending = results.filter((r) => r.pendingStudent).length;
-          const failed = results.length - saved - pending;
+          setBatchSummary(popupRows);
+          const saved = popupRows.filter((r) => r.ok).length;
+          const pending = popupRows.filter((r) => r.pendingStudent).length;
+          const failed = popupRows.length - saved - pending;
           const skippedBit =
             skippedAlreadyGraded > 0
               ? ` Se omitieron ${skippedAlreadyGraded} ya calificadas.`
@@ -5019,6 +5073,10 @@ export default function CalificarPage() {
       setScanBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (batchSummary == null) setNameCropHover(null);
+  }, [batchSummary]);
 
   const batchSummaryDisplayRows = useMemo(() => {
     if (!batchSummary?.length) return [];
@@ -6158,13 +6216,15 @@ export default function CalificarPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={batchSummary != null}
-        onOpenChange={(open) => {
-          if (!open) setBatchSummary(null);
-        }}
-      >
-        <DialogContent className="max-h-[min(92vh,860px)] sm:max-w-4xl">
+      <Dialog open={batchSummary != null} modal>
+        <DialogContent
+          showCloseButton={false}
+          className="max-h-[min(92vh,860px)] sm:max-w-4xl"
+          onPointerDownOutside={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+          onFocusOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Resultado de la carpeta</DialogTitle>
             <DialogDescription>
@@ -6179,7 +6239,7 @@ export default function CalificarPage() {
                   batchSummary && batchSummary.length > 0
                     ? ` ${assigned} con alumno; ${pending} a mano${failed > 0 ? `; ${failed} con error` : ''}.`
                     : '';
-                return `Solo aparecen hojas que aún no están calificadas.${counts} Si la IA no reconoció el nombre, elige al alumno en la lista. Las que ya tenían nota no se muestran ni se cambian. Guardar solo escribe las filas con alumno. Cancelar no guarda nada.`;
+                return `Solo aparecen hojas que aún no están calificadas.${counts} Si la IA no reconoció el nombre, elige al alumno en la lista. Las que ya tenían nota no se muestran ni se cambian. Guardar solo escribe las filas con alumno. Cerrar no guarda nada.`;
               })()}
             </DialogDescription>
           </DialogHeader>
@@ -6217,8 +6277,22 @@ export default function CalificarPage() {
                           <img
                             src={row.nameCropUrl}
                             alt={`Nombre escrito (${row.fileName})`}
-                            title={row.fileName}
-                            className="max-h-24 w-[28rem] max-w-full rounded border border-gray-200 bg-white object-contain object-left object-top"
+                            className="max-h-24 w-[28rem] max-w-full cursor-zoom-in rounded border border-gray-200 bg-white object-contain object-left object-top"
+                            onMouseEnter={(event) => {
+                              const r = event.currentTarget.getBoundingClientRect();
+                              const previewW = Math.min(window.innerWidth * 0.88, 720);
+                              const previewH = Math.min(window.innerHeight * 0.45, 340);
+                              let left = r.right + 12;
+                              let top = r.top;
+                              if (left + previewW > window.innerWidth - 8) {
+                                left = Math.max(8, r.left - previewW - 12);
+                              }
+                              if (top + previewH > window.innerHeight - 8) {
+                                top = Math.max(8, window.innerHeight - previewH - 8);
+                              }
+                              setNameCropHover({ url: row.nameCropUrl!, left, top });
+                            }}
+                            onMouseLeave={() => setNameCropHover(null)}
                           />
                         ) : (
                           <span className="max-w-[10rem] truncate text-xs text-gray-500" title={row.fileName}>
@@ -6304,8 +6378,15 @@ export default function CalificarPage() {
             <p className="text-sm text-gray-600">No hubo archivos para calificar.</p>
           )}
           <DialogFooter className="gap-2 sm:justify-end">
-            <Button type="button" variant="outline" onClick={() => setBatchSummary(null)}>
-              Cancelar
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setNameCropHover(null);
+                setBatchSummary(null);
+              }}
+            >
+              Cerrar
             </Button>
             {(batchSummary?.some((r) => r.pendingStudent) ?? false) ? (
               <Button
@@ -6321,6 +6402,22 @@ export default function CalificarPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {nameCropHover && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed z-[400] rounded-md border border-gray-200 bg-white p-1.5 shadow-2xl"
+              style={{ left: nameCropHover.left, top: nameCropHover.top }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={nameCropHover.url}
+                alt=""
+                className="max-h-[min(45vh,340px)] w-auto max-w-[min(88vw,45rem)] object-contain object-left"
+              />
+            </div>,
+            document.body
+          )
+        : null}
 
       {isMobile && phase === 'elegir' && (
         <CalificarMobileHome
