@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
@@ -59,6 +59,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
 import { downloadTeacherResultsExcel } from '@/lib/exportTeacherResultsExcel';
+import {
+  emptyFolderExamGradeStats,
+  ensureSubsystemFoldersAndAssignExams,
+  fetchFolderExamGradeStats,
+  SUBSYSTEM_FOLDER_SPECS,
+} from '@/lib/examSubsystemFolders';
 import { TwoStepDeleteDialog } from '@/components/two-step-delete-dialog';
 
 function folderMoveOptions(
@@ -85,13 +91,14 @@ export default function ExamsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
-  const { exams, loading: examsLoading, deleteExam, updateExam } = useExams(user?.id);
+  const { exams, loading: examsLoading, deleteExam, updateExam, refreshExams } = useExams(user?.id);
   const {
     folders,
     loading: foldersLoading,
     createFolder,
     renameFolder,
     deleteFolder,
+    refreshFolders,
   } = useExamFolders(user?.id);
 
   const currentFolderId = searchParams.get('folder');
@@ -147,10 +154,62 @@ export default function ExamsPage() {
 
   const childFolders = useMemo(() => {
     if (inSearchMode) return [];
-    return folders.filter((f) =>
+    const list = folders.filter((f) =>
       currentFolderId ? f.parent_id === currentFolderId : f.parent_id === null
     );
+    const order = SUBSYSTEM_FOLDER_SPECS.map((s) => s.name);
+    return [...list].sort((a, b) => {
+      const ai = order.indexOf(a.name);
+      const bi = order.indexOf(b.name);
+      if (ai !== -1 || bi !== -1) {
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+      }
+      return a.name.localeCompare(b.name, 'es');
+    });
   }, [folders, currentFolderId, inSearchMode]);
+
+  const folderExams = useMemo(() => {
+    if (!currentFolderId) return [];
+    return exams.filter((exam) => exam.folder_id === currentFolderId);
+  }, [exams, currentFolderId]);
+
+  const [folderStats, setFolderStats] = useState(emptyFolderExamGradeStats);
+  const [folderStatsLoading, setFolderStatsLoading] = useState(false);
+  const subsystemSyncingRef = useRef(false);
+
+  useEffect(() => {
+    if (!user?.id || examsLoading || foldersLoading) return;
+    if (subsystemSyncingRef.current) return;
+    subsystemSyncingRef.current = true;
+    void (async () => {
+      try {
+        const result = await ensureSubsystemFoldersAndAssignExams(user.id, folders, exams);
+        if (result.foldersChanged) await refreshFolders();
+        if (result.examsMoved > 0) await refreshExams();
+      } finally {
+        subsystemSyncingRef.current = false;
+      }
+    })();
+  }, [user?.id, examsLoading, foldersLoading, folders, exams, refreshFolders, refreshExams]);
+
+  useEffect(() => {
+    if (!currentFolderId) {
+      setFolderStats(emptyFolderExamGradeStats());
+      return;
+    }
+    let cancelled = false;
+    setFolderStatsLoading(true);
+    void (async () => {
+      const next = await fetchFolderExamGradeStats(folderExams);
+      if (!cancelled) {
+        setFolderStats(next);
+        setFolderStatsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFolderId, folderExams]);
 
   const visibleExams = useMemo(() => {
     return exams.filter((exam) => {
@@ -303,6 +362,48 @@ export default function ExamsPage() {
           </Link>
         </div>
       </div>
+
+      {!inSearchMode && currentFolderId && (
+        <Card className="border-orange-100 bg-orange-50/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base sm:text-lg">
+              {folderPath[folderPath.length - 1]?.name ?? 'Carpeta'}
+            </CardTitle>
+            <CardDescription>
+              Totales de Lenguaje y Matemáticas en esta carpeta
+              {folderStatsLoading ? ' (cargando…)' : ''}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
+                <p className="text-xs text-gray-500">Exámenes de Lenguaje</p>
+                <p className="text-xl font-semibold text-gray-900">{folderStats.lenguajeExams}</p>
+              </div>
+              <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
+                <p className="text-xs text-gray-500">Exámenes de Matemáticas</p>
+                <p className="text-xl font-semibold text-gray-900">{folderStats.matematicasExams}</p>
+              </div>
+              <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
+                <p className="text-xs text-gray-500">Lenguaje ya calificados</p>
+                <p className="text-xl font-semibold text-gray-900">{folderStats.lenguajeGradedExams}</p>
+              </div>
+              <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
+                <p className="text-xs text-gray-500">Matemáticas ya calificados</p>
+                <p className="text-xl font-semibold text-gray-900">{folderStats.matematicasGradedExams}</p>
+              </div>
+              <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
+                <p className="text-xs text-gray-500">Alumnos calificados (Lenguaje)</p>
+                <p className="text-xl font-semibold text-gray-900">{folderStats.lenguajeGradedStudents}</p>
+              </div>
+              <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
+                <p className="text-xs text-gray-500">Alumnos calificados (Matemáticas)</p>
+                <p className="text-xl font-semibold text-gray-900">{folderStats.matematicasGradedStudents}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {!inSearchMode && folderPath.length > 0 && (
         <nav className="flex flex-wrap items-center gap-1 text-sm text-gray-600">
