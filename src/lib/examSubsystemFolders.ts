@@ -2,13 +2,13 @@ import { supabase } from '@/lib/supabase';
 import type { Exam, ExamFolder } from '@/types';
 
 export const SUBSYSTEM_FOLDER_SPECS = [
-  { code: 'DST', name: 'Técnicas' },
-  { code: 'EST', name: 'Estatales' },
-  { code: 'EES', name: 'Generales' },
-  { code: 'ETV', name: 'Teles' },
-] as const;
+  { codes: ['DST'] as const, name: 'Técnicas' },
+  { codes: ['EST'] as const, name: 'Estatales' },
+  { codes: ['EES', 'DES'] as const, name: 'Generales' },
+  { codes: ['ETV'] as const, name: 'Teles' },
+];
 
-export type SubsystemFolderCode = (typeof SUBSYSTEM_FOLDER_SPECS)[number]['code'];
+export type SubsystemFolderCode = (typeof SUBSYSTEM_FOLDER_SPECS)[number]['codes'][number];
 
 function normalizeName(value: string): string {
   return value
@@ -20,9 +20,11 @@ function normalizeName(value: string): string {
 }
 
 export function subsystemCodeFromExamTitle(title: string): SubsystemFolderCode | null {
-  const m = title.toUpperCase().match(/\d{2}(DST|EST|EES|ETV)/);
+  const m = title.toUpperCase().match(/\d{2}(DST|EST|EES|ETV|DES)/);
   const code = m?.[1];
-  if (code === 'DST' || code === 'EST' || code === 'EES' || code === 'ETV') return code;
+  if (code === 'DST' || code === 'EST' || code === 'EES' || code === 'ETV' || code === 'DES') {
+    return code;
+  }
   return null;
 }
 
@@ -62,12 +64,13 @@ export async function ensureSubsystemFoldersAndAssignExams(
     foldersChanged = true;
   }
 
-  const folderIdByCode: Record<SubsystemFolderCode, string | null> = {
-    DST: findRootFolderByName(nextFolders, 'Técnicas')?.id ?? null,
-    EST: findRootFolderByName(nextFolders, 'Estatales')?.id ?? null,
-    EES: findRootFolderByName(nextFolders, 'Generales')?.id ?? null,
-    ETV: findRootFolderByName(nextFolders, 'Teles')?.id ?? null,
-  };
+  const folderIdByCode: Partial<Record<SubsystemFolderCode, string | null>> = {};
+  for (const spec of SUBSYSTEM_FOLDER_SPECS) {
+    const folderId = findRootFolderByName(nextFolders, spec.name)?.id ?? null;
+    for (const code of spec.codes) {
+      folderIdByCode[code] = folderId;
+    }
+  }
 
   const moves: Array<{ id: string; folder_id: string }> = [];
   for (const exam of exams) {
