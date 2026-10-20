@@ -125,7 +125,7 @@ export async function fetchTeacherGlobalAveragePercent(
     if (!byStudent || byStudent.size === 0) continue;
     const maxScore = Math.max(1, maxScoreByExam.get(exam.id) ?? 0);
     let total = 0;
-    for (const points of byStudent.values()) {
+    for (const points of Array.from(byStudent.values())) {
       total += clampPercent(calculatePercentage(points, maxScore));
     }
     examPercents.push(clampPercent(total / byStudent.size));
