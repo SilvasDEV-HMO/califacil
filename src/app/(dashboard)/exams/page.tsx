@@ -44,7 +44,7 @@ import {
   Pencil,
   FolderInput,
   FileSpreadsheet,
-  CircleCheck,
+  CheckCircle2,
 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import type { Exam, ExamFolder, ExamWithQuestions } from '@/types';
@@ -159,7 +159,7 @@ export default function ExamsPage() {
     const list = folders.filter((f) =>
       currentFolderId ? f.parent_id === currentFolderId : f.parent_id === null
     );
-    const order = SUBSYSTEM_FOLDER_SPECS.map((s) => s.name);
+    const order = SUBSYSTEM_FOLDER_SPECS.map((s) => s.name) as string[];
     return [...list].sort((a, b) => {
       const ai = order.indexOf(a.name);
       const bi = order.indexOf(b.name);
@@ -803,7 +803,7 @@ function ExamCard({
             <CardTitle className="flex items-center gap-2 text-lg font-semibold">
               <span className="min-w-0 line-clamp-1">{exam.title}</span>
               {graded ? (
-                <CircleCheck
+                <CheckCircle2
                   className="h-5 w-5 shrink-0 text-green-600"
                   aria-label="Examen calificado"
                 />
