@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { useExams } from '@/hooks/useExams';
 import { useGroups } from '@/hooks/useGroups';
-import { fetchTeacherExamAverageSummaries } from '@/lib/teacherExamAverages';
+import { fetchTeacherGlobalAveragePercent } from '@/lib/teacherExamAverages';
 import { ExamMiniPreview } from '@/components/exam-mini-preview';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -36,8 +36,6 @@ export default function DashboardPage() {
   const [globalGradePercent, setGlobalGradePercent] = useState<number | null>(null);
   const [globalGradeLoading, setGlobalGradeLoading] = useState(false);
 
-  const groupsById = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
-
   useEffect(() => {
     if (exams && groups) {
       setStats({
@@ -55,7 +53,7 @@ export default function DashboardPage() {
     (async () => {
       setGlobalGradeLoading(true);
       try {
-        const { globalAveragePercent } = await fetchTeacherExamAverageSummaries(exams, groupsById);
+        const globalAveragePercent = await fetchTeacherGlobalAveragePercent();
         if (!cancelled) setGlobalGradePercent(globalAveragePercent);
       } catch {
         if (!cancelled) setGlobalGradePercent(null);
@@ -66,7 +64,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, examsLoading, exams, groupsById]);
+  }, [user?.id, examsLoading, exams]);
 
   /** Más recientes primero (ya vienen desc). */
   const recentExams = [...exams].slice(0, RECENTS_MAX);

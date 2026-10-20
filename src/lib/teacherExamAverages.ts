@@ -45,6 +45,41 @@ function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+export async function fetchTeacherGlobalAveragePercent(): Promise<number | null> {
+  const { data, error } = await supabase.rpc('teacher_global_grade_average');
+  if (error) return null;
+  const payload = data as { ok?: boolean; percent?: number | null } | null;
+  if (!payload?.ok) return null;
+  if (payload.percent == null) return null;
+  return clampPercent(Number(payload.percent));
+}
+
+async function fetchStudentPointsViaRpc(
+  examIds: string[]
+): Promise<StudentAnswerRow[] | null> {
+  const rows: StudentAnswerRow[] = [];
+  for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
+    const slice = examIds.slice(i, i + EXAM_ID_CHUNK);
+    const { data, error } = await supabase.rpc('teacher_exam_student_scores', {
+      p_exam_ids: slice,
+    });
+    if (error) return null;
+    const payload = data as {
+      ok?: boolean;
+      rows?: Array<{ exam_id: string; student_id: string; points: number }>;
+    } | null;
+    if (!payload?.ok || !Array.isArray(payload.rows)) return null;
+    for (const row of payload.rows) {
+      rows.push({
+        exam_id: row.exam_id,
+        student_id: row.student_id,
+        score: Number(row.points) || 0,
+      });
+    }
+  }
+  return rows;
+}
+
 /**
  * Porcentaje por alumno = puntos / máximo del examen, acotado a 0–100.
  * `globalAveragePercent` = media de los porcentajes de cada examen que ya tiene
@@ -60,20 +95,23 @@ export async function fetchTeacherExamAverageSummaries(
 
   const examIds = exams.map((e) => e.id);
 
-  const answers: StudentAnswerRow[] = [];
-  for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
-    const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
-    for (let from = 0; ; from += PAGE_SIZE) {
-      const { data: answersData, error: answersError } = await supabase
-        .from('answers')
-        .select('exam_id,student_id,score')
-        .in('exam_id', examSlice)
-        .order('id', { ascending: true })
-        .range(from, from + PAGE_SIZE - 1);
-      if (answersError) throw answersError;
-      const batch = (answersData || []) as StudentAnswerRow[];
-      answers.push(...batch);
-      if (batch.length < PAGE_SIZE) break;
+  let answers = await fetchStudentPointsViaRpc(examIds);
+  if (!answers) {
+    answers = [];
+    for (let i = 0; i < examIds.length; i += EXAM_ID_CHUNK) {
+      const examSlice = examIds.slice(i, i + EXAM_ID_CHUNK);
+      for (let from = 0; ; from += PAGE_SIZE) {
+        const { data: answersData, error: answersError } = await supabase
+          .from('answers')
+          .select('exam_id,student_id,score')
+          .in('exam_id', examSlice)
+          .order('id', { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
+        if (answersError) throw answersError;
+        const batch = (answersData || []) as StudentAnswerRow[];
+        answers.push(...batch);
+        if (batch.length < PAGE_SIZE) break;
+      }
     }
   }
 

@@ -65,6 +65,7 @@ import {
   ensureSubsystemFoldersAndAssignExams,
   examsInFolderTree,
   fetchFolderExamGradeStats,
+  folderExamCountsFromList,
   listExamIdsWithAnswers,
   SUBJECT_SUBFOLDER_SPECS,
   SUBSYSTEM_FOLDER_SPECS,
@@ -179,6 +180,11 @@ export default function ExamsPage() {
     if (!currentFolderId) return [];
     return examsInFolderTree(exams, folders, currentFolderId);
   }, [exams, folders, currentFolderId]);
+
+  const instantFolderCounts = useMemo(
+    () => folderExamCountsFromList(folderExams),
+    [folderExams]
+  );
 
   const [folderStats, setFolderStats] = useState(emptyFolderExamGradeStats);
   const [folderStatsLoading, setFolderStatsLoading] = useState(false);
@@ -393,35 +399,62 @@ export default function ExamsPage() {
               {folderPath[folderPath.length - 1]?.name ?? 'Carpeta'}
             </CardTitle>
             <CardDescription>
-              Totales de Lenguaje y Matemáticas en esta carpeta
-              {folderStatsLoading ? ' (cargando…)' : ''}.
+              Totales de Lenguaje y Matemáticas en esta carpeta.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
               <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
                 <p className="text-xs text-gray-500">Exámenes de Lenguaje</p>
-                <p className="text-xl font-semibold text-gray-900">{folderStats.lenguajeExams}</p>
+                <p className="text-xl font-semibold text-gray-900">
+                  {instantFolderCounts.lenguajeExams}
+                </p>
               </div>
               <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
                 <p className="text-xs text-gray-500">Exámenes de Matemáticas</p>
-                <p className="text-xl font-semibold text-gray-900">{folderStats.matematicasExams}</p>
+                <p className="text-xl font-semibold text-gray-900">
+                  {instantFolderCounts.matematicasExams}
+                </p>
               </div>
               <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
                 <p className="text-xs text-gray-500">Lenguaje ya calificados</p>
-                <p className="text-xl font-semibold text-gray-900">{folderStats.lenguajeGradedExams}</p>
+                <p className="text-xl font-semibold text-gray-900">
+                  {folderStatsLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
+                  ) : (
+                    folderStats.lenguajeGradedExams
+                  )}
+                </p>
               </div>
               <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
                 <p className="text-xs text-gray-500">Matemáticas ya calificados</p>
-                <p className="text-xl font-semibold text-gray-900">{folderStats.matematicasGradedExams}</p>
+                <p className="text-xl font-semibold text-gray-900">
+                  {folderStatsLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
+                  ) : (
+                    folderStats.matematicasGradedExams
+                  )}
+                </p>
               </div>
               <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
                 <p className="text-xs text-gray-500">Alumnos calificados (Lenguaje)</p>
-                <p className="text-xl font-semibold text-gray-900">{folderStats.lenguajeGradedStudents}</p>
+                <p className="text-xl font-semibold text-gray-900">
+                  {folderStatsLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
+                  ) : (
+                    folderStats.lenguajeGradedStudents
+                  )}
+                </p>
               </div>
               <div className="rounded-lg border border-white bg-white/80 px-3 py-2">
                 <p className="text-xs text-gray-500">Alumnos calificados (Matemáticas)</p>
-                <p className="text-xl font-semibold text-gray-900">{folderStats.matematicasGradedStudents}</p>
+                <p className="text-xl font-semibold text-gray-900">
+                  {folderStatsLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
+                  ) : (
+                    folderStats.matematicasGradedStudents
+                  )}
+                </p>
               </div>
             </div>
           </CardContent>

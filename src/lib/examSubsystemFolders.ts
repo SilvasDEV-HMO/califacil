@@ -180,7 +180,43 @@ export function emptyFolderExamGradeStats(): FolderExamGradeStats {
   };
 }
 
+export function folderExamCountsFromList(exams: Exam[]): Pick<
+  FolderExamGradeStats,
+  'lenguajeExams' | 'matematicasExams'
+> {
+  let lenguajeExams = 0;
+  let matematicasExams = 0;
+  for (const exam of exams) {
+    const kind = examSubjectKind(exam.title);
+    if (kind === 'lenguaje') lenguajeExams += 1;
+    else if (kind === 'matematicas') matematicasExams += 1;
+  }
+  return { lenguajeExams, matematicasExams };
+}
+
+async function examStudentHeadcountsRpc(
+  examIds: string[]
+): Promise<Array<{ exam_id: string; students: number }> | null> {
+  const out: Array<{ exam_id: string; students: number }> = [];
+  const idChunk = 200;
+  for (let i = 0; i < examIds.length; i += idChunk) {
+    const slice = examIds.slice(i, i + idChunk);
+    const { data, error } = await supabase.rpc('exam_student_headcounts', {
+      p_exam_ids: slice,
+    });
+    if (error) return null;
+    const payload = data as { ok?: boolean; rows?: Array<{ exam_id: string; students: number }> } | null;
+    if (!payload?.ok || !Array.isArray(payload.rows)) return null;
+    out.push(...payload.rows);
+  }
+  return out;
+}
+
 export async function listExamIdsWithAnswers(examIds: string[]): Promise<Set<string>> {
+  const rpcRows = await examStudentHeadcountsRpc(examIds);
+  if (rpcRows) {
+    return new Set(rpcRows.filter((row) => Number(row.students) > 0).map((row) => row.exam_id));
+  }
   const examSet = new Set<string>();
   const idChunk = 80;
   for (let i = 0; i < examIds.length; i += idChunk) {
@@ -203,18 +239,36 @@ export async function listExamIdsWithAnswers(examIds: string[]): Promise<Set<str
 }
 
 export async function fetchFolderExamGradeStats(exams: Exam[]): Promise<FolderExamGradeStats> {
-  const stats = emptyFolderExamGradeStats();
+  const counts = folderExamCountsFromList(exams);
+  const stats: FolderExamGradeStats = {
+    ...emptyFolderExamGradeStats(),
+    ...counts,
+  };
   const lenguajeIds: string[] = [];
   const mateIds: string[] = [];
   for (const exam of exams) {
     const kind = examSubjectKind(exam.title);
-    if (kind === 'lenguaje') {
-      stats.lenguajeExams += 1;
-      lenguajeIds.push(exam.id);
-    } else if (kind === 'matematicas') {
-      stats.matematicasExams += 1;
-      mateIds.push(exam.id);
+    if (kind === 'lenguaje') lenguajeIds.push(exam.id);
+    else if (kind === 'matematicas') mateIds.push(exam.id);
+  }
+
+  const allIds = lenguajeIds.concat(mateIds);
+  const rpcRows = await examStudentHeadcountsRpc(allIds);
+  if (rpcRows) {
+    const lenguajeSet = new Set(lenguajeIds);
+    const mateSet = new Set(mateIds);
+    for (const row of rpcRows) {
+      const students = Number(row.students) || 0;
+      if (students <= 0) continue;
+      if (lenguajeSet.has(row.exam_id)) {
+        stats.lenguajeGradedExams += 1;
+        stats.lenguajeGradedStudents += students;
+      } else if (mateSet.has(row.exam_id)) {
+        stats.matematicasGradedExams += 1;
+        stats.matematicasGradedStudents += students;
+      }
     }
+    return stats;
   }
 
   const countGraded = async (examIds: string[]) => {
