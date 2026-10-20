@@ -310,10 +310,10 @@ type BatchGradeItem = {
 };
 
 /**
- * Límite de exámenes por lote (cada página de un PDF de 1 hoja = 1 examen).
+ * Tope de hojas (páginas) por lote. Una carpeta RAF de Técnicas ronda 4–5 mil hojas.
  * No confundir con el número de archivos PDF subidos.
  */
-const FOLDER_BATCH_MAX_EXAMS = 800;
+const FOLDER_BATCH_MAX_EXAMS = 20000;
 
 function isDesktopFolderGradeFile(file: File): boolean {
   const name = file.name.toLowerCase();

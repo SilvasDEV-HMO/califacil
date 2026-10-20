@@ -10,8 +10,9 @@ export type RafPdfIdentity = {
   examTitle: string;
 };
 
+/** CCT + grado + letra, y turno opcional: `_V`, `V` (vespertino) o `M` (matutino). */
 const CCT_TAIL =
-  /^([0-9]{2}[A-Z]{3}[0-9]{4}[A-Z])([0-9])([A-Z])(_V)?$/i;
+  /^([0-9]{2}[A-Z]{3}[0-9]{4}[A-Z])([0-9])([A-Z])(?:(_V)|([VM]))?$/i;
 
 export function normalizeRafTitle(value: string): string {
   return value
@@ -35,7 +36,7 @@ export function rafExamTitleForIdentity(id: Omit<RafPdfIdentity, 'examTitle' | '
   return `${subjectLabel} · ${groupKey}`;
 }
 
-/** Basename de `RAFL26DST0067Y1D.pdf` / `RAFM637426DST0057R1E_V.pdf`. */
+/** Basename de `RAFL26DST0067Y1D.pdf` / `RAFM637426DST0057R1E_V.pdf` / `RAFM…0004M1AM.pdf`. */
 export function parseRafPdfFileName(fileName: string): RafPdfIdentity | null {
   const base = fileName
     .replace(/^.*[/\\]/, '')
@@ -55,7 +56,9 @@ export function parseRafPdfFileName(fileName: string): RafPdfIdentity | null {
     return null;
   }
 
-  const found = rest.match(/^(.*?)([0-9]{2}[A-Z]{3}[0-9]{4}[A-Z][0-9][A-Z](?:_V)?)$/i);
+  const found = rest.match(
+    /^(.*?)([0-9]{2}[A-Z]{3}[0-9]{4}[A-Z][0-9][A-Z](?:_V|[VM])?)$/i
+  );
   if (!found) return null;
   const tail = found[2] ?? '';
   const m = tail.match(CCT_TAIL);
@@ -66,7 +69,7 @@ export function parseRafPdfFileName(fileName: string): RafPdfIdentity | null {
     cct: (m[1] ?? '').toUpperCase(),
     grade: m[2] ?? '',
     groupLetter: (m[3] ?? '').toUpperCase(),
-    vespertino: Boolean(m[4]),
+    vespertino: Boolean(m[4] || (m[5] && m[5].toUpperCase() === 'V')),
   };
   const examTitle = rafExamTitleForIdentity(identity);
   const groupKey = `${identity.cct} · ${identity.grade}-${identity.groupLetter}${identity.vespertino ? ' V' : ''}`;
