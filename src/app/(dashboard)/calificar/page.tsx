@@ -55,6 +55,8 @@ import {
 import { matchNameCropToGroup } from '@/lib/ocrHandwrittenName';
 import {
   loadCalificarExamBundle,
+  loadStudentsForRafExam,
+  loadTakenStudentIdsForRafExam,
   type CalificarExamBundle,
 } from '@/lib/calificarExamBundle';
 import {
@@ -798,11 +800,7 @@ export default function CalificarPage() {
   const [folderFileChooser, setFolderFileChooser] = useState<File[] | null>(null);
   const [folderFileChosen, setFolderFileChosen] = useState<Record<number, boolean>>({});
   const [batchSummary, setBatchSummary] = useState<BatchGradeItem[] | null>(null);
-  const [nameCropHover, setNameCropHover] = useState<{
-    url: string;
-    left: number;
-    top: number;
-  } | null>(null);
+  const [nameCropHover, setNameCropHover] = useState<string | null>(null);
   const [studentsAlreadyGraded, setStudentsAlreadyGraded] = useState<Set<string>>(new Set());
   const pdfInputRef = useRef<HTMLInputElement>(null);
   /** Cancela lecturas desktop JPG/PDF tardías (timeout / nueva subida). */
@@ -2165,23 +2163,7 @@ export default function CalificarPage() {
         setAllowedGroupIds(examGroupIds);
       }
 
-      if (examGroupIds.length === 0) {
-        if (!cancelled) setStudents([]);
-        return;
-      }
-
-      const pageSize = 1000;
-      const loaded: Student[] = [];
-      for (let from = 0; ; from += pageSize) {
-        const { data, error } = await supabase
-          .from('students')
-          .select('*')
-          .in('group_id', examGroupIds)
-          .range(from, from + pageSize - 1);
-        if (cancelled || error) break;
-        loaded.push(...((data || []) as Student[]));
-        if (!data || data.length < pageSize) break;
-      }
+      const loaded = await loadStudentsForRafExam(exam);
       if (!cancelled) setStudents(loaded);
     })();
     return () => {
@@ -4916,16 +4898,25 @@ export default function CalificarPage() {
       const byExam: Record<string, string[]> = {};
       const single = new Set<string>();
       for (const id of idsToLoad) {
-        const ids = new Set<string>();
-        for (let from = 0; ; from += pageSize) {
-          const { data } = await supabase
-            .from('answers')
-            .select('student_id')
-            .eq('exam_id', id)
-            .range(from, from + pageSize - 1);
-          for (const row of data ?? []) ids.add(String(row.student_id));
-          if (!data || data.length < pageSize || cancelled) break;
+        const examRow =
+          batchBundlesByIdRef.current.get(id)?.exam ??
+          publishedExams.find((row) => row.id === id) ??
+          (exam?.id === id ? exam : null);
+        const ids = examRow
+          ? await loadTakenStudentIdsForRafExam(examRow)
+          : new Set<string>();
+        if (!examRow) {
+          for (let from = 0; ; from += pageSize) {
+            const { data } = await supabase
+              .from('answers')
+              .select('student_id')
+              .eq('exam_id', id)
+              .range(from, from + pageSize - 1);
+            for (const row of data ?? []) ids.add(String(row.student_id));
+            if (!data || data.length < pageSize || cancelled) break;
+          }
         }
+        if (cancelled) break;
         byExam[id] = Array.from(ids);
         if (id === examId) ids.forEach((sid) => single.add(sid));
       }
@@ -4937,7 +4928,7 @@ export default function CalificarPage() {
     return () => {
       cancelled = true;
     };
-  }, [batchSummary, examId]);
+  }, [batchSummary, examId, exam, publishedExams]);
 
   const discardBatchRow = (rowIndex: number) => {
     setBatchSummary((prev) => {
@@ -6219,7 +6210,10 @@ export default function CalificarPage() {
       <Dialog open={batchSummary != null} modal>
         <DialogContent
           showCloseButton={false}
-          className="max-h-[min(92vh,860px)] sm:max-w-4xl"
+          className={cn(
+            'relative max-h-[min(92vh,860px)] sm:max-w-4xl',
+            nameCropHover && 'overflow-visible'
+          )}
           onPointerDownOutside={(event) => event.preventDefault()}
           onInteractOutside={(event) => event.preventDefault()}
           onFocusOutside={(event) => event.preventDefault()}
@@ -6273,27 +6267,18 @@ export default function CalificarPage() {
                     >
                       <td className="px-2 py-1.5">
                         {row.nameCropUrl ? (
-                          /* eslint-disable-next-line @next/next/no-img-element */
-                          <img
-                            src={row.nameCropUrl}
-                            alt={`Nombre escrito (${row.fileName})`}
-                            className="max-h-24 w-[28rem] max-w-full cursor-zoom-in rounded border border-gray-200 bg-white object-contain object-left object-top"
-                            onMouseEnter={(event) => {
-                              const r = event.currentTarget.getBoundingClientRect();
-                              const previewW = Math.min(window.innerWidth * 0.88, 720);
-                              const previewH = Math.min(window.innerHeight * 0.45, 340);
-                              let left = r.right + 12;
-                              let top = r.top;
-                              if (left + previewW > window.innerWidth - 8) {
-                                left = Math.max(8, r.left - previewW - 12);
-                              }
-                              if (top + previewH > window.innerHeight - 8) {
-                                top = Math.max(8, window.innerHeight - previewH - 8);
-                              }
-                              setNameCropHover({ url: row.nameCropUrl!, left, top });
-                            }}
-                            onMouseLeave={() => setNameCropHover(null)}
-                          />
+                          <div
+                            className="inline-block max-w-full"
+                            onPointerEnter={() => setNameCropHover(row.nameCropUrl!)}
+                            onPointerLeave={() => setNameCropHover(null)}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={row.nameCropUrl}
+                              alt={`Nombre escrito (${row.fileName})`}
+                              className="max-h-24 w-[28rem] max-w-full rounded border border-gray-200 bg-white object-contain object-left object-top"
+                            />
+                          </div>
                         ) : (
                           <span className="max-w-[10rem] truncate text-xs text-gray-500" title={row.fileName}>
                             {row.fileName}
@@ -6400,24 +6385,18 @@ export default function CalificarPage() {
               </Button>
             ) : null}
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      {nameCropHover && typeof document !== 'undefined'
-        ? createPortal(
-            <div
-              className="pointer-events-none fixed z-[400] rounded-md border border-gray-200 bg-white p-1.5 shadow-2xl"
-              style={{ left: nameCropHover.left, top: nameCropHover.top }}
-            >
+          {nameCropHover ? (
+            <div className="pointer-events-none fixed inset-0 z-[120] flex items-center justify-center p-4">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={nameCropHover.url}
+                src={nameCropHover}
                 alt=""
-                className="max-h-[min(45vh,340px)] w-auto max-w-[min(88vw,45rem)] object-contain object-left"
+                className="max-h-[min(72vh,32rem)] w-auto max-w-[min(100%,52rem)] rounded-md border border-gray-300 bg-white object-contain shadow-2xl"
               />
-            </div>,
-            document.body
-          )
-        : null}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       {isMobile && phase === 'elegir' && (
         <CalificarMobileHome

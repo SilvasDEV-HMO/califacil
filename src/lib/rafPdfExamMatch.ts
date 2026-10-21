@@ -76,6 +76,25 @@ export function parseRafPdfFileName(fileName: string): RafPdfIdentity | null {
   return { ...identity, groupKey, examTitle };
 }
 
+/** `Lenguaje · 26DST0076F · 1-A V` ↔ `Lenguaje · 26DST0076F · 1-A`. */
+export function rafShiftSiblingExamTitle(title: string): string | null {
+  const raw = title.trim();
+  if (!raw) return null;
+  if (/\sV$/i.test(raw)) return raw.replace(/\sV$/i, '');
+  if (/[0-9][A-Z]$/i.test(raw) && raw.includes(' · ')) return `${raw} V`;
+  return null;
+}
+
+/** Grupos que comparten roster: `CCT · 1-A` y `CCT · 1-A V`. */
+export function rafSharedGroupNamesFromExamTitle(title: string): string[] {
+  const m = title
+    .trim()
+    .match(/([0-9]{2}[A-Z]{3}[0-9]{4}[A-Z])\s*·\s*(\d-[A-Z])(?:\s+V)?$/i);
+  if (!m) return [];
+  const base = `${(m[1] ?? '').toUpperCase()} · ${(m[2] ?? '').toUpperCase()}`;
+  return [base, `${base} V`];
+}
+
 export function matchRafPdfToExam<T extends { id: string; title: string }>(
   fileName: string,
   subject: RafSubject,

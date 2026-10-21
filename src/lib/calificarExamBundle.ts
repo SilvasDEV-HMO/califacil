@@ -8,6 +8,10 @@ import {
   getCalifacilOmrSheetQuestions,
 } from '@/lib/printExam';
 import { isLenguaje45Exam } from '@/lib/omr/custom-45/read-sheet';
+import {
+  rafSharedGroupNamesFromExamTitle,
+  rafShiftSiblingExamTitle,
+} from '@/lib/rafPdfExamMatch';
 import { supabase } from '@/lib/supabase';
 import type { Exam, ExamWithQuestions, Question, Student } from '@/types';
 
@@ -34,7 +38,46 @@ async function loadQuestions(examId: string): Promise<Question[]> {
   return sortExamQuestions((data || []) as Question[]);
 }
 
-async function loadStudentsForExam(exam: Exam): Promise<Student[]> {
+async function loadStudentsByGroupIds(groupIds: string[]): Promise<Student[]> {
+  const unique = Array.from(new Set(groupIds.filter(Boolean)));
+  if (unique.length === 0) return [];
+  const pageSize = 1000;
+  const loaded: Student[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('students')
+      .select('*')
+      .in('group_id', unique)
+      .range(from, from + pageSize - 1);
+    if (error) break;
+    loaded.push(...((data || []) as Student[]));
+    if (!data || data.length < pageSize) break;
+  }
+  const byId = new Map<string, Student>();
+  for (const student of loaded) byId.set(student.id, student);
+  return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+}
+
+async function loadAnswersStudentIds(examIds: string[]): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const unique = Array.from(new Set(examIds.filter(Boolean)));
+  const pageSize = 1000;
+  for (const examId of unique) {
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await supabase
+        .from('answers')
+        .select('student_id')
+        .eq('exam_id', examId)
+        .range(from, from + pageSize - 1);
+      if (error) break;
+      for (const row of data ?? []) ids.add(String(row.student_id));
+      if (!data || data.length < pageSize) break;
+    }
+  }
+  return ids;
+}
+
+async function loadSharedGroupIds(exam: Exam): Promise<string[]> {
   const { data: assignmentData } = await supabase
     .from('exam_group_assignments')
     .select('group_id')
@@ -42,38 +85,44 @@ async function loadStudentsForExam(exam: Exam): Promise<Student[]> {
   const assigned = (assignmentData || [])
     .map((row) => row.group_id as string)
     .filter(Boolean);
-  const examGroupIds = assigned.length > 0 ? assigned : exam.group_id ? [exam.group_id] : [];
-  if (examGroupIds.length === 0) return [];
-
-  const pageSize = 1000;
-  const loaded: Student[] = [];
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from('students')
-      .select('*')
-      .in('group_id', examGroupIds)
-      .range(from, from + pageSize - 1);
-    if (error) break;
-    loaded.push(...((data || []) as Student[]));
-    if (!data || data.length < pageSize) break;
+  const ids = assigned.length > 0 ? [...assigned] : exam.group_id ? [exam.group_id] : [];
+  const names = rafSharedGroupNamesFromExamTitle(exam.title);
+  if (names.length > 0 && exam.teacher_id) {
+    const { data: groups } = await supabase
+      .from('groups')
+      .select('id')
+      .eq('teacher_id', exam.teacher_id)
+      .in('name', names);
+    for (const row of groups || []) ids.push(String((row as { id: string }).id));
   }
-  return loaded.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  return Array.from(new Set(ids));
 }
 
-async function loadAlreadyGraded(examId: string): Promise<Set<string>> {
-  const ids = new Set<string>();
-  const pageSize = 1000;
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from('answers')
-      .select('student_id')
-      .eq('exam_id', examId)
-      .range(from, from + pageSize - 1);
-    if (error) break;
-    for (const row of data ?? []) ids.add(String(row.student_id));
-    if (!data || data.length < pageSize) break;
-  }
-  return ids;
+async function loadSiblingExamIds(exam: Exam): Promise<string[]> {
+  const siblingTitle = rafShiftSiblingExamTitle(exam.title);
+  if (!siblingTitle || !exam.teacher_id) return [];
+  const { data } = await supabase
+    .from('exams')
+    .select('id')
+    .eq('teacher_id', exam.teacher_id)
+    .eq('title', siblingTitle)
+    .limit(8);
+  return (data || [])
+    .map((row) => String((row as { id: string }).id))
+    .filter((id) => id && id !== exam.id);
+}
+
+/** Roster matutino + vespertino del mismo CCT·grupo (el Excel no distingue turno). */
+export async function loadStudentsForRafExam(exam: Exam): Promise<Student[]> {
+  return loadStudentsByGroupIds(await loadSharedGroupIds(exam));
+}
+
+/**
+ * Alumnos ya usados en este examen o en el turno pareja (1-A ↔ 1-A V).
+ */
+export async function loadTakenStudentIdsForRafExam(exam: Exam): Promise<Set<string>> {
+  const siblingIds = await loadSiblingExamIds(exam);
+  return loadAnswersStudentIds([exam.id, ...siblingIds]);
 }
 
 export function buildCalificarExamBundle(
@@ -123,8 +172,8 @@ export async function loadCalificarExamBundle(
 ): Promise<CalificarExamBundle> {
   const [questions, students, alreadyGraded] = await Promise.all([
     loadQuestions(examRow.id),
-    loadStudentsForExam(examRow),
-    loadAlreadyGraded(examRow.id),
+    loadStudentsForRafExam(examRow),
+    loadTakenStudentIdsForRafExam(examRow),
   ]);
   const exam: ExamWithQuestions = { ...examRow, questions };
   return buildCalificarExamBundle(exam, students, alreadyGraded, email);
