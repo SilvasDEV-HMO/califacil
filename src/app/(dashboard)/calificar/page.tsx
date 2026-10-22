@@ -4026,21 +4026,6 @@ export default function CalificarPage() {
       setBatchGradedByExamId(gradedMap);
     }
 
-    const skipGradedFileIdx = new Set<number>();
-    if (subjectMode) {
-      for (const [idx, id] of Array.from(fileExamIdByIndex.entries())) {
-        const bundle = batchBundlesByIdRef.current.get(id);
-        if (
-          !bundle ||
-          bundle.students.length === 0 ||
-          !bundle.students.every((s) => bundle.alreadyGraded.has(s.id))
-        ) {
-          continue;
-        }
-        skipGradedFileIdx.add(idx);
-      }
-    }
-
     const pagesPerExamDefault = Math.max(1, subjectMode ? 1 : totalSheets);
 
     const takenStudentIdsForExam = (
@@ -4058,10 +4043,26 @@ export default function CalificarPage() {
       return taken;
     };
     const examFullyGraded = (bundle: CalificarExamBundle | null) => {
-      if (!bundle || bundle.students.length === 0) return false;
+      if (!bundle) return false;
+      if (bundle.students.length === 0) return bundle.alreadyGraded.size > 0;
       const taken = takenStudentIdsForExam(bundle.examId, bundle);
       return bundle.students.every((s) => taken.has(s.id));
     };
+    const remainingStudentCount = (bundle: CalificarExamBundle | null) => {
+      if (!bundle || bundle.students.length === 0) return 0;
+      const taken = takenStudentIdsForExam(bundle.examId, bundle);
+      return bundle.students.filter((s) => !taken.has(s.id)).length;
+    };
+
+    const skipGradedFileIdx = new Set<number>();
+    if (subjectMode) {
+      for (const [idx, id] of Array.from(fileExamIdByIndex.entries())) {
+        const bundle = batchBundlesByIdRef.current.get(id) ?? null;
+        if (examFullyGraded(bundle) || remainingStudentCount(bundle) === 0) {
+          skipGradedFileIdx.add(idx);
+        }
+      }
+    }
 
     const wake = await requestBatchWakeLock();
     try {
@@ -4176,6 +4177,7 @@ export default function CalificarPage() {
         const label = folderFileLabel(file);
         if (skipGradedFileIdx.has(i)) {
           skippedAlreadyGraded += Math.max(1, pdfPrepByIndex.get(i)?.numPages ?? 1);
+          setLiveStatus(`Omitido (ya calificado) · ${label}`);
           continue;
         }
         const matchError = fileMatchErrorByIndex.get(i);
@@ -4195,8 +4197,9 @@ export default function CalificarPage() {
             continue;
           }
           batchBundleRef.current = fileBundle;
-          if (examFullyGraded(fileBundle)) {
+          if (examFullyGraded(fileBundle) || remainingStudentCount(fileBundle) === 0) {
             skippedAlreadyGraded += Math.max(1, pdfPrepByIndex.get(i)?.numPages ?? 1);
+            setLiveStatus(`Omitido (ya calificado) · ${label}`);
             continue;
           }
         }
@@ -4249,13 +4252,6 @@ export default function CalificarPage() {
                 if (student) sid = student.id;
               }
             }
-            if (!student && nameCropUrl) {
-              const matched = await matchNameCropToGroup(nameCropUrl, matchPool);
-              ocrHint = matched.text;
-              if (matched.student) student = matched.student;
-              else student = matchStudentByLooseName(ocrHint, matchPool);
-              if (student) sid = student.id;
-            }
             if (student && takenIds.has(student.id)) {
               skippedAlreadyGraded += 1;
               return;
@@ -4266,7 +4262,18 @@ export default function CalificarPage() {
                 row.pendingStudent &&
                 !row.selectedStudentId
             ).length;
-            if (!student && (available.length === 0 || unidentifiedPending >= available.length)) {
+            if (available.length === 0 || (!student && unidentifiedPending >= available.length)) {
+              skippedAlreadyGraded += 1;
+              return;
+            }
+            if (!student && nameCropUrl) {
+              const matched = await matchNameCropToGroup(nameCropUrl, available);
+              ocrHint = matched.text;
+              if (matched.student) student = matched.student;
+              else student = matchStudentByLooseName(ocrHint, available);
+              if (student) sid = student.id;
+            }
+            if (student && takenIds.has(student.id)) {
               skippedAlreadyGraded += 1;
               return;
             }
@@ -4334,6 +4341,12 @@ export default function CalificarPage() {
                 ok: false,
                 error: 'Límite de lote alcanzado; sube el resto en otra tanda.',
               });
+              continue;
+            }
+
+            if (subjectMode && remainingStudentCount(fileBundle) === 0) {
+              skippedAlreadyGraded += Math.max(1, numPages);
+              setLiveStatus(`Omitido (ya calificado) · ${label}`);
               continue;
             }
 
@@ -4418,6 +4431,10 @@ export default function CalificarPage() {
               for (const out of pageOutcomes) {
                 if (out.aborted) return;
                 if (results.length >= FOLDER_BATCH_MAX_EXAMS) break;
+                if (subjectMode && remainingStudentCount(fileBundle) === 0) {
+                  skippedAlreadyGraded += 1;
+                  continue;
+                }
                 const examLabel =
                   numPages > 1 || files.length > 1 ? `${label} · p.${out.p}` : label;
                 if (!out.ok && !out.merged) {
@@ -4446,6 +4463,10 @@ export default function CalificarPage() {
             for (let examIdx = 0; examIdx < maxExams; examIdx++) {
               if (gen !== gradeReadGenRef.current) return;
               if (results.length >= FOLDER_BATCH_MAX_EXAMS) break;
+              if (subjectMode && remainingStudentCount(fileBundle) === 0) {
+                skippedAlreadyGraded += Math.max(0, maxExams - examIdx);
+                break;
+              }
               const merged: Record<string, string> = {};
               let controlNumber: string | null = null;
               let studentId: string | null = null;
