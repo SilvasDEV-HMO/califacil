@@ -4043,8 +4043,7 @@ export default function CalificarPage() {
       return taken;
     };
     const examFullyGraded = (bundle: CalificarExamBundle | null) => {
-      if (!bundle) return false;
-      if (bundle.students.length === 0) return bundle.alreadyGraded.size > 0;
+      if (!bundle || bundle.students.length === 0) return false;
       const taken = takenStudentIdsForExam(bundle.examId, bundle);
       return bundle.students.every((s) => taken.has(s.id));
     };
@@ -4058,7 +4057,7 @@ export default function CalificarPage() {
     if (subjectMode) {
       for (const [idx, id] of Array.from(fileExamIdByIndex.entries())) {
         const bundle = batchBundlesByIdRef.current.get(id) ?? null;
-        if (examFullyGraded(bundle) || remainingStudentCount(bundle) === 0) {
+        if (examFullyGraded(bundle)) {
           skipGradedFileIdx.add(idx);
         }
       }

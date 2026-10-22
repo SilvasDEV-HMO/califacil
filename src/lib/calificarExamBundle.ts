@@ -8,10 +8,7 @@ import {
   getCalifacilOmrSheetQuestions,
 } from '@/lib/printExam';
 import { isLenguaje45Exam } from '@/lib/omr/custom-45/read-sheet';
-import {
-  rafSharedGroupNamesFromExamTitle,
-  rafShiftSiblingExamTitle,
-} from '@/lib/rafPdfExamMatch';
+import { rafSharedGroupNamesFromExamTitle } from '@/lib/rafPdfExamMatch';
 import { supabase } from '@/lib/supabase';
 import type { Exam, ExamWithQuestions, Question, Student } from '@/types';
 
@@ -98,31 +95,16 @@ async function loadSharedGroupIds(exam: Exam): Promise<string[]> {
   return Array.from(new Set(ids));
 }
 
-async function loadSiblingExamIds(exam: Exam): Promise<string[]> {
-  const siblingTitle = rafShiftSiblingExamTitle(exam.title);
-  if (!siblingTitle || !exam.teacher_id) return [];
-  const { data } = await supabase
-    .from('exams')
-    .select('id')
-    .eq('teacher_id', exam.teacher_id)
-    .eq('title', siblingTitle)
-    .limit(8);
-  return (data || [])
-    .map((row) => String((row as { id: string }).id))
-    .filter((id) => id && id !== exam.id);
-}
-
 /** Roster matutino + vespertino del mismo CCT·grupo (el Excel no distingue turno). */
 export async function loadStudentsForRafExam(exam: Exam): Promise<Student[]> {
   return loadStudentsByGroupIds(await loadSharedGroupIds(exam));
 }
 
 /**
- * Alumnos ya usados en este examen o en el turno pareja (1-A ↔ 1-A V).
+ * Solo este examen (1-A V no se da por calificado porque 1-A matutino ya tenga notas).
  */
 export async function loadTakenStudentIdsForRafExam(exam: Exam): Promise<Set<string>> {
-  const siblingIds = await loadSiblingExamIds(exam);
-  return loadAnswersStudentIds([exam.id, ...siblingIds]);
+  return loadAnswersStudentIds([exam.id]);
 }
 
 export function buildCalificarExamBundle(
