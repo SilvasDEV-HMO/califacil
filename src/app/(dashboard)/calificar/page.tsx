@@ -373,6 +373,43 @@ function isPdfGradeFile(file: File): boolean {
   return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 }
 
+function isRetryablePersistError(err: { message?: string; code?: string; status?: number } | null): boolean {
+  if (!err) return false;
+  const msg = `${err.code ?? ''} ${err.message ?? ''} ${err.status ?? ''}`.toLowerCase();
+  return /jwt|expired|session|401|403|pgrst301|failed to fetch|network|internet/i.test(msg);
+}
+
+async function ensureCalificarAuthSession(): Promise<boolean> {
+  const { data: now } = await supabase.auth.getSession();
+  const expMs = now.session?.expires_at ? now.session.expires_at * 1000 : 0;
+  if (now.session && expMs > Date.now() + 20_000) return true;
+  const { data, error } = await supabase.auth.refreshSession();
+  return Boolean(data.session) && !error;
+}
+
+async function upsertCalificarAnswers(
+  rows: Array<{
+    exam_id: string;
+    student_id: string;
+    question_id: string;
+    answer_text: string;
+    is_correct: boolean | null;
+    score: number;
+  }>
+) {
+  let last: { message?: string; code?: string } | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await ensureCalificarAuthSession();
+    const { error } = await supabase.from('answers').upsert(rows, {
+      onConflict: 'exam_id,student_id,question_id',
+    });
+    if (!error) return { error: null };
+    last = error;
+    if (!isRetryablePersistError(error)) return { error };
+  }
+  return { error: last };
+}
+
 function matchStudentFromScanFileName(fileName: string, students: Student[]): Student | null {
   const stem = fileName
     .replace(/^.*[/\\]/, '')
@@ -3891,9 +3928,7 @@ export default function CalificarPage() {
       };
     });
 
-    const { error: answersError } = await supabase.from('answers').upsert(rows, {
-      onConflict: 'exam_id,student_id,question_id',
-    });
+    const { error: answersError } = await upsertCalificarAnswers(rows);
     if (answersError) throw answersError;
     active?.alreadyGraded.add(studentId);
     if (persistExamId === examId) {
@@ -5129,21 +5164,75 @@ export default function CalificarPage() {
     }
     try {
       setScanBusy(true);
+      const authed = await ensureCalificarAuthSession();
+      if (!authed) {
+        toast.error(
+          'La sesión caducó (o se cortó internet). Inicia sesión otra vez y pulsa Guardar; las hojas siguen en el popup.'
+        );
+        return;
+      }
+      let saved = 0;
+      let firstError = '';
       for (const { row, idx } of toSave) {
-        await persistPendingBatchStudent(idx, row.selectedStudentId!);
+        try {
+          await persistPendingBatchStudent(idx, row.selectedStudentId!);
+          saved += 1;
+        } catch (err: unknown) {
+          const msg =
+            err && typeof err === 'object' && 'message' in err
+              ? String((err as { message?: string }).message ?? '')
+              : err instanceof Error
+                ? err.message
+                : '';
+          if (!firstError) firstError = msg;
+          const code =
+            err && typeof err === 'object' && 'code' in err
+              ? String((err as { code?: string }).code ?? '')
+              : '';
+          if (isRetryablePersistError({ message: msg, code })) {
+            const ok = await ensureCalificarAuthSession();
+            if (!ok) {
+              toast.error(
+                `Se guardaron ${saved} de ${toSave.length}. La sesión caducó: inicia sesión y pulsa Guardar de nuevo.`
+              );
+              return;
+            }
+            try {
+              await persistPendingBatchStudent(idx, row.selectedStudentId!);
+              saved += 1;
+              continue;
+            } catch {
+              /* keep failing this row */
+            }
+          }
+        }
+      }
+      if (saved === 0) {
+        toast.error(
+          firstError.toLowerCase().includes('jwt') || firstError.toLowerCase().includes('403')
+            ? 'No se guardó nada: la sesión no tiene permiso. Cierra sesión, entra otra vez y pulsa Guardar.'
+            : `No se pudieron guardar las hojas${firstError ? `: ${firstError}` : '.'}`
+        );
+        return;
       }
       toast.success(
-        discardedCount > 0
-          ? `Resultados guardados (${toSave.length}). Se descartaron ${discardedCount} sin alumno.`
-          : 'Resultados guardados.'
+        saved < toSave.length
+          ? `Se guardaron ${saved} de ${toSave.length}. El resto sigue en el popup.`
+          : discardedCount > 0
+            ? `Resultados guardados (${saved}). Se descartaron ${discardedCount} sin alumno.`
+            : 'Resultados guardados.'
       );
+      if (saved < toSave.length) return;
       const savedExamIds = Array.from(
         new Set(toSave.map(({ row }) => row.examId).filter((id): id is string => Boolean(id)))
       );
       setBatchSummary(null);
       await clearExamAfterBatchSave(savedExamIds);
-    } catch {
-      toast.error('No se pudieron guardar todas las hojas.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      toast.error(msg === 'auth_expired'
+        ? 'La sesión caducó. Inicia sesión y pulsa Guardar de nuevo.'
+        : 'No se pudieron guardar todas las hojas.');
     } finally {
       setScanBusy(false);
     }
