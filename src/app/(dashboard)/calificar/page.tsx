@@ -4795,7 +4795,13 @@ export default function CalificarPage() {
               : 'No hubo hojas nuevas para revisar.'
           );
         } else {
-          setBatchSummary(popupRows);
+          const withoutCrops = popupRows.map((row) => ({ ...row, nameCropUrl: null as string | null }));
+          flushSync(() => {
+            setBatchSummary(withoutCrops);
+          });
+          window.setTimeout(() => {
+            setBatchSummary(popupRows);
+          }, 80);
           const saved = popupRows.filter((r) => r.ok).length;
           const pending = popupRows.filter((r) => r.pendingStudent).length;
           const failed = popupRows.length - saved - pending;
@@ -5087,6 +5093,18 @@ export default function CalificarPage() {
 
   useEffect(() => {
     if (batchSummary == null) setNameCropHover(null);
+  }, [batchSummary]);
+
+  useEffect(() => {
+    if (batchSummary == null) return;
+    const prevOverflow = document.body.style.overflow;
+    const prevPointer = document.body.style.pointerEvents;
+    document.body.style.overflow = 'hidden';
+    document.body.style.pointerEvents = '';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.body.style.pointerEvents = prevPointer;
+    };
   }, [batchSummary]);
 
   const batchSummaryDisplayRows = useMemo(() => {
@@ -6227,21 +6245,23 @@ export default function CalificarPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={batchSummary != null} modal>
-        <DialogContent
-          showCloseButton={false}
-          className={cn(
-            'relative max-h-[min(92vh,860px)] sm:max-w-4xl',
-            nameCropHover && 'overflow-visible'
-          )}
-          onPointerDownOutside={(event) => event.preventDefault()}
-          onInteractOutside={(event) => event.preventDefault()}
-          onFocusOutside={(event) => event.preventDefault()}
-          onEscapeKeyDown={(event) => event.preventDefault()}
-        >
-          <DialogHeader>
-            <DialogTitle>Resultado de la carpeta</DialogTitle>
-            <DialogDescription>
+      {batchSummary != null && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-3 sm:p-6"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="batch-review-title"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) event.preventDefault();
+              }}
+            >
+              <div className="flex max-h-[min(92vh,880px)] w-full max-w-4xl flex-col overflow-hidden rounded-lg border bg-white shadow-xl">
+          <div className="shrink-0 border-b px-5 py-4">
+            <h2 id="batch-review-title" className="text-lg font-semibold leading-none">
+              Resultado de la carpeta
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
               {(() => {
                 const assigned =
                   batchSummary?.filter((r) => r.pendingStudent && r.selectedStudentId).length ?? 0;
@@ -6255,10 +6275,11 @@ export default function CalificarPage() {
                     : '';
                 return `Solo aparecen hojas que aún no están calificadas.${counts} Si la IA no reconoció el nombre, elige al alumno en la lista. Las que ya tenían nota no se muestran ni se cambian. Guardar solo escribe las filas con alumno. Cerrar no guarda nada.`;
               })()}
-            </DialogDescription>
-          </DialogHeader>
+            </p>
+          </div>
           {batchSummary && batchSummary.length > 0 ? (
-            <div className="max-h-[min(55vh,480px)] overflow-auto rounded-md border">
+            <div className="min-h-0 flex-1 overflow-auto px-5 py-3">
+            <div className="overflow-auto rounded-md border">
               <table className="w-full text-left text-sm">
                 <thead className="sticky top-0 bg-gray-50">
                   <tr>
@@ -6379,10 +6400,11 @@ export default function CalificarPage() {
                 </tbody>
               </table>
             </div>
+            </div>
           ) : (
-            <p className="text-sm text-gray-600">No hubo archivos para calificar.</p>
+            <p className="px-5 py-3 text-sm text-gray-600">No hubo archivos para calificar.</p>
           )}
-          <DialogFooter className="gap-2 sm:justify-end">
+          <div className="flex shrink-0 flex-col-reverse gap-2 border-t px-5 py-3 sm:flex-row sm:justify-end">
             <Button
               type="button"
               variant="outline"
@@ -6404,9 +6426,9 @@ export default function CalificarPage() {
                 Guardar
               </Button>
             ) : null}
-          </DialogFooter>
+          </div>
           {nameCropHover ? (
-            <div className="pointer-events-none fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <div className="pointer-events-none fixed inset-0 z-[210] flex items-center justify-center p-4">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={nameCropHover}
@@ -6415,8 +6437,11 @@ export default function CalificarPage() {
               />
             </div>
           ) : null}
-        </DialogContent>
-      </Dialog>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
 
       {isMobile && phase === 'elegir' && (
         <CalificarMobileHome

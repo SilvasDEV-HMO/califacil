@@ -125,7 +125,7 @@ export function StudentCombobox({
           />
         </PopoverAnchor>
         <PopoverContent
-          className="z-[100] w-[var(--radix-popover-trigger-width)] min-w-[18rem] p-1"
+          className="z-[250] w-[var(--radix-popover-trigger-width)] min-w-[18rem] p-1"
           align="start"
           sideOffset={4}
           onOpenAutoFocus={(event) => event.preventDefault()}
