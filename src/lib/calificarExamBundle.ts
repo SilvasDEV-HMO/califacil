@@ -55,6 +55,34 @@ async function loadStudentsByGroupIds(groupIds: string[]): Promise<Student[]> {
   return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
 }
 
+/** Misma CURP (o mismo nombre si no hay CURP) en matutino y vespertino. */
+export function rafStudentDedupeKey(student: Student): string {
+  const curp = (student.control_number || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  if (curp.length >= 16) return `c:${curp}`;
+  return `n:${(student.name || '').trim().toLowerCase()}`;
+}
+
+export function dedupeRafStudents(students: Student[], preferGroupIds: string[] = []): Student[] {
+  const preferred = new Set(preferGroupIds.filter(Boolean));
+  const byKey = new Map<string, Student>();
+  for (const student of students) {
+    const key = rafStudentDedupeKey(student);
+    if (!key || key === 'n:') {
+      byKey.set(`id:${student.id}`, student);
+      continue;
+    }
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, student);
+      continue;
+    }
+    if (preferred.has(student.group_id) && !preferred.has(prev.group_id)) {
+      byKey.set(key, student);
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+}
+
 async function loadAnswersStudentIds(examIds: string[]): Promise<Set<string>> {
   const ids = new Set<string>();
   const unique = Array.from(new Set(examIds.filter(Boolean)));
@@ -97,7 +125,9 @@ async function loadSharedGroupIds(exam: Exam): Promise<string[]> {
 
 /** Roster matutino + vespertino del mismo CCT·grupo (el Excel no distingue turno). */
 export async function loadStudentsForRafExam(exam: Exam): Promise<Student[]> {
-  return loadStudentsByGroupIds(await loadSharedGroupIds(exam));
+  const groupIds = await loadSharedGroupIds(exam);
+  const loaded = await loadStudentsByGroupIds(groupIds);
+  return dedupeRafStudents(loaded, exam.group_id ? [exam.group_id] : groupIds.slice(0, 1));
 }
 
 /**

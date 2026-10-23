@@ -57,6 +57,8 @@ import {
   loadCalificarExamBundle,
   loadStudentsForRafExam,
   loadTakenStudentIdsForRafExam,
+  dedupeRafStudents,
+  rafStudentDedupeKey,
   type CalificarExamBundle,
 } from '@/lib/calificarExamBundle';
 import {
@@ -803,9 +805,8 @@ export default function CalificarPage() {
   const [nameCropHover, setNameCropHover] = useState<{
     url: string;
     left: number;
-    top: number;
+    bottom: number;
     width: number;
-    height: number;
   } | null>(null);
   const [studentsAlreadyGraded, setStudentsAlreadyGraded] = useState<Set<string>>(new Set());
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -4980,12 +4981,30 @@ export default function CalificarPage() {
       toast.error('Esa CURP ya tiene un examen en este grupo. Solo puede haber uno por alumno.');
       return;
     }
-    const takenInBatch = (batchSummary ?? []).some(
-      (row, index) =>
-        index !== rowIndex &&
-        (!examKey || row.examId === examKey) &&
-        (row.selectedStudentId === studentId || row.studentId === studentId)
-    );
+    const chosenKey = (() => {
+      const list = examKey
+        ? batchStudentsByExamId[examKey] ??
+          batchBundlesByIdRef.current.get(examKey)?.students ??
+          []
+        : sortedStudents;
+      const hit = list.find((s) => s.id === studentId);
+      return hit ? rafStudentDedupeKey(hit) : '';
+    })();
+    const takenInBatch = (batchSummary ?? []).some((row, index) => {
+      if (index === rowIndex) return false;
+      if (examKey && row.examId !== examKey) return false;
+      if (row.selectedStudentId === studentId || row.studentId === studentId) return true;
+      if (!chosenKey) return false;
+      const otherId = row.selectedStudentId || row.studentId;
+      if (!otherId) return false;
+      const list = examKey
+        ? batchStudentsByExamId[examKey] ??
+          batchBundlesByIdRef.current.get(examKey)?.students ??
+          []
+        : sortedStudents;
+      const other = list.find((s) => s.id === otherId);
+      return other ? rafStudentDedupeKey(other) === chosenKey : false;
+    });
     if (takenInBatch) {
       toast.error('Esa CURP ya está en otra hoja. Solo puede haber un examen por alumno.');
       return;
@@ -6323,18 +6342,15 @@ export default function CalificarPage() {
                                 window.innerWidth - 24,
                                 Math.max(rect.width * 2.6, 640)
                               );
-                              const height = Math.min(window.innerHeight * 0.38, 280);
                               const left = Math.min(
                                 Math.max(12, rect.left),
                                 window.innerWidth - width - 12
                               );
-                              const top = Math.max(8, rect.top - height - 10);
                               setNameCropHover({
                                 url: row.nameCropUrl!,
                                 left,
-                                top,
+                                bottom: window.innerHeight - rect.top + 8,
                                 width,
-                                height,
                               });
                             }}
                             onPointerLeave={() => setNameCropHover(null)}
@@ -6364,27 +6380,41 @@ export default function CalificarPage() {
                           <StudentCombobox
                             compact
                             id={`batch-student-${idx}`}
-                            students={(row.examId
-                              ? batchStudentsByExamId[row.examId] ??
-                                batchBundlesByIdRef.current.get(row.examId)?.students ??
-                                []
-                              : sortedStudents
-                            ).filter((student) => {
-                              if (student.id === row.selectedStudentId) return true;
+                            students={(() => {
+                              const roster = row.examId
+                                ? batchStudentsByExamId[row.examId] ??
+                                  batchBundlesByIdRef.current.get(row.examId)?.students ??
+                                  []
+                                : sortedStudents;
                               const graded = new Set(
                                 row.examId
                                   ? batchGradedByExamId[row.examId] ?? []
                                   : Array.from(studentsAlreadyGraded)
                               );
-                              if (graded.has(student.id)) return false;
-                              return !batchSummary.some(
-                                (other, otherIndex) =>
-                                  otherIndex !== idx &&
-                                  (!row.examId || other.examId === row.examId) &&
-                                  (other.selectedStudentId === student.id ||
-                                    other.studentId === student.id)
+                              const gradedKeys = new Set(
+                                roster
+                                  .filter((s) => graded.has(s.id))
+                                  .map((s) => rafStudentDedupeKey(s))
                               );
-                            })}
+                              return dedupeRafStudents(
+                                roster.filter((student) => {
+                                  if (student.id === row.selectedStudentId) return true;
+                                  const key = rafStudentDedupeKey(student);
+                                  if (graded.has(student.id) || gradedKeys.has(key)) return false;
+                                  return !batchSummary.some((other, otherIndex) => {
+                                    if (otherIndex === idx) return false;
+                                    if (row.examId && other.examId !== row.examId) return false;
+                                    const otherId = other.selectedStudentId || other.studentId;
+                                    if (!otherId) return false;
+                                    if (otherId === student.id) return true;
+                                    const otherStudent = roster.find((s) => s.id === otherId);
+                                    return otherStudent
+                                      ? rafStudentDedupeKey(otherStudent) === key
+                                      : false;
+                                  });
+                                })
+                              );
+                            })()}
                             value={row.selectedStudentId ?? ''}
                             disabled={scanBusy}
                             placeholder={
@@ -6454,22 +6484,16 @@ export default function CalificarPage() {
             ) : null}
           </div>
           {nameCropHover ? (
-            <div
-              className="pointer-events-none fixed z-[210] overflow-hidden rounded-md border border-gray-300 bg-white shadow-2xl"
+            <img
+              src={nameCropHover.url}
+              alt=""
+              className="pointer-events-none fixed z-[210] block h-auto max-h-[40vh] rounded-sm shadow-2xl"
               style={{
                 left: nameCropHover.left,
-                top: nameCropHover.top,
+                bottom: nameCropHover.bottom,
                 width: nameCropHover.width,
-                height: nameCropHover.height,
               }}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={nameCropHover.url}
-                alt=""
-                className="h-full w-full object-contain object-left"
-              />
-            </div>
+            />
           ) : null}
               </div>
             </div>,
