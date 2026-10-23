@@ -800,7 +800,13 @@ export default function CalificarPage() {
   const [folderFileChooser, setFolderFileChooser] = useState<File[] | null>(null);
   const [folderFileChosen, setFolderFileChosen] = useState<Record<number, boolean>>({});
   const [batchSummary, setBatchSummary] = useState<BatchGradeItem[] | null>(null);
-  const [nameCropHover, setNameCropHover] = useState<string | null>(null);
+  const [nameCropHover, setNameCropHover] = useState<{
+    url: string;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const [studentsAlreadyGraded, setStudentsAlreadyGraded] = useState<Set<string>>(new Set());
   const pdfInputRef = useRef<HTMLInputElement>(null);
   /** Cancela lecturas desktop JPG/PDF tardías (timeout / nueva subida). */
@@ -4984,6 +4990,7 @@ export default function CalificarPage() {
       toast.error('Esa CURP ya está en otra hoja. Solo puede haber un examen por alumno.');
       return;
     }
+    setNameCropHover(null);
     setBatchSummary((prev) => {
       if (!prev) return prev;
       const next = [...prev];
@@ -6310,7 +6317,26 @@ export default function CalificarPage() {
                         {row.nameCropUrl ? (
                           <div
                             className="inline-block max-w-full"
-                            onPointerEnter={() => setNameCropHover(row.nameCropUrl!)}
+                            onPointerEnter={(event) => {
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              const width = Math.min(
+                                window.innerWidth - 24,
+                                Math.max(rect.width * 2.6, 640)
+                              );
+                              const height = Math.min(window.innerHeight * 0.38, 280);
+                              const left = Math.min(
+                                Math.max(12, rect.left),
+                                window.innerWidth - width - 12
+                              );
+                              const top = Math.max(8, rect.top - height - 10);
+                              setNameCropHover({
+                                url: row.nameCropUrl!,
+                                left,
+                                top,
+                                width,
+                                height,
+                              });
+                            }}
                             onPointerLeave={() => setNameCropHover(null)}
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -6428,12 +6454,20 @@ export default function CalificarPage() {
             ) : null}
           </div>
           {nameCropHover ? (
-            <div className="pointer-events-none fixed inset-0 z-[210] flex items-center justify-center p-4">
+            <div
+              className="pointer-events-none fixed z-[210] overflow-hidden rounded-md border border-gray-300 bg-white shadow-2xl"
+              style={{
+                left: nameCropHover.left,
+                top: nameCropHover.top,
+                width: nameCropHover.width,
+                height: nameCropHover.height,
+              }}
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={nameCropHover}
+                src={nameCropHover.url}
                 alt=""
-                className="max-h-[min(72vh,32rem)] w-auto max-w-[min(100%,52rem)] rounded-md border border-gray-300 bg-white object-contain shadow-2xl"
+                className="h-full w-full object-contain object-left"
               />
             </div>
           ) : null}
