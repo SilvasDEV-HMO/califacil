@@ -44,6 +44,7 @@ import {
 } from '@/lib/calificarExamLock';
 import {
   cropPaperDetailsNameApellidoDataUrl,
+  type PaperDetailsNameLayout,
   isAdminCalifacilEmail,
   looksLikeZipGradePaperDetailsText,
   extractStudentNameFromPaperDetailsText,
@@ -4212,6 +4213,11 @@ export default function CalificarPage() {
         const activeQuestions = fileBundle?.questions ?? questions;
         const activeStudents = fileBundle?.students ?? sortedStudents;
         const activeKeyMaps = fileBundle?.virtualKeyMaps ?? virtualKeyMaps;
+        const paperNameLayout: PaperDetailsNameLayout =
+          batchSubject === 'matematicas' ||
+          rafSubjectFromTitle(fileBundle?.exam.title ?? exam?.title ?? '') === 'matematicas'
+            ? 'matematicas'
+            : 'zipgrade';
         const pagesPerExam = Math.max(
           1,
           fileBundle?.sheets.length ?? pagesPerExamDefault
@@ -4399,7 +4405,11 @@ export default function CalificarPage() {
                       /* keep first parse */
                     }
                   }
-                  const nameCropUrl = cropPaperDetailsNameApellidoDataUrl(canvasRes.canvas, 640);
+                  const nameCropUrl = cropPaperDetailsNameApellidoDataUrl(
+                    canvasRes.canvas,
+                    720,
+                    paperNameLayout
+                  );
                   const merged = mapPaperDetailsToMcDraft(activeQuestions, parsed);
                   if (!parsed.ok) {
                     return {
@@ -4510,7 +4520,11 @@ export default function CalificarPage() {
                 // admin@califacil.com + Paper Details: importar % y reactivos del PDF (sin OMR).
                 if (shouldImportZipGradePaperDetails(user?.email, scanCanvas)) {
                   if (s === 0) {
-                    nameCropUrl = cropPaperDetailsNameApellidoDataUrl(scanCanvas, 640);
+                    nameCropUrl = cropPaperDetailsNameApellidoDataUrl(
+                      scanCanvas,
+                      720,
+                      paperNameLayout
+                    );
                   }
                   let pageText = '';
                   try {
@@ -4548,14 +4562,23 @@ export default function CalificarPage() {
                   isLenguaje45Exam(user?.email, fileBundle?.exam.title ?? exam?.title, activeQuestions)
                 ) {
                   if (s === 0) {
-                    const idCrop = isLenguaje45Exam(
-                      user?.email,
-                      fileBundle?.exam.title ?? exam?.title,
-                      activeQuestions
-                    )
-                      ? cropLenguajeHandwrittenId(scanCanvas)
-                      : cropCustom20HandwrittenId(scanCanvas);
-                    nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                    if (
+                      isLenguaje45Exam(
+                        user?.email,
+                        fileBundle?.exam.title ?? exam?.title,
+                        activeQuestions
+                      )
+                    ) {
+                      const idCrop = cropLenguajeHandwrittenId(scanCanvas);
+                      nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                    } else {
+                      nameCropUrl =
+                        cropPaperDetailsNameApellidoDataUrl(scanCanvas, 720, 'matematicas') ??
+                        (() => {
+                          const idCrop = cropCustom20HandwrittenId(scanCanvas);
+                          return idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                        })();
+                    }
                   }
                   const read = await finalizeCapturedSheet(scanCanvas, pdfPseudo(p), {
                     skipReviewUi: true,
@@ -4588,8 +4611,8 @@ export default function CalificarPage() {
               }
               if (s === 0) {
                 nameCropUrl =
-                  cropPaperDetailsNameApellidoDataUrl(scanCanvas, 640) ??
-                  cropPaperDetailsNameApellidoDataUrl(workCanvas, 640) ??
+                  cropPaperDetailsNameApellidoDataUrl(scanCanvas, 720, paperNameLayout) ??
+                  cropPaperDetailsNameApellidoDataUrl(workCanvas, 720, paperNameLayout) ??
                   zgResolved.nameCropUrl;
               }
               if (sheetFormat === 'zipgrade') {
@@ -4597,7 +4620,7 @@ export default function CalificarPage() {
                 let gradeCanvas = zgWarp.warped ?? workCanvas;
                 if (s === 0) {
                   nameCropUrl =
-                    cropPaperDetailsNameApellidoDataUrl(scanCanvas, 640) ??
+                    cropPaperDetailsNameApellidoDataUrl(scanCanvas, 720, paperNameLayout) ??
                     cropZipGradeNameFromSheetCanvas(gradeCanvas, 560) ??
                     cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
                     zgResolved.nameCropUrl;
@@ -4733,14 +4756,23 @@ export default function CalificarPage() {
               isCustom20Exam(user?.email, fileBundle?.exam.title ?? exam?.title, activeQuestions) ||
               isLenguaje45Exam(user?.email, fileBundle?.exam.title ?? exam?.title, activeQuestions)
             ) {
-              const idCrop = isLenguaje45Exam(
-                user?.email,
-                fileBundle?.exam.title ?? exam?.title,
-                activeQuestions
-              )
-                ? cropLenguajeHandwrittenId(rawCanvas)
-                : cropCustom20HandwrittenId(rawCanvas);
-              nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+              if (
+                isLenguaje45Exam(
+                  user?.email,
+                  fileBundle?.exam.title ?? exam?.title,
+                  activeQuestions
+                )
+              ) {
+                const idCrop = cropLenguajeHandwrittenId(rawCanvas);
+                nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+              } else {
+                nameCropUrl =
+                  cropPaperDetailsNameApellidoDataUrl(rawCanvas, 720, 'matematicas') ??
+                  (() => {
+                    const idCrop = cropCustom20HandwrittenId(rawCanvas);
+                    return idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                  })();
+              }
             } else {
               const canonical = prepareCanonicalCalifacilLetterCanvas(rawCanvas, {
                 fast: true,
@@ -6310,10 +6342,12 @@ export default function CalificarPage() {
                 <thead className="sticky top-0 bg-gray-50">
                   <tr>
                     <th className="px-2 py-1.5 font-medium">
-                      {isCustom20Exam(user?.email, exam?.title, questions) ||
-                      isLenguaje45Exam(user?.email, exam?.title, questions)
-                        ? 'CURP en la hoja'
-                        : 'Nombre en la hoja'}
+                      {batchSubject === 'matematicas'
+                        ? 'Nombre en la hoja'
+                        : isCustom20Exam(user?.email, exam?.title, questions) ||
+                            isLenguaje45Exam(user?.email, exam?.title, questions)
+                          ? 'CURP en la hoja'
+                          : 'Nombre en la hoja'}
                     </th>
                     <th className="px-2 py-1.5 font-medium">Grupo</th>
                     <th className="px-2 py-1.5 font-medium">Alumno</th>

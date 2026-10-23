@@ -27,6 +27,15 @@ const PAPER_DETAILS_SHEET_FALLBACK = { x: 0.02, y: 0.36, w: 0.47, h: 0.58 } as c
 /** Banda Nombre|Apellido en la hoja ZipGrade enderezada / foto incrustada. */
 const NAME_BAND = { x: 0.05, y: 0.028, w: 0.9, h: 0.13 } as const;
 
+/**
+ * Hoja RAFM (Matemáticas): el nombre y los apellidos van uno debajo del otro
+ * (NOMBRE, luego APELLIDOS), no en dos cajas horizontales como Lenguaje.
+ */
+const MATE_NOMBRE_BAND = { x: 0.02, y: 0.0, w: 0.96, h: 0.11 } as const;
+const MATE_APELLIDOS_BAND = { x: 0.02, y: 0.09, w: 0.96, h: 0.12 } as const;
+
+export type PaperDetailsNameLayout = 'zipgrade' | 'matematicas';
+
 export function isAdminCalifacilEmail(email: string | null | undefined): boolean {
   return (email ?? '').trim().toLowerCase() === DESPEGUE_ADMIN_EMAIL;
 }
@@ -259,13 +268,131 @@ function looksLikeGreenLogo(canvas: HTMLCanvasElement): boolean {
   }
 }
 
+function jpegFromCanvas(source: HTMLCanvasElement, maxWidth: number): string | null {
+  const scale = Math.min(1, maxWidth / Math.max(1, source.width));
+  let out = source;
+  if (scale < 0.999) {
+    const scaled = document.createElement('canvas');
+    scaled.width = Math.max(1, Math.round(source.width * scale));
+    scaled.height = Math.max(1, Math.round(source.height * scale));
+    const sctx = scaled.getContext('2d');
+    if (!sctx) return null;
+    sctx.fillStyle = '#ffffff';
+    sctx.fillRect(0, 0, scaled.width, scaled.height);
+    sctx.drawImage(source, 0, 0, scaled.width, scaled.height);
+    out = scaled;
+  }
+  try {
+    return out.toDataURL('image/jpeg', 0.92);
+  } catch {
+    return null;
+  }
+}
+
+/** Foto de la hoja RAFM en Paper Details (izquierda, debajo del encabezado ZipGrade). */
+function extractMathFormPhoto(canvas: HTMLCanvasElement): HTMLCanvasElement | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx || canvas.width < 120 || canvas.height < 160) return null;
+  const w = canvas.width;
+  const h = canvas.height;
+  const y0 = Math.floor(h * 0.34);
+  const y1 = Math.floor(h * 0.9);
+  const x1 = Math.floor(w * 0.5);
+  const regionH = y1 - y0;
+  if (regionH < 40 || x1 < 40) return null;
+  let id: ImageData;
+  try {
+    id = ctx.getImageData(0, y0, x1, regionH);
+  } catch {
+    return null;
+  }
+  const { data } = id;
+  const step = Math.max(1, Math.floor(Math.min(x1, regionH) / 180));
+  const rowInk = new Float32Array(regionH);
+  for (let y = 0; y < regionH; y += step) {
+    let n = 0;
+    let ink = 0;
+    for (let x = 0; x < x1; x += step) {
+      const i = (y * x1 + x) * 4;
+      const lum = data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+      n++;
+      if (lum < 230) ink++;
+    }
+    const frac = n > 0 ? ink / n : 0;
+    for (let k = 0; k < step && y + k < regionH; k++) rowInk[y + k] = frac;
+  }
+  let bestA = 0;
+  let bestB = 0;
+  let run = -1;
+  for (let y = 0; y <= regionH; y++) {
+    const on = y < regionH && rowInk[y]! > 0.08;
+    if (on && run < 0) run = y;
+    if (!on && run >= 0) {
+      if (y - run > bestB - bestA) {
+        bestA = run;
+        bestB = y;
+      }
+      run = -1;
+    }
+  }
+  if (bestB - bestA < 40) return null;
+  const colInk = new Float32Array(x1);
+  for (let y = bestA; y < bestB; y += step) {
+    for (let x = 0; x < x1; x += step) {
+      const i = (y * x1 + x) * 4;
+      const lum = data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+      if (lum < 230) {
+        for (let k = 0; k < step && x + k < x1; k++) colInk[x + k] += 1;
+      }
+    }
+  }
+  const colThresh = ((bestB - bestA) / step) * 0.04;
+  let minX = 0;
+  let maxX = x1 - 1;
+  while (minX < x1 && colInk[minX]! < colThresh) minX++;
+  while (maxX > minX && colInk[maxX]! < colThresh) maxX--;
+  const pad = 4;
+  const sx = Math.max(0, minX - pad);
+  const sy = Math.max(0, y0 + bestA - pad);
+  const sw = Math.min(w - sx, maxX - minX + pad * 2);
+  const sh = Math.min(h - sy, bestB - bestA + pad * 2);
+  if (sw < 40 || sh < 40) return null;
+  const out = document.createElement('canvas');
+  out.width = sw;
+  out.height = sh;
+  const octx = out.getContext('2d');
+  if (!octx) return null;
+  octx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  return out;
+}
+
+function stitchNameBoxes(
+  left: HTMLCanvasElement,
+  right: HTMLCanvasElement,
+  maxWidth: number
+): string | null {
+  const gap = 8;
+  const h = Math.max(left.height, right.height);
+  const out = document.createElement('canvas');
+  out.width = left.width + gap + right.width;
+  out.height = h;
+  const ctx = out.getContext('2d');
+  if (!ctx) return null;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(left, 0, Math.floor((h - left.height) / 2));
+  ctx.drawImage(right, left.width + gap, Math.floor((h - right.height) / 2));
+  return jpegFromCanvas(out, maxWidth);
+}
+
 /**
  * Recorte Nombre + Apellido para el modal de lote (centrado, sin márgenes enormes).
  * Usa la foto de la hoja del Paper Details, no el logo.
  */
 export function cropPaperDetailsNameApellidoDataUrl(
   reportOrSheet: HTMLCanvasElement,
-  maxWidth = 640
+  maxWidth = 640,
+  layout: PaperDetailsNameLayout = 'zipgrade'
 ): string | null {
   if (typeof document === 'undefined' || reportOrSheet.width < 40) return null;
 
@@ -277,29 +404,28 @@ export function cropPaperDetailsNameApellidoDataUrl(
       reportOrSheet;
   }
 
-  const band = cropRect(sheet, NAME_BAND);
+  if (layout === 'matematicas') {
+    const form =
+      (isZipGradePaperDetailsReport(reportOrSheet)
+        ? extractMathFormPhoto(reportOrSheet)
+        : null) ?? sheet;
+    const nombre = cropRect(form, MATE_NOMBRE_BAND);
+    const apellidos = cropRect(form, MATE_APELLIDOS_BAND);
+    if (nombre && apellidos && !looksLikeGreenLogo(nombre) && !looksLikeGreenLogo(apellidos)) {
+      const left = trimCanvasWhitespace(nombre, 4, 242);
+      const right = trimCanvasWhitespace(apellidos, 4, 242);
+      const stitched = stitchNameBoxes(left, right, maxWidth);
+      if (stitched) return stitched;
+    }
+  }
+
+  const band = cropRect(sheet, layout === 'matematicas'
+    ? { x: 0.05, y: 0.01, w: 0.9, h: 0.27 }
+    : NAME_BAND);
   if (!band || looksLikeGreenLogo(band)) return null;
   const trimmed = trimCanvasWhitespace(band, 8, 242);
   if (looksLikeGreenLogo(trimmed)) return null;
-
-  const scale = Math.min(1, maxWidth / trimmed.width);
-  let out = trimmed;
-  if (scale < 0.999) {
-    const scaled = document.createElement('canvas');
-    scaled.width = Math.max(1, Math.round(trimmed.width * scale));
-    scaled.height = Math.max(1, Math.round(trimmed.height * scale));
-    const sctx = scaled.getContext('2d');
-    if (!sctx) return null;
-    sctx.fillStyle = '#ffffff';
-    sctx.fillRect(0, 0, scaled.width, scaled.height);
-    sctx.drawImage(trimmed, 0, 0, scaled.width, scaled.height);
-    out = scaled;
-  }
-  try {
-    return out.toDataURL('image/jpeg', 0.92);
-  } catch {
-    return null;
-  }
+  return jpegFromCanvas(trimmed, maxWidth);
 }
 
 /** Nombre impreso o etiquetado en el PDF Paper Details (antes de OCR). */
