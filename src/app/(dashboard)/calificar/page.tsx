@@ -55,6 +55,10 @@ import {
 } from '@/lib/zipGradePaperDetails';
 import { matchNameCropToGroup } from '@/lib/ocrHandwrittenName';
 import {
+  rememberCalificarSavedSheet,
+  wasCalificarSheetSaved,
+} from '@/lib/calificarSavedSheets';
+import {
   loadCalificarExamBundle,
   loadStudentsForRafExam,
   loadTakenStudentIdsForRafExam,
@@ -2644,7 +2648,7 @@ export default function CalificarPage() {
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('beforeunload', onPageHide);
       if (!scanBusyRef.current) {
-        void releaseHeldExamLock();
+      void releaseHeldExamLock();
       }
     };
   }, [examLocksEnabled, releaseHeldExamLock]);
@@ -4274,6 +4278,10 @@ export default function CalificarPage() {
             nameCropUrl: string | null,
             opts?: { pctOverride?: number | null; pdfText?: string }
           ) => {
+            if (wasCalificarSheetSaved(fileBundle?.examId, examLabel)) {
+              skippedAlreadyGraded += 1;
+              return;
+            }
             const takenIds = takenStudentIdsForExam(fileBundle?.examId, fileBundle);
             const available = activeStudents.filter((s) => !takenIds.has(s.id));
             const matchPool = activeStudents;
@@ -4314,10 +4322,10 @@ export default function CalificarPage() {
               return;
             }
             if (!student && nameCropUrl) {
-              const matched = await matchNameCropToGroup(nameCropUrl, available);
+              const matched = await matchNameCropToGroup(nameCropUrl, matchPool);
               ocrHint = matched.text;
               if (matched.student) student = matched.student;
-              else student = matchStudentByLooseName(ocrHint, available);
+              else student = matchStudentByLooseName(ocrHint, matchPool);
               if (student) sid = student.id;
             }
             if (student && takenIds.has(student.id)) {
@@ -4399,7 +4407,17 @@ export default function CalificarPage() {
 
             // Ruta rápida admin: texto + recorte nombre en paralelo (sin OMR).
             if (prep.paperDetails && adminPaperDetails && pagesPerExam === 1) {
-              const pageNumbers = Array.from({ length: maxExams }, (_, k) => k + 1);
+              const pageNumbers: number[] = [];
+              for (let p = 1; p <= maxExams; p++) {
+                const examLabel =
+                  numPages > 1 || files.length > 1 ? `${label} · p.${p}` : label;
+                if (wasCalificarSheetSaved(fileBundle?.examId, examLabel)) {
+                  skippedAlreadyGraded += 1;
+                  continue;
+                }
+                pageNumbers.push(p);
+              }
+              if (pageNumbers.length === 0) continue;
               const NAME_RENDER_MAX_SIDE = 1100;
               const cores =
                 typeof navigator !== 'undefined' ? Number(navigator.hardwareConcurrency) || 4 : 4;
@@ -4532,6 +4550,10 @@ export default function CalificarPage() {
                     ? `${label} · p.${basePage}`
                     : `${label} · p.${basePage}-${basePage + pagesPerExam - 1}`
                   : label;
+              if (wasCalificarSheetSaved(fileBundle?.examId, examLabel)) {
+                skippedAlreadyGraded += 1;
+                continue;
+              }
 
               for (let s = 0; s < pagesPerExam; s++) {
                 const p = basePage + s;
@@ -4605,7 +4627,7 @@ export default function CalificarPage() {
                       )
                     ) {
                       const idCrop = cropLenguajeHandwrittenId(scanCanvas);
-                      nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                    nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
                     } else {
                       nameCropUrl =
                         cropPaperDetailsNameApellidoDataUrl(scanCanvas, 720, 'matematicas') ??
@@ -4799,7 +4821,7 @@ export default function CalificarPage() {
                 )
               ) {
                 const idCrop = cropLenguajeHandwrittenId(rawCanvas);
-                nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+              nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
               } else {
                 nameCropUrl =
                   cropPaperDetailsNameApellidoDataUrl(rawCanvas, 720, 'matematicas') ??
@@ -4883,15 +4905,15 @@ export default function CalificarPage() {
             skippedAlreadyGraded > 0
               ? ` Se omitieron ${skippedAlreadyGraded} ya calificadas.`
               : '';
-          toast.message(
-            failed === 0 && pending === 0
+        toast.message(
+          failed === 0 && pending === 0
               ? `Carpeta lista: ${saved} calificación(es) guardada(s).${skippedBit}`
               : `Carpeta lista: ${saved} guardada(s), ${pending} para revisar, ${failed} con error.${skippedBit}`
-          );
-          if (pending === 0 && saved > 0 && examId) {
-            void clearExamAfterBatchSave();
-          }
+        );
+        if (pending === 0 && saved > 0 && examId) {
+          void clearExamAfterBatchSave();
         }
+      }
       }
       batchBundleRef.current = null;
     }
@@ -4966,6 +4988,7 @@ export default function CalificarPage() {
     if ((bundle?.alreadyGraded ?? studentsAlreadyGraded).has(student.id)) return;
     if (bundle) batchBundleRef.current = bundle;
     const stats = await persistStudentAnswers(row.mergedDraft, student.id, bundle);
+    rememberCalificarSavedSheet(row.examId ?? bundle?.examId, row.fileName);
     setBatchSummary((prev) => {
       if (!prev) return prev;
       const next = [...prev];
@@ -5006,15 +5029,15 @@ export default function CalificarPage() {
           ? await loadTakenStudentIdsForRafExam(examRow)
           : new Set<string>();
         if (!examRow) {
-          for (let from = 0; ; from += pageSize) {
-            const { data } = await supabase
-              .from('answers')
-              .select('student_id')
+      for (let from = 0; ; from += pageSize) {
+        const { data } = await supabase
+          .from('answers')
+          .select('student_id')
               .eq('exam_id', id)
-              .range(from, from + pageSize - 1);
-            for (const row of data ?? []) ids.add(String(row.student_id));
-            if (!data || data.length < pageSize || cancelled) break;
-          }
+          .range(from, from + pageSize - 1);
+        for (const row of data ?? []) ids.add(String(row.student_id));
+        if (!data || data.length < pageSize || cancelled) break;
+      }
         }
         if (cancelled) break;
         byExam[id] = Array.from(ids);
@@ -5175,7 +5198,7 @@ export default function CalificarPage() {
       let firstError = '';
       for (const { row, idx } of toSave) {
         try {
-          await persistPendingBatchStudent(idx, row.selectedStudentId!);
+        await persistPendingBatchStudent(idx, row.selectedStudentId!);
           saved += 1;
         } catch (err: unknown) {
           const msg =
@@ -5201,7 +5224,7 @@ export default function CalificarPage() {
               await persistPendingBatchStudent(idx, row.selectedStudentId!);
               saved += 1;
               continue;
-            } catch {
+    } catch {
               /* keep failing this row */
             }
           }
@@ -6434,9 +6457,9 @@ export default function CalificarPage() {
                       {batchSubject === 'matematicas'
                         ? 'Nombre en la hoja'
                         : isCustom20Exam(user?.email, exam?.title, questions) ||
-                            isLenguaje45Exam(user?.email, exam?.title, questions)
-                          ? 'CURP en la hoja'
-                          : 'Nombre en la hoja'}
+                      isLenguaje45Exam(user?.email, exam?.title, questions)
+                        ? 'CURP en la hoja'
+                        : 'Nombre en la hoja'}
                     </th>
                     <th className="px-2 py-1.5 font-medium">Grupo</th>
                     <th className="px-2 py-1.5 font-medium">Alumno</th>
@@ -6479,11 +6502,11 @@ export default function CalificarPage() {
                             onPointerLeave={() => setNameCropHover(null)}
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={row.nameCropUrl}
-                              alt={`Nombre escrito (${row.fileName})`}
-                              className="max-h-24 w-[28rem] max-w-full rounded border border-gray-200 bg-white object-contain object-left object-top"
-                            />
+                          <img
+                            src={row.nameCropUrl}
+                            alt={`Nombre escrito (${row.fileName})`}
+                            className="max-h-24 w-[28rem] max-w-full rounded border border-gray-200 bg-white object-contain object-left object-top"
+                          />
                           </div>
                         ) : (
                           <span className="max-w-[10rem] truncate text-xs text-gray-500" title={row.fileName}>
@@ -6521,7 +6544,7 @@ export default function CalificarPage() {
                               );
                               return dedupeRafStudents(
                                 roster.filter((student) => {
-                                  if (student.id === row.selectedStudentId) return true;
+                              if (student.id === row.selectedStudentId) return true;
                                   const key = rafStudentDedupeKey(student);
                                   if (graded.has(student.id) || gradedKeys.has(key)) return false;
                                   return !batchSummary.some((other, otherIndex) => {
