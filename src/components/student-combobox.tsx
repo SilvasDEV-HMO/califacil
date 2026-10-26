@@ -23,21 +23,45 @@ function searchKey(value: string): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
-function studentMatchesQuery(student: Student, search: string): boolean {
-  const q = searchKey(search);
-  if (!q) return true;
-  const curp = searchKey(student.control_number ?? '');
-  const name = searchKey(student.name);
-  return curp.includes(q) || name.includes(q);
+function letterRuns(search: string): string[] {
+  return search
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((run) => run.length > 0);
 }
 
-function curpSearchRank(student: Student, search: string): number {
-  const q = searchKey(search);
-  if (!q) return 1;
+function haystackHasRun(haystack: string, run: string): boolean {
+  if (!run) return true;
+  if (haystack.includes(run)) return true;
+  return false;
+}
+
+function studentMatchesQuery(student: Student, search: string): boolean {
+  const runs = letterRuns(search);
+  if (runs.length === 0) return true;
   const curp = searchKey(student.control_number ?? '');
-  if (curp.startsWith(q)) return 0;
-  if (curp.includes(q)) return 1;
-  return 2;
+  const name = searchKey(student.name);
+  const blob = name + curp;
+  const compactQ = searchKey(search);
+  if (compactQ && (name.includes(compactQ) || curp.includes(compactQ))) return true;
+  return runs.every((run) => haystackHasRun(name, run) || haystackHasRun(curp, run) || haystackHasRun(blob, run));
+}
+
+function letterSearchRank(student: Student, search: string): number {
+  const compactQ = searchKey(search);
+  const curp = searchKey(student.control_number ?? '');
+  const name = searchKey(student.name);
+  if (!compactQ) return 50;
+  if (name === compactQ || curp === compactQ) return 0;
+  if (name.startsWith(compactQ) || curp.startsWith(compactQ)) return 1;
+  if (name.includes(compactQ)) return 2;
+  if (curp.startsWith(compactQ)) return 3;
+  if (curp.includes(compactQ)) return 4;
+  const runs = letterRuns(search);
+  const hitLen = runs.reduce((n, run) => n + (name.includes(run) || curp.includes(run) ? run.length : 0), 0);
+  return 20 - Math.min(18, hitLen);
 }
 
 export type StudentComboboxProps = {
@@ -71,6 +95,8 @@ export function StudentCombobox({
 }: StudentComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const listRef = React.useRef<HTMLDivElement>(null);
   const selected = students.find((s) => s.id === value);
   const autoSelected =
     autoOptionValue !== undefined && autoOptionLabel !== undefined && value === autoOptionValue;
@@ -87,16 +113,31 @@ export function StudentCombobox({
   const q = query.trim().toLowerCase();
   const compactMatches = students
     .filter((student) => studentMatchesQuery(student, q))
-    .sort((a, b) => curpSearchRank(a, q) - curpSearchRank(b, q) || a.name.localeCompare(b.name, 'es'));
+    .sort((a, b) => letterSearchRank(a, q) - letterSearchRank(b, q) || a.name.localeCompare(b.name, 'es'));
 
   if (compact) {
     const selectedLabel = selected?.control_number
       ? `${selected.control_number} · ${selected.name}`
       : selected?.name ?? '';
+    const keepOpenIfInputFocused = (next: boolean) => {
+      if (
+        !next &&
+        (inputRef.current === document.activeElement ||
+          listRef.current?.contains(document.activeElement))
+      ) {
+        setOpen(true);
+        return;
+      }
+      setOpen(next);
+    };
+    const openList = () => {
+      setOpen(true);
+    };
     return (
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover modal={false} open={open} onOpenChange={keepOpenIfInputFocused}>
         <PopoverAnchor asChild>
           <input
+            ref={inputRef}
             id={id ?? 'student-combobox-search'}
             name="student-search"
             disabled={disabled}
@@ -104,17 +145,32 @@ export function StudentCombobox({
             placeholder={placeholder}
             autoComplete="off"
             className="h-9 w-full min-w-[14rem] rounded-md border border-input bg-white px-2 text-xs outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-400/70"
+            onPointerDown={() => {
+              openList();
+            }}
+            onClick={() => {
+              openList();
+            }}
             onFocus={() => {
               setQuery('');
-              setOpen(true);
+              openList();
             }}
             onChange={(event) => {
               setQuery(event.target.value);
-              setOpen(true);
+              openList();
             }}
             onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setOpen(false);
+                inputRef.current?.blur();
+                return;
+              }
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                openList();
+                return;
+              }
               if (event.key !== 'Enter') return;
-              // Con un solo resultado visible, Enter lo selecciona (sin mouse).
               if (compactMatches.length !== 1) return;
               event.preventDefault();
               const only = compactMatches[0]!;
@@ -129,7 +185,27 @@ export function StudentCombobox({
           align="start"
           sideOffset={4}
           onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+          onPointerDownOutside={(event) => {
+            const target = event.target as Node | null;
+            if (inputRef.current && target && inputRef.current.contains(target)) {
+              event.preventDefault();
+            }
+          }}
+          onFocusOutside={(event) => {
+            const target = event.target as Node | null;
+            if (inputRef.current && target && inputRef.current.contains(target)) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            const target = event.target as Node | null;
+            if (inputRef.current && target && inputRef.current.contains(target)) {
+              event.preventDefault();
+            }
+          }}
         >
+          <div ref={listRef}>
           <ul className="max-h-52 overflow-y-auto">
             {compactMatches.length === 0 ? (
               <li className="px-2 py-3 text-sm text-muted-foreground">{emptyText}</li>
@@ -159,6 +235,7 @@ export function StudentCombobox({
               ))
             )}
           </ul>
+          </div>
         </PopoverContent>
       </Popover>
     );
@@ -176,7 +253,7 @@ export function StudentCombobox({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover modal={false} open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           id={id}
@@ -186,6 +263,8 @@ export function StudentCombobox({
           aria-expanded={open}
           disabled={disabled}
           className={cn('w-full justify-between font-normal', compact ? 'h-8 px-2 text-xs' : 'h-11 px-3')}
+          onFocus={() => setOpen(true)}
+          onPointerDown={() => setOpen(true)}
         >
           <span className={cn('truncate text-left', !selected && !autoSelected && 'text-muted-foreground')}>
             {autoSelected

@@ -43,7 +43,7 @@ import {
   releaseCalificarExamLock,
 } from '@/lib/calificarExamLock';
 import {
-  cropPaperDetailsNameApellidoDataUrl,
+  cropPaperDetailsNameBoxes,
   type PaperDetailsNameLayout,
   isAdminCalifacilEmail,
   looksLikeZipGradePaperDetailsText,
@@ -4290,7 +4290,12 @@ export default function CalificarPage() {
             controlNumber: string | null,
             studentId: string | null,
             nameCropUrl: string | null,
-            opts?: { pctOverride?: number | null; pdfText?: string }
+            opts?: {
+              pctOverride?: number | null;
+              pdfText?: string;
+              givenCrop?: string | null;
+              surnamesCrop?: string | null;
+            }
           ) => {
             if (wasCalificarSheetSaved(fileBundle?.examId, examLabel)) {
               skippedAlreadyGraded += 1;
@@ -4298,7 +4303,7 @@ export default function CalificarPage() {
             }
             const takenIds = takenStudentIdsForExam(fileBundle?.examId, fileBundle);
             const available = activeStudents.filter((s) => !takenIds.has(s.id));
-            const matchPool = activeStudents;
+            const matchPool = available.length > 0 ? available : activeStudents;
 
             let sid = studentId;
             if (!sid && controlNumber) {
@@ -4335,8 +4340,11 @@ export default function CalificarPage() {
               skippedAlreadyGraded += 1;
               return;
             }
-            if (!student && nameCropUrl) {
-              const matched = await matchNameCropToGroup(nameCropUrl, matchPool);
+            if (!student && (nameCropUrl || opts?.givenCrop || opts?.surnamesCrop)) {
+              const matched = await matchNameCropToGroup(nameCropUrl, matchPool, {
+                given: opts?.givenCrop,
+                surnames: opts?.surnamesCrop,
+              });
               ocrHint = matched.text;
               if (matched.student) student = matched.student;
               else student = matchStudentByLooseName(ocrHint, matchPool);
@@ -4472,11 +4480,12 @@ export default function CalificarPage() {
                       /* keep first parse */
                     }
                   }
-                  const nameCropUrl = cropPaperDetailsNameApellidoDataUrl(
+                  const nameCrops = cropPaperDetailsNameBoxes(
                     canvasRes.canvas,
-                    720,
+                    1100,
                     paperNameLayout
                   );
+                  const nameCropUrl = nameCrops.preview;
                   const merged = mapPaperDetailsToMcDraft(activeQuestions, parsed);
                   if (!parsed.ok) {
                     return {
@@ -4484,6 +4493,8 @@ export default function CalificarPage() {
                       aborted: false as const,
                       ok: false as const,
                       nameCropUrl,
+                      givenCrop: nameCrops.given,
+                      surnamesCrop: nameCrops.surnames,
                       merged,
                       pdfText: pageText,
                       pct: parsed.percent,
@@ -4495,6 +4506,8 @@ export default function CalificarPage() {
                     aborted: false as const,
                     ok: true as const,
                     nameCropUrl,
+                    givenCrop: nameCrops.given,
+                    surnamesCrop: nameCrops.surnames,
                     merged,
                     pdfText: pageText,
                     pct: parsed.percent,
@@ -4506,6 +4519,8 @@ export default function CalificarPage() {
                     aborted: false as const,
                     ok: false as const,
                     nameCropUrl: null as string | null,
+                    givenCrop: null as string | null,
+                    surnamesCrop: null as string | null,
                     error: message.length < 120 ? message : 'No se pudo leer la página del PDF',
                   };
                 }
@@ -4537,7 +4552,12 @@ export default function CalificarPage() {
                   null,
                   null,
                   out.nameCropUrl,
-                  { pctOverride: out.pct, pdfText: out.pdfText }
+                  {
+                    pctOverride: out.pct,
+                    pdfText: out.pdfText,
+                    givenCrop: out.givenCrop,
+                    surnamesCrop: out.surnamesCrop,
+                  }
                 );
               }
               continue;
@@ -4554,6 +4574,17 @@ export default function CalificarPage() {
               let controlNumber: string | null = null;
               let studentId: string | null = null;
               let nameCropUrl: string | null = null;
+              let givenCrop: string | null = null;
+              let surnamesCrop: string | null = null;
+              const applyNameCrops = (
+                canvas: HTMLCanvasElement,
+                layout: PaperDetailsNameLayout
+              ) => {
+                const c = cropPaperDetailsNameBoxes(canvas, 1100, layout);
+                if (c.preview) nameCropUrl = c.preview;
+                if (c.given) givenCrop = c.given;
+                if (c.surnames) surnamesCrop = c.surnames;
+              };
               let pdfFailed = false;
               let paperDetailsPct: number | null = null;
               let paperDetailsText = '';
@@ -4591,11 +4622,7 @@ export default function CalificarPage() {
                 // admin@califacil.com + Paper Details: importar % y reactivos del PDF (sin OMR).
                 if (shouldImportZipGradePaperDetails(user?.email, scanCanvas)) {
                   if (s === 0) {
-                    nameCropUrl = cropPaperDetailsNameApellidoDataUrl(
-                      scanCanvas,
-                      720,
-                      paperNameLayout
-                    );
+                    applyNameCrops(scanCanvas, paperNameLayout);
                   }
                   let pageText = '';
                   try {
@@ -4640,15 +4667,18 @@ export default function CalificarPage() {
                         activeQuestions
                       )
                     ) {
-                      const idCrop = cropLenguajeHandwrittenId(scanCanvas);
-                    nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                      applyNameCrops(scanCanvas, 'lenguaje');
+                      if (!nameCropUrl) applyNameCrops(scanCanvas, 'zipgrade');
+                      if (!nameCropUrl) {
+                        const idCrop = cropLenguajeHandwrittenId(scanCanvas);
+                        nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                      }
                     } else {
-                      nameCropUrl =
-                        cropPaperDetailsNameApellidoDataUrl(scanCanvas, 720, 'matematicas') ??
-                        (() => {
-                          const idCrop = cropCustom20HandwrittenId(scanCanvas);
-                          return idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
-                        })();
+                      applyNameCrops(scanCanvas, 'matematicas');
+                      if (!nameCropUrl) {
+                        const idCrop = cropCustom20HandwrittenId(scanCanvas);
+                        nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                      }
                     }
                   }
                   const read = await finalizeCapturedSheet(scanCanvas, pdfPseudo(p), {
@@ -4681,20 +4711,21 @@ export default function CalificarPage() {
                 sheetFormat = 'zipgrade';
               }
               if (s === 0) {
-                nameCropUrl =
-                  cropPaperDetailsNameApellidoDataUrl(scanCanvas, 720, paperNameLayout) ??
-                  cropPaperDetailsNameApellidoDataUrl(workCanvas, 720, paperNameLayout) ??
-                  zgResolved.nameCropUrl;
+                applyNameCrops(scanCanvas, paperNameLayout);
+                if (!nameCropUrl) applyNameCrops(workCanvas, paperNameLayout);
+                if (!nameCropUrl) nameCropUrl = zgResolved.nameCropUrl;
               }
               if (sheetFormat === 'zipgrade') {
                 const zgWarp = warpZipGradeAnswerSheet(workCanvas);
                 let gradeCanvas = zgWarp.warped ?? workCanvas;
                 if (s === 0) {
-                  nameCropUrl =
-                    cropPaperDetailsNameApellidoDataUrl(scanCanvas, 720, paperNameLayout) ??
-                    cropZipGradeNameFromSheetCanvas(gradeCanvas, 560) ??
-                    cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
-                    zgResolved.nameCropUrl;
+                  applyNameCrops(scanCanvas, paperNameLayout);
+                  if (!nameCropUrl) {
+                    nameCropUrl =
+                      cropZipGradeNameFromSheetCanvas(gradeCanvas, 560) ??
+                      cropZipGradeNameFromSheetCanvas(workCanvas, 560) ??
+                      zgResolved.nameCropUrl;
+                  }
                 }
                   const chunk = (fileBundle?.sheets ?? sheets)[sheetIndexRef.current] ?? [];
                   const chunkRows = chunk.length;
@@ -4809,6 +4840,8 @@ export default function CalificarPage() {
               await finishBatchItem(examLabel, merged, controlNumber, studentId, nameCropUrl, {
                 pctOverride: paperDetailsPct,
                 pdfText: paperDetailsText,
+                givenCrop,
+                surnamesCrop,
               });
             }
             continue;
@@ -4818,6 +4851,8 @@ export default function CalificarPage() {
           let controlNumber: string | null = null;
           let studentId: string | null = null;
           let nameCropUrl: string | null = null;
+          let givenCrop: string | null = null;
+          let surnamesCrop: string | null = null;
           sheetIndexRef.current = 0;
           const img = await fileToImage(file);
           if (gen !== gradeReadGenRef.current) return;
@@ -4834,15 +4869,29 @@ export default function CalificarPage() {
                   activeQuestions
                 )
               ) {
-                const idCrop = cropLenguajeHandwrittenId(rawCanvas);
-              nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                const lengCrops = cropPaperDetailsNameBoxes(rawCanvas, 1100, 'lenguaje');
+                nameCropUrl = lengCrops.preview;
+                givenCrop = lengCrops.given;
+                surnamesCrop = lengCrops.surnames;
+                if (!nameCropUrl) {
+                  const zg = cropPaperDetailsNameBoxes(rawCanvas, 1100, 'zipgrade');
+                  nameCropUrl = zg.preview;
+                  givenCrop = zg.given;
+                  surnamesCrop = zg.surnames;
+                }
+                if (!nameCropUrl) {
+                  const idCrop = cropLenguajeHandwrittenId(rawCanvas);
+                  nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                }
               } else {
-                nameCropUrl =
-                  cropPaperDetailsNameApellidoDataUrl(rawCanvas, 720, 'matematicas') ??
-                  (() => {
-                    const idCrop = cropCustom20HandwrittenId(rawCanvas);
-                    return idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
-                  })();
+                const mathCrops = cropPaperDetailsNameBoxes(rawCanvas, 1100, 'matematicas');
+                nameCropUrl = mathCrops.preview;
+                givenCrop = mathCrops.given;
+                surnamesCrop = mathCrops.surnames;
+                if (!nameCropUrl) {
+                  const idCrop = cropCustom20HandwrittenId(rawCanvas);
+                  nameCropUrl = idCrop ? idCrop.toDataURL('image/jpeg', 0.92) : null;
+                }
               }
             } else {
               const canonical = prepareCanonicalCalifacilLetterCanvas(rawCanvas, {
@@ -4866,7 +4915,10 @@ export default function CalificarPage() {
           Object.assign(merged, read.chunkDraft);
           controlNumber = read.controlNumber ?? null;
           studentId = read.studentId ?? null;
-          await finishBatchItem(label, merged, controlNumber, studentId, nameCropUrl);
+          await finishBatchItem(label, merged, controlNumber, studentId, nameCropUrl, {
+            givenCrop,
+            surnamesCrop,
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Error al calificar';
           results.push({
@@ -6583,7 +6635,7 @@ export default function CalificarPage() {
                                 ? `Leí: ${row.ocrHint}. Elige al alumno…`
                                 : 'Escribe nombre o apellido…'
                             }
-                            searchPlaceholder="Nombre, apellido o CURP…"
+                            searchPlaceholder="Letras seguidas: ose, angu, hermo…"
                             emptyText="Ningún alumno coincide con la búsqueda."
                             onValueChange={(id) => {
                               if (!id) return;

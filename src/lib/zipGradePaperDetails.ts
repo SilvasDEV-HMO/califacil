@@ -5,6 +5,7 @@
  */
 
 import { DESPEGUE_ADMIN_EMAIL } from '@/lib/omr/despegueSheet';
+import { stripPrintedSheetLabels } from '@/lib/handwrittenNameSanitize';
 import {
   extractEmbeddedZipGradeSheet,
   isZipGradePaperDetailsReport,
@@ -34,7 +35,11 @@ const NAME_BAND = { x: 0.05, y: 0.028, w: 0.9, h: 0.13 } as const;
 const MATE_NOMBRE_BAND = { x: 0.02, y: 0.0, w: 0.96, h: 0.11 } as const;
 const MATE_APELLIDOS_BAND = { x: 0.02, y: 0.09, w: 0.96, h: 0.12 } as const;
 
-export type PaperDetailsNameLayout = 'zipgrade' | 'matematicas';
+/** Hoja RAF Lenguaje: Nombre | Apellidos en la franja bajo la CURP. */
+const LENG_NOMBRE_BAND = { x: 0.08, y: 0.095, w: 0.40, h: 0.10 } as const;
+const LENG_APELLIDOS_BAND = { x: 0.48, y: 0.095, w: 0.44, h: 0.10 } as const;
+
+export type PaperDetailsNameLayout = 'zipgrade' | 'matematicas' | 'lenguaje';
 
 export function isAdminCalifacilEmail(email: string | null | undefined): boolean {
   return (email ?? '').trim().toLowerCase() === DESPEGUE_ADMIN_EMAIL;
@@ -385,16 +390,59 @@ function stitchNameBoxes(
   return jpegFromCanvas(out, maxWidth);
 }
 
+export type PaperDetailsNameCrops = {
+  preview: string | null;
+  given: string | null;
+  surnames: string | null;
+};
+
+function jpegBox(canvas: HTMLCanvasElement | null, maxWidth: number): string | null {
+  if (!canvas || looksLikeGreenLogo(canvas)) return null;
+  const trimmed = trimCanvasWhitespace(canvas, 4, 242);
+  if (looksLikeGreenLogo(trimmed)) return null;
+  return jpegFromCanvas(trimmed, maxWidth);
+}
+
+function splitBandHalves(band: HTMLCanvasElement): {
+  left: HTMLCanvasElement;
+  right: HTMLCanvasElement;
+} | null {
+  const mid = Math.max(8, Math.floor(band.width * 0.48));
+  const left = document.createElement('canvas');
+  left.width = mid;
+  left.height = band.height;
+  const right = document.createElement('canvas');
+  right.width = Math.max(8, band.width - mid);
+  right.height = band.height;
+  const lctx = left.getContext('2d');
+  const rctx = right.getContext('2d');
+  if (!lctx || !rctx) return null;
+  lctx.drawImage(band, 0, 0, mid, band.height, 0, 0, mid, band.height);
+  rctx.drawImage(
+    band,
+    mid,
+    0,
+    band.width - mid,
+    band.height,
+    0,
+    0,
+    right.width,
+    band.height
+  );
+  return { left, right };
+}
+
 /**
- * Recorte Nombre + Apellido para el modal de lote (centrado, sin márgenes enormes).
- * Usa la foto de la hoja del Paper Details, no el logo.
+ * Recorta las dos cajas (nombre | apellidos) por separado para OCR
+ * y un preview cosido para el modal.
  */
-export function cropPaperDetailsNameApellidoDataUrl(
+export function cropPaperDetailsNameBoxes(
   reportOrSheet: HTMLCanvasElement,
   maxWidth = 640,
   layout: PaperDetailsNameLayout = 'zipgrade'
-): string | null {
-  if (typeof document === 'undefined' || reportOrSheet.width < 40) return null;
+): PaperDetailsNameCrops {
+  const empty: PaperDetailsNameCrops = { preview: null, given: null, surnames: null };
+  if (typeof document === 'undefined' || reportOrSheet.width < 40) return empty;
 
   let sheet = reportOrSheet;
   if (isZipGradePaperDetailsReport(reportOrSheet)) {
@@ -402,6 +450,20 @@ export function cropPaperDetailsNameApellidoDataUrl(
       extractEmbeddedZipGradeSheet(reportOrSheet) ??
       cropRect(reportOrSheet, PAPER_DETAILS_SHEET_FALLBACK) ??
       reportOrSheet;
+  }
+
+  if (layout === 'lenguaje') {
+    const nombre = cropRect(sheet, LENG_NOMBRE_BAND);
+    const apellidos = cropRect(sheet, LENG_APELLIDOS_BAND);
+    if (nombre && apellidos && !looksLikeGreenLogo(nombre) && !looksLikeGreenLogo(apellidos)) {
+      const left = trimCanvasWhitespace(nombre, 4, 242);
+      const right = trimCanvasWhitespace(apellidos, 4, 242);
+      return {
+        given: jpegFromCanvas(left, maxWidth),
+        surnames: jpegFromCanvas(right, maxWidth),
+        preview: stitchNameBoxes(left, right, maxWidth),
+      };
+    }
   }
 
   if (layout === 'matematicas') {
@@ -414,18 +476,43 @@ export function cropPaperDetailsNameApellidoDataUrl(
     if (nombre && apellidos && !looksLikeGreenLogo(nombre) && !looksLikeGreenLogo(apellidos)) {
       const left = trimCanvasWhitespace(nombre, 4, 242);
       const right = trimCanvasWhitespace(apellidos, 4, 242);
-      const stitched = stitchNameBoxes(left, right, maxWidth);
-      if (stitched) return stitched;
+      return {
+        given: jpegFromCanvas(left, maxWidth),
+        surnames: jpegFromCanvas(right, maxWidth),
+        preview: stitchNameBoxes(left, right, maxWidth),
+      };
     }
   }
 
-  const band = cropRect(sheet, layout === 'matematicas'
-    ? { x: 0.05, y: 0.01, w: 0.9, h: 0.27 }
-    : NAME_BAND);
-  if (!band || looksLikeGreenLogo(band)) return null;
+  const band = cropRect(
+    sheet,
+    layout === 'matematicas'
+      ? { x: 0.05, y: 0.01, w: 0.9, h: 0.27 }
+      : layout === 'lenguaje'
+        ? { x: 0.08, y: 0.09, w: 0.84, h: 0.12 }
+        : NAME_BAND
+  );
+  if (!band || looksLikeGreenLogo(band)) return empty;
   const trimmed = trimCanvasWhitespace(band, 8, 242);
-  if (looksLikeGreenLogo(trimmed)) return null;
-  return jpegFromCanvas(trimmed, maxWidth);
+  if (looksLikeGreenLogo(trimmed)) return empty;
+  const halves = splitBandHalves(trimmed);
+  return {
+    preview: jpegFromCanvas(trimmed, maxWidth),
+    given: halves ? jpegBox(halves.left, maxWidth) : null,
+    surnames: halves ? jpegBox(halves.right, maxWidth) : null,
+  };
+}
+
+/**
+ * Recorte Nombre + Apellido para el modal de lote (centrado, sin márgenes enormes).
+ * Usa la foto de la hoja del Paper Details, no el logo.
+ */
+export function cropPaperDetailsNameApellidoDataUrl(
+  reportOrSheet: HTMLCanvasElement,
+  maxWidth = 640,
+  layout: PaperDetailsNameLayout = 'zipgrade'
+): string | null {
+  return cropPaperDetailsNameBoxes(reportOrSheet, maxWidth, layout).preview;
 }
 
 /** Nombre impreso o etiquetado en el PDF Paper Details (antes de OCR). */
@@ -435,7 +522,9 @@ export function extractStudentNameFromPaperDetailsText(rawText: string): string 
     /(?:student\s*name|nombre(?:s)?(?:\s*y\s*apellidos?)?|alumno|name)\s*[:\-]\s*([A-ZÁÉÍÓÚÜÑa-záéíóúüñ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s,'\.-]{3,80})/i
   );
   if (labeled?.[1]) {
-    return labeled[1].replace(/\s+/g, ' ').replace(/\b(key|percent|points|class)\b.*/i, '').trim();
+    return stripPrintedSheetLabels(
+      labeled[1].replace(/\s+/g, ' ').replace(/\b(key|percent|points|class)\b.*/i, '').trim()
+    );
   }
   return '';
 }
@@ -450,12 +539,126 @@ function foldPersonName(value: string): string {
     .trim();
 }
 
-const NAME_STOPWORDS = new Set(['de', 'del', 'la', 'las', 'los', 'el', 'y', 'da', 'do', 'dos']);
+function lettersOnly(value: string): string {
+  return foldPersonName(value).replace(/\s+/g, '');
+}
 
-function nameTokens(value: string): string[] {
+/** Racha más larga de letras seguidas compartidas (no hace falta que sea una palabra). */
+function longestLetterRun(ocr: string, name: string): number {
+  if (!ocr || !name) return 0;
+  const a = ocr.length <= name.length ? ocr : name;
+  const b = ocr.length <= name.length ? name : ocr;
+  let best = 0;
+  for (let i = 0; i < a.length; i++) {
+    for (let len = a.length - i; len > best; len--) {
+      if (b.includes(a.slice(i, i + len))) {
+        best = len;
+        break;
+      }
+    }
+  }
+  return best;
+}
+
+/** Suma de rachas de ≥3 letras del OCR que aparecen juntas en el nombre. */
+function matchedRunLetters(ocr: string, name: string): number {
+  if (!ocr || !name) return 0;
+  let i = 0;
+  let total = 0;
+  while (i < ocr.length) {
+    let best = 0;
+    for (let len = ocr.length - i; len >= 3; len--) {
+      if (name.includes(ocr.slice(i, i + len))) {
+        best = len;
+        break;
+      }
+    }
+    if (best > 0) {
+      total += best;
+      i += best;
+    } else {
+      i += 1;
+    }
+  }
+  return total;
+}
+
+const NAME_STOPWORDS = new Set([
+  'de',
+  'del',
+  'la',
+  'las',
+  'los',
+  'el',
+  'y',
+  'da',
+  'do',
+  'dos',
+  'nombre',
+  'nombres',
+  'apellido',
+  'apellidos',
+  'grupo',
+  'turno',
+  'escuela',
+]);
+
+function nameTokens(value: string, minLen = 3): string[] {
   return foldPersonName(value)
     .split(' ')
-    .filter((t) => t.length >= 3 && !NAME_STOPWORDS.has(t));
+    .filter((t) => t.length >= minLen && !NAME_STOPWORDS.has(t));
+}
+
+function tokenLetterScore(ocr: string, student: string): number {
+  if (!ocr || !student) return 0;
+  if (tokenFits(ocr, student)) return Math.min(ocr.length, student.length);
+  if (student.startsWith(ocr) || ocr.startsWith(student)) {
+    return Math.min(ocr.length, student.length);
+  }
+  if (ocr.length >= 3 && student.includes(ocr)) return ocr.length;
+  if (ocr.length >= 4 && isLetterSubsequence(ocr, student)) {
+    return Math.max(3, Math.floor(ocr.length * 0.7));
+  }
+  return 0;
+}
+
+function coverageLetters(ocrTokens: string[], stTokens: string[]): number {
+  let score = 0;
+  for (const ot of ocrTokens) {
+    let best = 0;
+    for (const st of stTokens) {
+      best = Math.max(best, tokenLetterScore(ot, st));
+    }
+    score += best;
+  }
+  return score;
+}
+
+function isLetterSubsequence(small: string, large: string): boolean {
+  let i = 0;
+  for (let k = 0; k < large.length && i < small.length; k++) {
+    if (large[k] === small[i]) i += 1;
+  }
+  return i === small.length;
+}
+
+/** Igcio → Ignacio, Ma → Maria si el resto encaja. */
+function tokenFits(ocr: string, student: string): boolean {
+  if (tokensClose(ocr, student)) return true;
+  if (ocr.length >= 2 && student.startsWith(ocr) && ocr.length / student.length >= 0.32) {
+    return true;
+  }
+  if (ocr.length >= 3 && student.startsWith(ocr)) return true;
+  if (student.length >= 4 && ocr.startsWith(student)) return true;
+  if (ocr.length >= 4 && student.length >= ocr.length && isLetterSubsequence(ocr, student)) {
+    return true;
+  }
+  if (ocr.length >= 5 && student.length >= 5) {
+    const d = editDistance(ocr, student);
+    const allow = Math.max(2, Math.floor(Math.max(ocr.length, student.length) * 0.34));
+    if (d <= allow) return true;
+  }
+  return false;
 }
 
 function editDistance(a: string, b: string): number {
@@ -490,22 +693,94 @@ function tokensClose(ocr: string, student: string): boolean {
 }
 
 /**
- * Preselecciona solo si el OCR encaja de verdad con el grupo.
- * Un nombre que no está en la lista (p. ej. Dominic Zepeda) queda pendiente.
+ * Preselecciona por la mayor racha de letras seguidas del manuscrito,
+ * aunque OCR no arme la palabra completa (p. ej. "hermo", "sele", "igcio").
  */
 export function matchStudentByLooseName<T extends { id: string; name: string }>(
   hint: string | null | undefined,
   students: T[]
 ): T | null {
-  const ocrTokens = nameTokens(hint ?? '');
-  if (ocrTokens.length === 0 || students.length === 0) return null;
+  const compactHint = lettersOnly(hint ?? '');
+  const ocrTokens = nameTokens(hint ?? '', 2);
+  if ((compactHint.length < 2 && ocrTokens.length === 0) || students.length === 0) {
+    return null;
+  }
+
+  if (compactHint.length >= 3) {
+    const needleHits = students.filter((s) => lettersOnly(s.name).includes(compactHint));
+    if (needleHits.length === 1) return needleHits[0]!;
+  }
+
+  const byRuns = students
+    .map((s) => {
+      const compact = lettersOnly(s.name);
+      const stTokens = nameTokens(s.name, 2);
+      let words = 0;
+      for (const ot of ocrTokens) {
+        if (stTokens.some((st) => st === ot || (ot.length >= 4 && tokenFits(ot, st)))) {
+          words += ot.length >= 5 ? 2 : 1;
+        }
+      }
+      return {
+        student: s,
+        compact,
+        words,
+        longest: longestLetterRun(compactHint, compact),
+        runs: matchedRunLetters(compactHint, compact),
+      };
+    })
+    .sort((a, b) => b.words - a.words || b.runs - a.runs || b.longest - a.longest);
+
+  const bestRun = byRuns[0];
+  const secondRun = byRuns[1];
+  if (bestRun && bestRun.longest >= 4) {
+    const gapWords = bestRun.words - (secondRun?.words ?? 0);
+    const gapRuns = bestRun.runs - (secondRun?.runs ?? 0);
+    const gapLong = bestRun.longest - (secondRun?.longest ?? 0);
+    if (gapWords >= 1 && bestRun.words >= 1) return bestRun.student;
+    if (gapLong >= 2 || gapRuns >= 2) return bestRun.student;
+    if (!secondRun) return bestRun.student;
+  }
+
+  // Fragmento de ≥4 letras que solo existe en un alumno (desempata Anguamea).
+  if (compactHint.length >= 4) {
+    const uniqueOwners = new Map<string, T>();
+    for (let i = 0; i <= compactHint.length - 4; i++) {
+      for (let len = compactHint.length - i; len >= 4; len--) {
+        const frag = compactHint.slice(i, i + len);
+        const owners = students.filter((s) => lettersOnly(s.name).includes(frag));
+        if (owners.length === 1) {
+          uniqueOwners.set(owners[0]!.id, owners[0]!);
+          break;
+        }
+      }
+    }
+    if (uniqueOwners.size === 1) return [...uniqueOwners.values()][0]!;
+  }
+
+  const andHits = students.filter((s) => {
+    const stTokens = nameTokens(s.name, 2);
+    return ocrTokens.length > 0 && ocrTokens.every((ot) => stTokens.some((st) => tokenFits(ot, st)));
+  });
+  if (andHits.length === 1) return andHits[0]!;
+  if (andHits.length > 1) {
+    const ranked = andHits
+      .map((s) => ({
+        student: s,
+        letters: coverageLetters(ocrTokens, nameTokens(s.name, 2)),
+      }))
+      .sort((a, b) => b.letters - a.letters);
+    const best = ranked[0]!;
+    const runner = ranked[1];
+    if (!runner || best.letters >= runner.letters + 3) return best.student;
+  }
 
   const scored = students
     .map((s) => {
       const stTokens = nameTokens(s.name);
       let hits = 0;
       for (const ot of ocrTokens) {
-        if (stTokens.some((st) => tokensClose(ot, st))) hits += 1;
+        if (stTokens.some((st) => tokenFits(ot, st))) hits += 1;
       }
       return { student: s, hits };
     })
@@ -519,14 +794,10 @@ export function matchStudentByLooseName<T extends { id: string; name: string }>(
   if (runner && runner.hits === best.hits) return null;
   if (best.hits >= 2) return best.student;
 
-  // Una palabra única del grupo (Marian, Anahi, Michel, Amparano) sí basta
-  // si nadie más la tiene. José/Carlos empatan y quedan pendientes.
-  const longHits = ocrTokens.filter((t) => t.length >= 5);
+  const longHits = ocrTokens.filter((t) => t.length >= 4);
   const uniqueLong: T[] = [];
   for (const t of longHits) {
-    const owners = students.filter((s) =>
-      nameTokens(s.name).some((st) => st.length >= 5 && tokensClose(t, st))
-    );
+    const owners = students.filter((s) => lettersOnly(s.name).includes(t));
     if (owners.length === 1 && !uniqueLong.some((s) => s.id === owners[0]!.id)) {
       uniqueLong.push(owners[0]!);
     }
