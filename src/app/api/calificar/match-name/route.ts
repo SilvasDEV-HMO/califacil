@@ -31,10 +31,10 @@ function sharedSurnameHints(students: RosterStudent[]): string {
     counts.set(first, list);
   }
   const lines: string[] = [];
-  for (const [key, names] of counts) {
-    if (names.length < 2) continue;
+  Array.from(counts.entries()).forEach(([key, names]) => {
+    if (names.length < 2) return;
     lines.push(`- ${key.toUpperCase()}: ${names.join(' | ')}`);
-  }
+  });
   if (lines.length === 0) return '';
   return `\nSame surname still in this remaining list — copy letters from BOTH boxes:\n${lines.join('\n')}\n`;
 }
