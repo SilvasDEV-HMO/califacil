@@ -755,7 +755,7 @@ export function matchStudentByLooseName<T extends { id: string; name: string }>(
         }
       }
     }
-    if (uniqueOwners.size === 1) return [...uniqueOwners.values()][0]!;
+    if (uniqueOwners.size === 1) return Array.from(uniqueOwners.values())[0]!;
   }
 
   const andHits = students.filter((s) => {
