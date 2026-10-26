@@ -68,6 +68,7 @@ import {
 } from '@/lib/calificarExamBundle';
 import {
   matchRafPdfToExam,
+  parseRafPdfFileName,
   rafSubjectFromTitle,
   type RafSubject,
 } from '@/lib/rafPdfExamMatch';
@@ -979,6 +980,15 @@ export default function CalificarPage() {
     if (completedExamIds.size === 0) return published;
     return published.filter((e) => !completedExamIds.has(e.id) || e.id === examId);
   }, [exams, completedExamIds, examId]);
+
+  /** Relación RAF de carpeta: incluir grupos con notas parciales (si no, el PDF no encuentra examen). */
+  const rafFolderExams = useMemo(
+    () =>
+      (exams as Exam[]).filter(
+        (e) => e.status === 'published' || e.status === 'closed'
+      ),
+    [exams]
+  );
 
   const virtualKey = useMemo(() => buildCalifacilVirtualKey(questions), [questions]);
   const virtualKeyMaps = useMemo(() => buildVirtualKeyMaps(virtualKey.rows), [virtualKey.rows]);
@@ -4025,11 +4035,15 @@ export default function CalificarPage() {
       const uniqueIds: string[] = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i]!;
-        const matched = matchRafPdfToExam(file.name, batchSubject, publishedExams);
+        const identity = parseRafPdfFileName(file.name);
+        const subjectForFile = identity?.subject ?? batchSubject;
+        const matched = matchRafPdfToExam(file.name, subjectForFile, rafFolderExams);
         if (!matched) {
           fileMatchErrorByIndex.set(
             i,
-            'No se relacionó con un examen de esta materia (nombre RAF / grupo).'
+            identity
+              ? `No hay examen para ${identity.examTitle}.`
+              : 'No se relacionó con un examen de esta materia (nombre RAF / grupo).'
           );
           continue;
         }
@@ -4044,7 +4058,7 @@ export default function CalificarPage() {
       const studentsMap: Record<string, Student[]> = {};
       const gradedMap: Record<string, string[]> = {};
       for (const id of uniqueIds) {
-        const examRow = publishedExams.find((e) => e.id === id);
+        const examRow = rafFolderExams.find((e) => e.id === id) ?? publishedExams.find((e) => e.id === id);
         if (!examRow) continue;
         try {
           const bundle = await loadCalificarExamBundle(examRow, user?.email);
@@ -5023,6 +5037,7 @@ export default function CalificarPage() {
       for (const id of idsToLoad) {
         const examRow =
           batchBundlesByIdRef.current.get(id)?.exam ??
+          rafFolderExams.find((row) => row.id === id) ??
           publishedExams.find((row) => row.id === id) ??
           (exam?.id === id ? exam : null);
         const ids = examRow
@@ -5051,7 +5066,7 @@ export default function CalificarPage() {
     return () => {
       cancelled = true;
     };
-  }, [batchSummary, examId, exam, publishedExams]);
+  }, [batchSummary, examId, exam, publishedExams, rafFolderExams]);
 
   const discardBatchRow = (rowIndex: number) => {
     setBatchSummary((prev) => {
