@@ -3891,7 +3891,7 @@ export default function CalificarPage() {
     await submitAll(mergedNow);
   };
 
-  const persistStudentAnswers = async (
+  const buildPersistAnswerRows = (
     merged: Record<string, string>,
     studentIdOverride?: string,
     bundle?: CalificarExamBundle | null
@@ -3910,28 +3910,17 @@ export default function CalificarPage() {
     if (alreadySet.has(studentId)) {
       throw new Error('already_graded');
     }
-    const effectiveKey = persistKeyMaps.byQuestionId;
     const mcQuestions = persistQuestions.filter((q) => q.type === 'multiple_choice');
     const mcTotal = mcQuestions.length;
-    if (Object.keys(effectiveKey).length !== mcTotal) {
+    if (Object.keys(persistKeyMaps.byQuestionId).length !== mcTotal) {
       throw new Error('incomplete_key');
     }
 
     let correctCount = 0;
-    let earnedPoints = 0;
-    let maxMcPoints = 0;
     const rows = persistQuestions.map((question: Question) => {
       const answerText = (merged[question.id] ?? '').trim();
       const { isCorrect, score } = gradeMcQuestionForPersist(question, answerText, persistKeyMaps);
-      const pts = questionPoints(question);
-      if (question.type === 'multiple_choice') {
-        maxMcPoints += pts;
-        if (isCorrect) {
-          correctCount++;
-          earnedPoints += score;
-        }
-      }
-
+      if (question.type === 'multiple_choice' && isCorrect) correctCount++;
       return {
         exam_id: persistExamId,
         student_id: studentId,
@@ -3941,26 +3930,64 @@ export default function CalificarPage() {
         score,
       };
     });
+    return {
+      rows,
+      persistExamId,
+      studentId,
+      bundle: active,
+      pct: calculatePercentage(correctCount, mcTotal),
+      correct: correctCount,
+      wrong: Math.max(0, mcTotal - correctCount),
+      total: mcTotal,
+    };
+  };
 
-    const { error: answersError } = await upsertCalificarAnswers(rows);
-    if (answersError) throw answersError;
-    active?.alreadyGraded.add(studentId);
-    if (persistExamId === examId) {
+  const markStudentsPersisted = (
+    items: { persistExamId: string; studentId: string; bundle?: CalificarExamBundle | null }[]
+  ) => {
+    if (items.length === 0) return;
+    const byExam: Record<string, string[]> = {};
+    const sameExam: string[] = [];
+    for (const item of items) {
+      item.bundle?.alreadyGraded.add(item.studentId);
+      const list = byExam[item.persistExamId] ?? [];
+      list.push(item.studentId);
+      byExam[item.persistExamId] = list;
+      if (item.persistExamId === examId) sameExam.push(item.studentId);
+    }
+    if (sameExam.length > 0) {
       setStudentsAlreadyGraded((prev) => {
         const next = new Set(prev);
-        next.add(studentId);
+        sameExam.forEach((id) => next.add(id));
         return next;
       });
     }
     setBatchGradedByExamId((prev) => {
-      const cur = new Set(prev[persistExamId] ?? []);
-      cur.add(studentId);
-      return { ...prev, [persistExamId]: Array.from(cur) };
+      const next = { ...prev };
+      Object.keys(byExam).forEach((id) => {
+        const cur = new Set(next[id] ?? []);
+        (byExam[id] ?? []).forEach((sid) => cur.add(sid));
+        next[id] = Array.from(cur);
+      });
+      return next;
     });
+  };
 
-    const pct = calculatePercentage(correctCount, mcTotal);
-    const wrong = Math.max(0, mcTotal - correctCount);
-    return { pct, correct: correctCount, wrong, total: mcTotal };
+  const persistStudentAnswers = async (
+    merged: Record<string, string>,
+    studentIdOverride?: string,
+    bundle?: CalificarExamBundle | null
+  ) => {
+    const built = buildPersistAnswerRows(merged, studentIdOverride, bundle);
+    const { error: answersError } = await upsertCalificarAnswers(built.rows);
+    if (answersError) throw answersError;
+    markStudentsPersisted([built]);
+    return {
+      pct: built.pct,
+      correct: built.correct,
+      wrong: built.wrong,
+      total: built.total,
+    };
   };
 
   const persistGradeToAssignedStudent = async (studentId: string) => {
@@ -4974,13 +5001,16 @@ export default function CalificarPage() {
       if (gen === gradeReadGenRef.current && autoPersist.length > 0) {
         setLiveStatus(`Guardando ${autoPersist.length} hoja(s) reconocidas…`);
         await ensureCalificarAuthSession();
+        const built: Array<
+          ReturnType<typeof buildPersistAnswerRows> & { examLabel: string; merged: Record<string, string> }
+        > = [];
         for (const item of autoPersist) {
-          if (gen !== gradeReadGenRef.current) break;
           try {
-            if (item.bundle) batchBundleRef.current = item.bundle;
-            await persistStudentAnswers(item.merged, item.studentId, item.bundle);
-            rememberCalificarSavedSheet(item.bundle?.examId, item.examLabel);
-            skippedAlreadyGraded += 1;
+            built.push({
+              ...buildPersistAnswerRows(item.merged, item.studentId, item.bundle),
+              examLabel: item.examLabel,
+              merged: item.merged,
+            });
           } catch {
             results.push({
               fileName: item.examLabel,
@@ -4995,6 +5025,46 @@ export default function CalificarPage() {
             });
           }
         }
+        const groups: typeof built[] = [];
+        for (let i = 0; i < built.length; i += 12) groups.push(built.slice(i, i + 12));
+        const okItems: typeof built = [];
+        await mapPool(groups, 6, async (group) => {
+          if (gen !== gradeReadGenRef.current) return;
+          const { error } = await upsertCalificarAnswers(group.flatMap((g) => g.rows));
+          const savedGroup = !error
+            ? group
+            : (
+                await Promise.all(
+                  group.map(async (g) => {
+                    const one = await upsertCalificarAnswers(g.rows);
+                    return one.error ? null : g;
+                  })
+                )
+              ).filter((g): g is (typeof built)[number] => Boolean(g));
+          savedGroup.forEach((g) => {
+            rememberCalificarSavedSheet(g.persistExamId, g.examLabel);
+            okItems.push(g);
+          });
+          if (error) {
+            group
+              .filter((g) => !savedGroup.some((ok) => ok.studentId === g.studentId && ok.persistExamId === g.persistExamId))
+              .forEach((g) => {
+                results.push({
+                  fileName: g.examLabel,
+                  ok: false,
+                  pendingStudent: true,
+                  mergedDraft: g.merged,
+                  selectedStudentId: g.studentId,
+                  studentId: g.studentId,
+                  error: 'Elige al alumno para guardar',
+                  examId: g.persistExamId,
+                  examTitle: g.bundle?.exam.title,
+                });
+              });
+          }
+        });
+        skippedAlreadyGraded += okItems.length;
+        markStudentsPersisted(okItems);
       }
     } finally {
       void wake.release();
@@ -5318,39 +5388,57 @@ export default function CalificarPage() {
       }
       let saved = 0;
       let firstError = '';
+      const builtSaves: Array<
+        ReturnType<typeof buildPersistAnswerRows> & { idx: number; fileName: string }
+      > = [];
       for (const { row, idx } of toSave) {
         try {
-        await persistPendingBatchStudent(idx, row.selectedStudentId!);
-          saved += 1;
+          const bundle = row.examId ? batchBundlesByIdRef.current.get(row.examId) : null;
+          if (bundle) batchBundleRef.current = bundle;
+          builtSaves.push({
+            ...buildPersistAnswerRows(row.mergedDraft ?? {}, row.selectedStudentId!, bundle),
+            idx,
+            fileName: row.fileName,
+          });
         } catch (err: unknown) {
-          const msg =
-            err && typeof err === 'object' && 'message' in err
-              ? String((err as { message?: string }).message ?? '')
-              : err instanceof Error
-                ? err.message
-                : '';
-          if (!firstError) firstError = msg;
-          const code =
-            err && typeof err === 'object' && 'code' in err
-              ? String((err as { code?: string }).code ?? '')
-              : '';
-          if (isRetryablePersistError({ message: msg, code })) {
-            const ok = await ensureCalificarAuthSession();
-            if (!ok) {
-              toast.error(
-                `Se guardaron ${saved} de ${toSave.length}. La sesión caducó: inicia sesión y pulsa Guardar de nuevo.`
-              );
-              return;
-            }
-            try {
-              await persistPendingBatchStudent(idx, row.selectedStudentId!);
-              saved += 1;
-              continue;
-    } catch {
-              /* keep failing this row */
-            }
-          }
+          if (!firstError) firstError = err instanceof Error ? err.message : '';
         }
+      }
+      const saveGroups: typeof builtSaves[] = [];
+      for (let i = 0; i < builtSaves.length; i += 12) saveGroups.push(builtSaves.slice(i, i + 12));
+      const okSaves: typeof builtSaves = [];
+      await mapPool(saveGroups, 6, async (group) => {
+        const { error } = await upsertCalificarAnswers(group.flatMap((g) => g.rows));
+        if (!error) {
+          group.forEach((g) => okSaves.push(g));
+          return;
+        }
+        if (!firstError) firstError = error.message ?? '';
+        if (isRetryablePersistError(error)) await ensureCalificarAuthSession();
+        for (const g of group) {
+          const one = await upsertCalificarAnswers(g.rows);
+          if (!one.error) okSaves.push(g);
+        }
+      });
+      saved = okSaves.length;
+      markStudentsPersisted(okSaves);
+      okSaves.forEach((g) => rememberCalificarSavedSheet(g.persistExamId, g.fileName));
+      if (okSaves.length > 0) {
+        const okIdx = new Set(okSaves.map((g) => g.idx));
+        setBatchSummary((prev) => {
+          if (!prev) return prev;
+          return prev.map((row, idx) => {
+            const hit = okSaves.find((g) => g.idx === idx);
+            if (!hit || !okIdx.has(idx)) return row;
+            return {
+              fileName: row.fileName,
+              ok: true,
+              studentName: row.studentName,
+              studentId: hit.studentId,
+              pct: hit.pct,
+            };
+          });
+        });
       }
       if (saved === 0) {
         toast.error(
