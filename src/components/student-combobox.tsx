@@ -38,15 +38,45 @@ function haystackHasRun(haystack: string, run: string): boolean {
   return false;
 }
 
+const SEARCH_NOISE = new Set([
+  'de',
+  'del',
+  'la',
+  'el',
+  'le',
+  'les',
+  'lo',
+  'un',
+  'una',
+  'y',
+  'o',
+  'a',
+  'al',
+  'en',
+  'que',
+  'por',
+  'con',
+  'para',
+  'trabajo',
+  'nombre',
+  'apellido',
+]);
+
 function studentMatchesQuery(student: Student, search: string): boolean {
-  const runs = letterRuns(search);
-  if (runs.length === 0) return true;
   const curp = searchKey(student.control_number ?? '');
   const name = searchKey(student.name);
   const blob = name + curp;
   const compactQ = searchKey(search);
-  if (compactQ && (name.includes(compactQ) || curp.includes(compactQ))) return true;
-  return runs.every((run) => haystackHasRun(name, run) || haystackHasRun(curp, run) || haystackHasRun(blob, run));
+  if (!compactQ) return true;
+  if (name.includes(compactQ) || curp.includes(compactQ)) return true;
+  const useful = letterRuns(search).filter((run) => run.length >= 2 && !SEARCH_NOISE.has(run));
+  if (useful.length === 0) return name.includes(compactQ) || curp.includes(compactQ);
+  if (useful.every((run) => haystackHasRun(name, run) || haystackHasRun(curp, run) || haystackHasRun(blob, run))) {
+    return true;
+  }
+  return useful.some(
+    (run) => run.length >= 4 && (haystackHasRun(name, run) || haystackHasRun(curp, run))
+  );
 }
 
 function letterSearchRank(student: Student, search: string): number {
@@ -77,6 +107,7 @@ export type StudentComboboxProps = {
   autoOptionLabel?: string;
   autoOptionValue?: string;
   compact?: boolean;
+  seedQuery?: string;
 };
 
 export function StudentCombobox({
@@ -92,9 +123,21 @@ export function StudentCombobox({
   autoOptionLabel,
   autoOptionValue,
   compact = false,
+  seedQuery = '',
 }: StudentComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  const didAutoUnique = React.useRef(false);
+  React.useEffect(() => {
+    if (didAutoUnique.current || disabled || value) return;
+    const pool = seedQuery
+      ? students.filter((student) => studentMatchesQuery(student, seedQuery))
+      : students;
+    if (pool.length !== 1 && students.length !== 1) return;
+    const only = pool.length === 1 ? pool[0]! : students[0]!;
+    didAutoUnique.current = true;
+    onValueChange(only.id);
+  }, [disabled, onValueChange, seedQuery, students, value]);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
   const selected = students.find((s) => s.id === value);
@@ -152,7 +195,7 @@ export function StudentCombobox({
               openList();
             }}
             onFocus={() => {
-              setQuery('');
+              setQuery(seedQuery);
               openList();
             }}
             onChange={(event) => {

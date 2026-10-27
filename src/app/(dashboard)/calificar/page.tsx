@@ -4088,6 +4088,13 @@ export default function CalificarPage() {
     }
 
     const pagesPerExamDefault = Math.max(1, subjectMode ? 1 : totalSheets);
+    const autoTakenByExam = new Map<string, Set<string>>();
+    const autoPersist: {
+      examLabel: string;
+      merged: Record<string, string>;
+      studentId: string;
+      bundle: CalificarExamBundle | null;
+    }[] = [];
 
     const takenStudentIdsForExam = (
       examKey: string | undefined,
@@ -4100,6 +4107,13 @@ export default function CalificarPage() {
         if (examKey && row.examId && row.examId !== examKey) continue;
         if (row.studentId) taken.add(row.studentId);
         if (row.selectedStudentId) taken.add(row.selectedStudentId);
+      }
+      const extra = examKey ? autoTakenByExam.get(examKey) : null;
+      extra?.forEach((id) => taken.add(id));
+      if (!examKey) {
+        Array.from(autoTakenByExam.values()).forEach((set) => {
+          set.forEach((id) => taken.add(id));
+        });
       }
       return taken;
     };
@@ -4322,7 +4336,9 @@ export default function CalificarPage() {
               const fromPdf = extractStudentNameFromPaperDetailsText(opts.pdfText);
               if (fromPdf) {
                 ocrHint = fromPdf;
-                student = matchStudentByLooseName(fromPdf, matchPool);
+                student =
+                  matchStudentByLooseName(fromPdf, matchPool) ??
+                  matchStudentByLooseName(fromPdf, activeStudents);
                 if (student) sid = student.id;
               }
             }
@@ -4340,25 +4356,48 @@ export default function CalificarPage() {
               skippedAlreadyGraded += 1;
               return;
             }
+            if (!student && available.length === 1) {
+              student = available[0]!;
+              sid = student.id;
+            }
             if (!student && (nameCropUrl || opts?.givenCrop || opts?.surnamesCrop)) {
               const matched = await matchNameCropToGroup(nameCropUrl, matchPool, {
                 given: opts?.givenCrop,
                 surnames: opts?.surnamesCrop,
               });
-              ocrHint = matched.text;
-              if (matched.student) student = matched.student;
-              else student = matchStudentByLooseName(ocrHint, matchPool);
+              ocrHint = matched.text || ocrHint;
+              student =
+                matched.student ??
+                matchStudentByLooseName(ocrHint, matchPool) ??
+                matchStudentByLooseName(ocrHint, activeStudents);
               if (student) sid = student.id;
             }
             if (student && takenIds.has(student.id)) {
               skippedAlreadyGraded += 1;
               return;
             }
+            if (!student && available.length === 1) {
+              student = available[0]!;
+              sid = student.id;
+            }
             const previewStats = gradeMcDraftAgainstVirtualKey(merged, activeQuestions, activeKeyMaps);
             const displayPct =
               opts?.pctOverride != null && Number.isFinite(opts.pctOverride)
                 ? Math.round(opts.pctOverride)
                 : previewStats.pct;
+            if (student) {
+              const examKey = fileBundle?.examId ?? '_';
+              const autoSet = autoTakenByExam.get(examKey) ?? new Set<string>();
+              autoSet.add(student.id);
+              autoTakenByExam.set(examKey, autoSet);
+              autoPersist.push({
+                examLabel,
+                merged: { ...merged },
+                studentId: student.id,
+                bundle: fileBundle,
+              });
+              return;
+            }
             results.push({
               fileName: examLabel,
               ok: false,
@@ -4367,9 +4406,6 @@ export default function CalificarPage() {
               pct: displayPct,
               nameCropUrl,
               ocrHint: ocrHint || undefined,
-              selectedStudentId: student?.id,
-              studentId: student?.id,
-              studentName: student?.name,
               error: 'Elige al alumno para guardar',
               examId: fileBundle?.examId,
               examTitle: fileBundle?.exam.title,
@@ -4935,6 +4971,31 @@ export default function CalificarPage() {
           });
         }
       }
+      if (gen === gradeReadGenRef.current && autoPersist.length > 0) {
+        setLiveStatus(`Guardando ${autoPersist.length} hoja(s) reconocidas…`);
+        await ensureCalificarAuthSession();
+        for (const item of autoPersist) {
+          if (gen !== gradeReadGenRef.current) break;
+          try {
+            if (item.bundle) batchBundleRef.current = item.bundle;
+            await persistStudentAnswers(item.merged, item.studentId, item.bundle);
+            rememberCalificarSavedSheet(item.bundle?.examId, item.examLabel);
+            skippedAlreadyGraded += 1;
+          } catch {
+            results.push({
+              fileName: item.examLabel,
+              ok: false,
+              pendingStudent: true,
+              mergedDraft: item.merged,
+              selectedStudentId: item.studentId,
+              studentId: item.studentId,
+              error: 'Elige al alumno para guardar',
+              examId: item.bundle?.examId,
+              examTitle: item.bundle?.exam.title,
+            });
+          }
+        }
+      }
     } finally {
       void wake.release();
       sheetIndexRef.current = savedSheet;
@@ -4942,8 +5003,9 @@ export default function CalificarPage() {
         setScanBusy(false);
         setLiveStatus('');
         const popupRows = results.filter((row) => {
-          if (row.pendingStudent) return true;
+          if (row.pendingStudent && !row.selectedStudentId) return true;
           if (row.ok) return false;
+          if (row.pendingStudent) return false;
           if (!row.examId) return true;
           const bundle = batchBundlesByIdRef.current.get(row.examId);
           if (!bundle || bundle.students.length === 0) return true;
@@ -4953,30 +5015,23 @@ export default function CalificarPage() {
           setBatchSummary(null);
           toast.message(
             skippedAlreadyGraded > 0
-              ? `Nada nuevo: se omitieron ${skippedAlreadyGraded} hoja(s) que ya estaban calificadas. Las notas no se tocaron.`
+              ? `Listo: ${skippedAlreadyGraded} hoja(s) ya calificadas o reconocidas. No hay nada pendiente.`
               : 'No hubo hojas nuevas para revisar.'
           );
         } else {
-          const withoutCrops = popupRows.map((row) => ({ ...row, nameCropUrl: null as string | null }));
           flushSync(() => {
-            setBatchSummary(withoutCrops);
-          });
-          window.setTimeout(() => {
             setBatchSummary(popupRows);
-          }, 80);
-          const saved = popupRows.filter((r) => r.ok).length;
-          const pending = popupRows.filter((r) => r.pendingStudent).length;
-          const failed = popupRows.length - saved - pending;
+          });
+          const pending = popupRows.filter((r) => r.pendingStudent && !r.selectedStudentId).length;
+          const failed = popupRows.filter((r) => !r.ok && !r.pendingStudent).length;
           const skippedBit =
             skippedAlreadyGraded > 0
-              ? ` Se omitieron ${skippedAlreadyGraded} ya calificadas.`
+              ? ` ${skippedAlreadyGraded} reconocidas o ya calificadas.`
               : '';
         toast.message(
-          failed === 0 && pending === 0
-              ? `Carpeta lista: ${saved} calificación(es) guardada(s).${skippedBit}`
-              : `Carpeta lista: ${saved} guardada(s), ${pending} para revisar, ${failed} con error.${skippedBit}`
+          `Carpeta lista: ${pending} para revisar a mano${failed > 0 ? `, ${failed} con error` : ''}.${skippedBit}`
         );
-        if (pending === 0 && saved > 0 && examId) {
+        if (pending === 0 && skippedAlreadyGraded > 0 && examId) {
           void clearExamAfterBatchSave();
         }
       }
@@ -5348,11 +5403,10 @@ export default function CalificarPage() {
     if (!batchSummary?.length) return [];
     return batchSummary
       .map((row, idx) => ({ row, idx }))
-      .sort((a, b) => {
-        const aManual = a.row.pendingStudent && !a.row.selectedStudentId ? 0 : 1;
-        const bManual = b.row.pendingStudent && !b.row.selectedStudentId ? 0 : 1;
-        if (aManual !== bManual) return aManual - bManual;
-        return a.idx - b.idx;
+      .filter(({ row }) => {
+        if (row.pendingStudent && !row.selectedStudentId) return true;
+        if (!row.ok && !row.pendingStudent) return true;
+        return false;
       });
   }, [batchSummary]);
 
@@ -6500,17 +6554,15 @@ export default function CalificarPage() {
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
               {(() => {
-                const assigned =
-                  batchSummary?.filter((r) => r.pendingStudent && r.selectedStudentId).length ?? 0;
                 const pending =
                   batchSummary?.filter((r) => r.pendingStudent && !r.selectedStudentId).length ?? 0;
                 const failed =
                   (batchSummary?.filter((r) => !r.pendingStudent && !r.ok).length ?? 0);
                 const counts =
                   batchSummary && batchSummary.length > 0
-                    ? ` ${assigned} con alumno; ${pending} a mano${failed > 0 ? `; ${failed} con error` : ''}.`
+                    ? ` ${pending} a mano${failed > 0 ? `; ${failed} con error` : ''}.`
                     : '';
-                return `Solo aparecen hojas que aún no están calificadas.${counts} Si la IA no reconoció el nombre, elige al alumno en la lista. Las que ya tenían nota no se muestran ni se cambian. Guardar solo escribe las filas con alumno. Cerrar no guarda nada.`;
+                return `Solo las hojas sin alumno. Las reconocidas se guardaron solas.${counts} Elige al alumno en las que falten. Guardar escribe esas filas. Cerrar no guarda las pendientes.`;
               })()}
             </p>
           </div>
@@ -6629,6 +6681,7 @@ export default function CalificarPage() {
                               );
                             })()}
                             value={row.selectedStudentId ?? ''}
+                            seedQuery={row.ocrHint ?? ''}
                             disabled={scanBusy}
                             placeholder={
                               row.ocrHint

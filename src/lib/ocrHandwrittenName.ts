@@ -16,8 +16,7 @@ export type NameCropPair = {
   surnames?: string | null;
 };
 
-/** Recorte pequeño: gpt-4o-mini cobra la imagen por tamaño/detalle. */
-async function shrinkNameCrop(dataUrl: string, maxW = 900): Promise<string> {
+async function shrinkNameCrop(dataUrl: string, maxW = 384): Promise<string> {
   if (typeof document === 'undefined') return dataUrl;
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -37,67 +36,53 @@ async function shrinkNameCrop(dataUrl: string, maxW = 900): Promise<string> {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.9);
+    return canvas.toDataURL('image/jpeg', 0.5);
   } catch {
     return dataUrl;
   }
 }
 
-async function postMatchName(
-  payload: { image?: string; givenImage?: string; surnamesImage?: string },
-  students: RosterRow[]
-) {
+async function postMatchName(image: string) {
   const headers = await dashboardAuthJsonHeaders();
   return fetch('/api/calificar/match-name', {
     method: 'POST',
     headers: { ...headers },
     credentials: 'include',
-    body: JSON.stringify({
-      ...payload,
-      students: students.map((s) => ({
-        id: s.id,
-        name: s.name,
-      })),
-    }),
+    body: JSON.stringify({ image }),
   });
 }
 
 /**
- * Lee el recorte Nombre|Apellido con visión (gpt-4o-mini) y lo cruza con los alumnos que faltan.
+ * Lee el recorte con visión barata (1 imagen, detail=low) y cruza en local con el grupo.
  */
 export async function matchNameCropToGroup<T extends RosterRow>(
   dataUrl: string | null | undefined,
   students: T[],
   boxes?: NameCropPair
 ): Promise<NameCropMatch<T>> {
-  const src = (dataUrl ?? '').trim();
-  const givenSrc = (boxes?.given ?? '').trim();
-  const surnamesSrc = (boxes?.surnames ?? '').trim();
-  const hasSplit = givenSrc.startsWith('data:image') || surnamesSrc.startsWith('data:image');
-  if ((!src.startsWith('data:image') && !hasSplit) || students.length === 0) {
+  if (students.length === 1) {
+    return { text: '', student: students[0]! };
+  }
+  const src =
+    (dataUrl ?? '').trim() ||
+    (boxes?.surnames ?? '').trim() ||
+    (boxes?.given ?? '').trim();
+  if (!src.startsWith('data:image') || students.length === 0) {
     return { text: '', student: null };
   }
 
   try {
-    const payload: { image?: string; givenImage?: string; surnamesImage?: string } = {};
-    if (givenSrc.startsWith('data:image')) payload.givenImage = await shrinkNameCrop(givenSrc);
-    if (surnamesSrc.startsWith('data:image')) {
-      payload.surnamesImage = await shrinkNameCrop(surnamesSrc);
-    }
-    if (!payload.givenImage && !payload.surnamesImage && src.startsWith('data:image')) {
-      payload.image = await shrinkNameCrop(src, 1100);
-    }
-    let res = await postMatchName(payload, students);
+    const small = await shrinkNameCrop(src, 384);
+    let res = await postMatchName(small);
     if (!res.ok && res.status === 429) {
       await new Promise((r) => setTimeout(r, 800));
-      res = await postMatchName(payload, students);
+      res = await postMatchName(small);
     }
     if (!res.ok) {
       console.warn('OCR nombre manuscrito HTTP', res.status);
       return { text: '', student: null };
     }
     const data = (await res.json()) as {
-      studentId?: string | null;
       readText?: string;
       givenText?: string;
       surnamesText?: string;
@@ -105,8 +90,7 @@ export async function matchNameCropToGroup<T extends RosterRow>(
     const text = stripPrintedSheetLabels(
       [data.givenText, data.surnamesText].filter(Boolean).join(' ') || data.readText || ''
     );
-    const byId = data.studentId ? students.find((s) => s.id === data.studentId) ?? null : null;
-    const student = matchStudentByLooseName(text, students) ?? byId;
+    const student = matchStudentByLooseName(text, students);
     return { text, student };
   } catch (error) {
     console.warn('OCR nombre manuscrito:', error);

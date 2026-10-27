@@ -590,10 +590,30 @@ const NAME_STOPWORDS = new Set([
   'las',
   'los',
   'el',
+  'le',
+  'les',
+  'lo',
+  'un',
+  'una',
+  'unos',
   'y',
+  'o',
+  'a',
+  'al',
+  'en',
+  'es',
+  'se',
+  'su',
+  'sus',
+  'que',
+  'por',
+  'con',
+  'para',
+  'del',
   'da',
   'do',
   'dos',
+  'trabajo',
   'nombre',
   'nombres',
   'apellido',
@@ -706,9 +726,54 @@ export function matchStudentByLooseName<T extends { id: string; name: string }>(
     return null;
   }
 
+  if (students.length === 1) {
+    const only = students[0]!;
+    const compact = lettersOnly(only.name);
+    if (
+      ocrTokens.some((t) => t.length >= 3 && compact.includes(t)) ||
+      (compactHint.length >= 3 && longestLetterRun(compactHint, compact) >= 3)
+    ) {
+      return only;
+    }
+  }
+
   if (compactHint.length >= 3) {
     const needleHits = students.filter((s) => lettersOnly(s.name).includes(compactHint));
     if (needleHits.length === 1) return needleHits[0]!;
+  }
+
+  const uniqueByToken: T[] = [];
+  for (const t of ocrTokens.filter((tok) => tok.length >= 3)) {
+    const owners = students.filter((s) => {
+      const compact = lettersOnly(s.name);
+      return compact.includes(t) || nameTokens(s.name, 2).some((st) => tokenFits(t, st));
+    });
+    if (owners.length === 1 && !uniqueByToken.some((s) => s.id === owners[0]!.id)) {
+      uniqueByToken.push(owners[0]!);
+    }
+  }
+  if (uniqueByToken.length === 1) return uniqueByToken[0]!;
+
+  const bagHits = students
+    .map((s) => {
+      const compact = lettersOnly(s.name);
+      const stTokens = nameTokens(s.name, 2);
+      let hits = 0;
+      for (const ot of ocrTokens) {
+        if (ot.length < 3) continue;
+        if (compact.includes(ot) || stTokens.some((st) => tokenFits(ot, st))) hits += 1;
+      }
+      return { student: s, hits };
+    })
+    .filter((row) => row.hits > 0)
+    .sort((a, b) => b.hits - a.hits);
+  if (bagHits.length === 1 && bagHits[0]!.hits >= 1) return bagHits[0]!.student;
+  if (
+    bagHits.length >= 2 &&
+    bagHits[0]!.hits >= 2 &&
+    bagHits[0]!.hits > bagHits[1]!.hits
+  ) {
+    return bagHits[0]!.student;
   }
 
   const byRuns = students
