@@ -4116,6 +4116,7 @@ export default function CalificarPage() {
 
     const pagesPerExamDefault = Math.max(1, subjectMode ? 1 : totalSheets);
     const autoTakenByExam = new Map<string, Set<string>>();
+    const autoTakenPersonKeys = new Set<string>();
     const autoPersist: {
       examLabel: string;
       merged: Record<string, string>;
@@ -4412,11 +4413,16 @@ export default function CalificarPage() {
               opts?.pctOverride != null && Number.isFinite(opts.pctOverride)
                 ? Math.round(opts.pctOverride)
                 : previewStats.pct;
+            if (student && autoTakenPersonKeys.has(rafStudentDedupeKey(student))) {
+              student = null;
+              sid = null;
+            }
             if (student) {
               const examKey = fileBundle?.examId ?? '_';
               const autoSet = autoTakenByExam.get(examKey) ?? new Set<string>();
               autoSet.add(student.id);
               autoTakenByExam.set(examKey, autoSet);
+              autoTakenPersonKeys.add(rafStudentDedupeKey(student));
               autoPersist.push({
                 examLabel,
                 merged: { ...merged },
@@ -5272,23 +5278,21 @@ export default function CalificarPage() {
       const hit = list.find((s) => s.id === studentId);
       return hit ? rafStudentDedupeKey(hit) : '';
     })();
+    const rosterForExam = (id: string | undefined) =>
+      id
+        ? batchStudentsByExamId[id] ?? batchBundlesByIdRef.current.get(id)?.students ?? []
+        : sortedStudents;
     const takenInBatch = (batchSummary ?? []).some((row, index) => {
       if (index === rowIndex) return false;
-      if (examKey && row.examId !== examKey) return false;
-      if (row.selectedStudentId === studentId || row.studentId === studentId) return true;
-      if (!chosenKey) return false;
       const otherId = row.selectedStudentId || row.studentId;
       if (!otherId) return false;
-      const list = examKey
-        ? batchStudentsByExamId[examKey] ??
-          batchBundlesByIdRef.current.get(examKey)?.students ??
-          []
-        : sortedStudents;
-      const other = list.find((s) => s.id === otherId);
+      if (otherId === studentId && (!examKey || !row.examId || row.examId === examKey)) return true;
+      if (!chosenKey) return false;
+      const other = rosterForExam(row.examId).find((s) => s.id === otherId);
       return other ? rafStudentDedupeKey(other) === chosenKey : false;
     });
     if (takenInBatch) {
-      toast.error('Esa CURP ya está en otra hoja. Solo puede haber un examen por alumno.');
+      toast.error('Ese alumno ya está en otro examen. Solo puede haber uno.');
       return;
     }
     setNameCropHover(null);
@@ -5351,17 +5355,24 @@ export default function CalificarPage() {
       );
       return;
     }
-    const dupKey = (examKey: string | undefined, studentKey: string) =>
-      `${examKey ?? '_'}::${studentKey}`;
-    const chosenKeys = toSave.map(({ row }) => dupKey(row.examId, row.selectedStudentId!));
+    const personKeyOf = (examKey: string | undefined, studentKey: string) => {
+      const list = examKey
+        ? batchStudentsByExamId[examKey] ??
+          batchBundlesByIdRef.current.get(examKey)?.students ??
+          []
+        : sortedStudents;
+      const hit = list.find((s) => s.id === studentKey);
+      return hit ? rafStudentDedupeKey(hit) : studentKey;
+    };
+    const chosenKeys = toSave.map(({ row }) => personKeyOf(row.examId, row.selectedStudentId!));
     if (new Set(chosenKeys).size !== chosenKeys.length) {
-      toast.error('La misma CURP está en más de una hoja. Quita la repetida.');
+      toast.error('El mismo alumno está en más de un examen. Quita el repetido.');
       return;
     }
     const savedInBatch = new Set(
       rows
         .filter((row) => row.ok && row.studentId)
-        .map((row) => dupKey(row.examId, row.studentId!))
+        .map((row) => personKeyOf(row.examId, row.studentId!))
     );
     if (chosenKeys.some((key) => savedInBatch.has(key))) {
       toast.error('Ese alumno ya está en otra hoja de este lote.');
@@ -6756,11 +6767,20 @@ export default function CalificarPage() {
                                   if (graded.has(student.id) || gradedKeys.has(key)) return false;
                                   return !batchSummary.some((other, otherIndex) => {
                                     if (otherIndex === idx) return false;
-                                    if (row.examId && other.examId !== row.examId) return false;
                                     const otherId = other.selectedStudentId || other.studentId;
                                     if (!otherId) return false;
-                                    if (otherId === student.id) return true;
-                                    const otherStudent = roster.find((s) => s.id === otherId);
+                                    if (
+                                      otherId === student.id &&
+                                      (!row.examId || !other.examId || other.examId === row.examId)
+                                    ) {
+                                      return true;
+                                    }
+                                    const otherRoster = other.examId
+                                      ? batchStudentsByExamId[other.examId] ??
+                                        batchBundlesByIdRef.current.get(other.examId)?.students ??
+                                        []
+                                      : sortedStudents;
+                                    const otherStudent = otherRoster.find((s) => s.id === otherId);
                                     return otherStudent
                                       ? rafStudentDedupeKey(otherStudent) === key
                                       : false;
