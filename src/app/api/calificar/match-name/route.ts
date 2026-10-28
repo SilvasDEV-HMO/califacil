@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
         {
           role: 'system',
           content:
-            'JSON only. readText = handwritten person-name letters only. Ignore printed labels. Skip gibberish like trabajo/que/le. Keep Garcia, Jose, Igcio.',
+            'JSON only. readText = only letters you can actually see handwritten. Ignore printed labels (APELLIDOS, NOMBRE, GRUPO). If the handwriting is unclear or missing, return {"readText":""}. Never invent, guess, or reuse a name from these instructions.',
         },
         {
           role: 'user',

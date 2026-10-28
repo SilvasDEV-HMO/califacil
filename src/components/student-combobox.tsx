@@ -195,7 +195,7 @@ export function StudentCombobox({
               openList();
             }}
             onFocus={() => {
-              setQuery(seedQuery);
+              setQuery('');
               openList();
             }}
             onChange={(event) => {
