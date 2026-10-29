@@ -16,7 +16,7 @@ export type NameCropPair = {
   surnames?: string | null;
 };
 
-async function shrinkNameCrop(dataUrl: string, maxW = 384): Promise<string> {
+async function shrinkNameCrop(dataUrl: string, maxW = 900): Promise<string> {
   if (typeof document === 'undefined') return dataUrl;
   try {
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -35,20 +35,24 @@ async function shrinkNameCrop(dataUrl: string, maxW = 384): Promise<string> {
     if (!ctx) return dataUrl;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.5);
+    return canvas.toDataURL('image/jpeg', 0.86);
   } catch {
     return dataUrl;
   }
 }
 
-async function postMatchName(image: string) {
+async function postMatchName(
+  image: string,
+  candidates: { id: string; name: string }[]
+) {
   const headers = await dashboardAuthJsonHeaders();
   return fetch('/api/calificar/match-name', {
     method: 'POST',
     headers: { ...headers },
     credentials: 'include',
-    body: JSON.stringify({ image }),
+    body: JSON.stringify({ image, candidates }),
   });
 }
 
@@ -72,11 +76,12 @@ export async function matchNameCropToGroup<T extends RosterRow>(
   }
 
   try {
-    const small = await shrinkNameCrop(src, 384);
-    let res = await postMatchName(small);
-    if (!res.ok && res.status === 429) {
-      await new Promise((r) => setTimeout(r, 800));
-      res = await postMatchName(small);
+    const small = await shrinkNameCrop(src, 900);
+    const candidates = students.slice(0, 120).map((s) => ({ id: s.id, name: s.name }));
+    let res = await postMatchName(small, candidates);
+    for (let attempt = 0; !res.ok && res.status === 429 && attempt < 3; attempt++) {
+      await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+      res = await postMatchName(small, candidates);
     }
     if (!res.ok) {
       console.warn('OCR nombre manuscrito HTTP', res.status);
@@ -86,11 +91,16 @@ export async function matchNameCropToGroup<T extends RosterRow>(
       readText?: string;
       givenText?: string;
       surnamesText?: string;
+      studentId?: string | null;
     };
     const text = stripPrintedSheetLabels(
       [data.givenText, data.surnamesText].filter(Boolean).join(' ') || data.readText || ''
     );
-    const student = matchStudentByLooseName(text, students);
+    const fromId =
+      typeof data.studentId === 'string'
+        ? students.find((s) => s.id === data.studentId) ?? null
+        : null;
+    const student = fromId ?? matchStudentByLooseName(text, students);
     return { text, student };
   } catch (error) {
     console.warn('OCR nombre manuscrito:', error);
