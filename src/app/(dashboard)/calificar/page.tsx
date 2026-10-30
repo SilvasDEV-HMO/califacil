@@ -5260,50 +5260,52 @@ export default function CalificarPage() {
   };
 
   const assignPendingBatchStudent = (rowIndex: number, studentId: string) => {
-    const target = batchSummary?.[rowIndex];
-    const examKey = target?.examId;
-    const gradedForExam = new Set(
-      examKey ? batchGradedByExamId[examKey] ?? [] : Array.from(studentsAlreadyGraded)
-    );
-    if (gradedForExam.has(studentId)) {
+    let rejected: 'graded' | 'taken' | null = null;
+    setBatchSummary((prev) => {
+      if (!prev) return prev;
+      const target = prev[rowIndex];
+      if (!target?.pendingStudent) return prev;
+      const examKey = target.examId;
+      const gradedForExam = new Set(
+        examKey ? batchGradedByExamId[examKey] ?? [] : Array.from(studentsAlreadyGraded)
+      );
+      if (gradedForExam.has(studentId)) {
+        rejected = 'graded';
+        return prev;
+      }
+      const rosterForExam = (id: string | undefined) =>
+        id
+          ? batchStudentsByExamId[id] ?? batchBundlesByIdRef.current.get(id)?.students ?? []
+          : sortedStudents;
+      const chosen = rosterForExam(examKey).find((s) => s.id === studentId);
+      const chosenKey = chosen ? rafStudentDedupeKey(chosen) : '';
+      const takenInBatch = prev.some((row, index) => {
+        if (index === rowIndex) return false;
+        const otherId = row.selectedStudentId || row.studentId;
+        if (!otherId) return false;
+        if (otherId === studentId) return true;
+        if (!chosenKey) return false;
+        const other = rosterForExam(row.examId).find((s) => s.id === otherId);
+        return other ? rafStudentDedupeKey(other) === chosenKey : false;
+      });
+      if (takenInBatch) {
+        rejected = 'taken';
+        return prev;
+      }
+      const next = [...prev];
+      next[rowIndex] = { ...target, selectedStudentId: studentId };
+      return next;
+    });
+    if (rejected === 'graded') {
       toast.error('Esa CURP ya tiene un examen en este grupo. Solo puede haber uno por alumno.');
       return;
     }
-    const chosenKey = (() => {
-      const list = examKey
-        ? batchStudentsByExamId[examKey] ??
-          batchBundlesByIdRef.current.get(examKey)?.students ??
-          []
-        : sortedStudents;
-      const hit = list.find((s) => s.id === studentId);
-      return hit ? rafStudentDedupeKey(hit) : '';
-    })();
-    const rosterForExam = (id: string | undefined) =>
-      id
-        ? batchStudentsByExamId[id] ?? batchBundlesByIdRef.current.get(id)?.students ?? []
-        : sortedStudents;
-    const takenInBatch = (batchSummary ?? []).some((row, index) => {
-      if (index === rowIndex) return false;
-      const otherId = row.selectedStudentId || row.studentId;
-      if (!otherId) return false;
-      if (otherId === studentId && (!examKey || !row.examId || row.examId === examKey)) return true;
-      if (!chosenKey) return false;
-      const other = rosterForExam(row.examId).find((s) => s.id === otherId);
-      return other ? rafStudentDedupeKey(other) === chosenKey : false;
-    });
-    if (takenInBatch) {
+    if (rejected === 'taken') {
       toast.error('Ese alumno ya está en otro examen. Solo puede haber uno.');
       return;
     }
     setNameCropHover(null);
-    setBatchSummary((prev) => {
-      if (!prev) return prev;
-      const next = [...prev];
-      const row = next[rowIndex];
-      if (!row?.pendingStudent) return prev;
-      next[rowIndex] = { ...row, selectedStudentId: studentId };
-      return next;
-    });
+    focusNextUnassignedBatchStudent(rowIndex);
   };
 
   /** Tras Guardar nombres del lote: sacar el examen de la lista de Calificar. */
@@ -6801,7 +6803,6 @@ export default function CalificarPage() {
                             onValueChange={(id) => {
                               if (!id) return;
                               assignPendingBatchStudent(idx, id);
-                              focusNextUnassignedBatchStudent(idx);
                             }}
                           />
                         ) : (
