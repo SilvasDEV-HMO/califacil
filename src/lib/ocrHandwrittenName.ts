@@ -43,6 +43,86 @@ async function shrinkNameCrop(dataUrl: string, maxW = 900): Promise<string> {
   }
 }
 
+type NameWorker = {
+  setParameters: (params: Record<string, string>) => Promise<unknown>;
+  recognize: (image: string) => Promise<{ data: { text?: string } }>;
+};
+
+let nameWorkerPromise: Promise<NameWorker> | null = null;
+let nameReadChain: Promise<unknown> = Promise.resolve();
+
+function enqueueNameRead<T>(task: () => Promise<T>): Promise<T> {
+  const run = nameReadChain.then(task, task);
+  nameReadChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+async function getNameWorker(): Promise<NameWorker> {
+  if (!nameWorkerPromise) {
+    nameWorkerPromise = (async () => {
+      const { createWorker, PSM } = await import('tesseract.js');
+      const worker = await createWorker('spa+eng', 1, {
+        workerPath: '/tesseract/worker.min.js',
+        corePath: '/tesseract/tesseract-core-simd-lstm.wasm.js',
+        langPath: '/tesseract/lang',
+        gzip: true,
+        workerBlobURL: false,
+      });
+      await worker.setParameters({
+        tessedit_pageseg_mode: PSM.SINGLE_LINE,
+        tessedit_char_whitelist:
+          'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ ',
+      });
+      return worker;
+    })().catch((error) => {
+      nameWorkerPromise = null;
+      throw error;
+    });
+  }
+  return nameWorkerPromise;
+}
+
+/** Sube el recorte para que las letras ocupen bastante alto y Tesseract las lea. */
+async function enlargeNameCrop(dataUrl: string): Promise<string> {
+  if (typeof document === 'undefined') return dataUrl;
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('crop'));
+      el.src = dataUrl;
+    });
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (w < 8 || h < 8) return dataUrl;
+    const scale = Math.min(4, Math.max(1, 140 / h));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(8, Math.round(w * scale));
+    canvas.height = Math.max(8, Math.round(h * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return dataUrl;
+  }
+}
+
+async function readNameCropLocally(dataUrl: string): Promise<string> {
+  return enqueueNameRead(async () => {
+    const worker = await getNameWorker();
+    const image = await enlargeNameCrop(dataUrl);
+    const result = await worker.recognize(image);
+    return stripPrintedSheetLabels(result.data.text || '');
+  });
+}
+
 async function postMatchName(
   image: string,
   candidates: { id: string; name: string }[]
@@ -57,7 +137,8 @@ async function postMatchName(
 }
 
 /**
- * Lee el recorte con visión barata (1 imagen, detail=low) y cruza en local con el grupo.
+ * Lee el recorte en el navegador (letra clara de la hoja) y, si no alcanza,
+ * pide una lectura a la API y cruza con el grupo.
  */
 export async function matchNameCropToGroup<T extends RosterRow>(
   dataUrl: string | null | undefined,
@@ -76,6 +157,31 @@ export async function matchNameCropToGroup<T extends RosterRow>(
   }
 
   try {
+    const localParts: string[] = [];
+    for (const piece of [boxes?.given, boxes?.surnames]) {
+      const url = (piece ?? '').trim();
+      if (!url.startsWith('data:image')) continue;
+      try {
+        const bit = await readNameCropLocally(url);
+        if (bit) localParts.push(bit);
+      } catch (error) {
+        console.warn('OCR local de nombre:', error);
+      }
+    }
+    if (localParts.length === 0) {
+      try {
+        const bit = await readNameCropLocally(src);
+        if (bit) localParts.push(bit);
+      } catch (error) {
+        console.warn('OCR local de nombre:', error);
+      }
+    }
+    const localText = stripPrintedSheetLabels(localParts.join(' '));
+    const localStudent = localText ? matchStudentByLooseName(localText, students) : null;
+    if (localStudent) {
+      return { text: localText, student: localStudent };
+    }
+
     const small = await shrinkNameCrop(src, 900);
     const candidates = students.slice(0, 120).map((s) => ({ id: s.id, name: s.name }));
     let res = await postMatchName(small, candidates);
@@ -85,7 +191,7 @@ export async function matchNameCropToGroup<T extends RosterRow>(
     }
     if (!res.ok) {
       console.warn('OCR nombre manuscrito HTTP', res.status);
-      return { text: '', student: null };
+      return { text: localText, student: null };
     }
     const data = (await res.json()) as {
       readText?: string;
@@ -94,7 +200,9 @@ export async function matchNameCropToGroup<T extends RosterRow>(
       studentId?: string | null;
     };
     const text = stripPrintedSheetLabels(
-      [data.givenText, data.surnamesText].filter(Boolean).join(' ') || data.readText || ''
+      [data.givenText, data.surnamesText].filter(Boolean).join(' ') ||
+        data.readText ||
+        localText
     );
     const fromId =
       typeof data.studentId === 'string'
